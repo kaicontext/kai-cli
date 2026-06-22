@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Kai</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #000; color: #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+    .mono { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+    /* Light pulse on the per-card "alive" dot */
+    @keyframes pulse-dot { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
+    .pulse { animation: pulse-dot 2s ease-in-out infinite }
+    /* Hide scrollbar on the live-sync strip but keep it scrollable */
+    .no-scrollbar::-webkit-scrollbar { display: none }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- Header -->
+<header class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+  <div class="flex items-center gap-3">
+    <div class="flex gap-1.5">
+      <span class="w-3 h-3 rounded-full bg-red-500/80"></span>
+      <span class="w-3 h-3 rounded-full bg-yellow-500/80"></span>
+      <span class="w-3 h-3 rounded-full bg-green-500/80"></span>
+    </div>
+    <span class="text-xl font-semibold tracking-tight ml-2">Kai</span>
+    <span class="text-white/20 mx-2">|</span>
+    <span id="header-summary" class="mono text-sm text-white/70"></span>
+  </div>
+  <div class="flex items-center gap-3 text-white/40">
+    <button class="p-2 rounded hover:bg-white/5" title="Settings (v1)">⚙</button>
+    <button class="p-2 rounded hover:bg-white/5" title="Notifications (v1)">🔔</button>
+    <button class="p-2 rounded hover:bg-white/5" title="Account (v1)">👤</button>
+  </div>
+</header>
+
+<!-- Agent grid -->
+<main class="px-6 py-8">
+  <div id="agent-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+  <div id="empty-state" class="hidden text-center text-white/30 py-20">
+    No spawned workspaces yet. Run <code class="mono text-white/60">kai spawn --count 4</code> in a repo.
+  </div>
+</main>
+
+<!-- Live-sync strip -->
+<footer class="fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur border-t border-white/5 px-6 py-4">
+  <div class="flex items-center gap-4">
+    <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-white/40 shrink-0">
+      <span>Live sync</span>
+      <span class="w-2 h-2 rounded-full bg-green-500 pulse"></span>
+    </div>
+    <div id="event-feed" class="flex gap-2 overflow-x-auto no-scrollbar"></div>
+  </div>
+</footer>
+
+<script>
+const POLL_AGENTS_MS = 2000;
+const POLL_EVENTS_MS = 1000;
+
+function fmtUptime(sec) {
+  if (!sec || sec < 0) return '';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  return `${m}m`;
+}
+
+function fmtAgo(tsMs) {
+  if (!tsMs) return '';
+  const sec = Math.floor((Date.now() - tsMs) / 1000);
+  if (sec < 5) return 'now';
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  return `${Math.floor(sec / 3600)}h ago`;
+}
+
+function sparklinePath(values, w, h) {
+  if (!values || values.length === 0) return '';
+  const max = Math.max(1, ...values);
+  const stepX = w / (values.length - 1 || 1);
+  const points = values.map((v, i) => {
+    const x = i * stepX;
+    const y = h - (v / max) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  return 'M ' + points.join(' L ');
+}
+
+function eventLabel(type) {
+  const t = (type || '').toLowerCase();
+  switch (t) {
+    case 'push': return { label: 'PUSH', arrow: '→' };
+    case 'recv': return { label: 'RECV', arrow: '←' };
+    case 'merge': return { label: 'MERGE', arrow: '⇄' };
+    case 'conflict': return { label: 'CONFLICT', arrow: '⚠' };
+    case 'checkpoint': return { label: 'CHECKPOINT', arrow: '◆' };
+    case 'skip': return { label: 'SKIP', arrow: '·' };
+    default: return { label: t.toUpperCase(), arrow: '·' };
+  }
+}
+
+async function loadHeader() {
+  try {
+    const r = await fetch('/api/header');
+    const d = await r.json();
+    const el = document.getElementById('header-summary');
+    if (!d.agent_count) {
+      el.textContent = 'no spawned agents';
+    } else if (d.repo_count <= 1) {
+      const repo = d.sole_repo || '—';
+      el.textContent = `${d.agent_count} agent${d.agent_count === 1 ? '' : 's'} · ${repo}`;
+    } else {
+      el.textContent = `${d.agent_count} agents across ${d.repo_count} repos`;
+    }
+  } catch (_) {}
+}
+
+async function loadAgents() {
+  let agents = [];
+  try {
+    const r = await fetch('/api/agents');
+    agents = await r.json();
+  } catch (_) {}
+  const grid = document.getElementById('agent-grid');
+  const empty = document.getElementById('empty-state');
+  if (!agents || agents.length === 0) {
+    grid.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  grid.innerHTML = agents.map(renderAgentCard).join('');
+}
+
+function renderAgentCard(a) {
+  const sparkW = 240, sparkH = 40;
+  const path = sparklinePath(a.sparkline || [], sparkW, sparkH);
+  const isActive = a.last_event_ts && (Date.now() - a.last_event_ts) < 300_000;
+  const dotClass = isActive ? 'bg-green-500 pulse' : 'bg-white/20';
+  const lastFile = a.last_file ? a.last_file : '—';
+  const taskHint = a.task_hint || ' '; // nbsp keeps height stable
+  return `
+    <div class="rounded-xl border border-white/10 bg-white/[0.02] p-5 hover:border-white/20 transition-colors">
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="w-2 h-2 rounded-full shrink-0" style="background:${a.color}"></span>
+          <span class="font-semibold text-white/90 truncate">${escapeHTML(a.name || a.workspace || '?')}</span>
+          ${a.source_repo ? `<span class="mono text-xs text-white/30 truncate">· ${escapeHTML(a.source_repo)}</span>` : ''}
+        </div>
+        <span class="w-1.5 h-1.5 rounded-full ${dotClass} shrink-0"></span>
+      </div>
+      <div class="mono text-sm text-white/80 truncate mb-1" title="${escapeHTML(lastFile)}">${escapeHTML(lastFile)}</div>
+      <div class="text-sm text-white/30 mb-4 truncate">${escapeHTML(taskHint)}</div>
+      <svg viewBox="0 0 ${sparkW} ${sparkH}" class="w-full h-10 mb-4" preserveAspectRatio="none">
+        <path d="${path}" fill="none" stroke="${a.color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
+      </svg>
+      <div class="flex items-center justify-between text-xs text-white/40">
+        <div class="flex items-center gap-3 mono">
+          <span title="checkpoints">◉ ${a.checkpoints ?? 0}</span>
+          <span title="uptime">${fmtUptime(a.uptime_sec)}</span>
+        </div>
+        <span class="w-1.5 h-1.5 rounded-full ${dotClass}"></span>
+      </div>
+    </div>
+  `;
+}
+
+async function loadEvents() {
+  let events = [];
+  try {
+    const r = await fetch('/api/events');
+    events = await r.json();
+  } catch (_) {}
+  const feed = document.getElementById('event-feed');
+  if (!events || events.length === 0) {
+    feed.innerHTML = '<span class="text-xs text-white/30">no events yet</span>';
+    return;
+  }
+  feed.innerHTML = events.slice(0, 30).map(renderEventChip).join('');
+}
+
+function renderEventChip(e) {
+  const { label, arrow } = eventLabel(e.type);
+  const bg = `${e.color}1a`; // ~10% alpha
+  const border = `${e.color}55`;
+  return `
+    <div class="shrink-0 rounded-md border px-3 py-1.5 text-xs mono" style="background:${bg};border-color:${border}">
+      <div class="flex items-center gap-1.5 font-semibold" style="color:${e.color}">
+        <span>${arrow}</span><span>${label}</span>
+      </div>
+      <div class="text-[10px] text-white/40 mt-0.5">${fmtAgo(e.timestamp)}</div>
+    </div>
+  `;
+}
+
+function escapeHTML(s) {
+  if (s == null) return '';
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+loadHeader();
+loadAgents();
+loadEvents();
+setInterval(loadHeader, POLL_AGENTS_MS);
+setInterval(loadAgents, POLL_AGENTS_MS);
+setInterval(loadEvents, POLL_EVENTS_MS);
+</script>
+</body>
+</html>

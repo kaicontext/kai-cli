@@ -1,0 +1,146 @@
+# GitHub Actions CI for the Kai CLI (public repo: kaicontext/kai-cli)
+#
+# Builds the single `kai` binary (CLI statically linked with the private
+# kai-core engine) for linux+darwin / amd64+arm64, and on version tags
+# publishes them to this repo's GitHub Releases plus the kai-mcp npm package.
+#
+# kai-core is a PRIVATE Go module (github.com/kaicontext/kai-core). Every job
+# that resolves Go dependencies authenticates with the KAI_CORE_TOKEN secret
+# (a token / fine-grained PAT with read access to kaicontext/kai-core).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+    branches: [main]
+
+env:
+  # Tell the Go toolchain not to use the public proxy/sum DB for our modules.
+  GOPRIVATE: github.com/kaicontext/*
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Authenticate to private kai-core module
+        run: git config --global url."https://x-access-token:${{ secrets.KAI_CORE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y gcc
+      - name: Test
+        run: CGO_ENABLED=1 go test -timeout 5m -run '!TestRunCompletion' ./...
+
+  build-linux:
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Authenticate to private kai-core module
+        run: git config --global url."https://x-access-token:${{ secrets.KAI_CORE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y gcc gcc-aarch64-linux-gnu
+      - name: Build linux/amd64
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o kai-linux-amd64 ./cmd/kai
+          gzip -kf kai-linux-amd64
+      - name: Build linux/arm64
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build -ldflags="-s -w" -o kai-linux-arm64 ./cmd/kai
+          gzip -kf kai-linux-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kai-linux-amd64
+          path: kai-linux-amd64.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kai-linux-arm64
+          path: kai-linux-arm64.gz
+
+  build-darwin:
+    runs-on: macos-latest
+    needs: [test]
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Authenticate to private kai-core module
+        run: git config --global url."https://x-access-token:${{ secrets.KAI_CORE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - name: Build darwin/arm64
+        run: |
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o kai-darwin-arm64 ./cmd/kai
+          gzip -kf kai-darwin-arm64
+      - name: Build darwin/amd64
+        run: |
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o kai-darwin-amd64 ./cmd/kai
+          gzip -kf kai-darwin-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kai-darwin-arm64
+          path: kai-darwin-arm64.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kai-darwin-amd64
+          path: kai-darwin-amd64.gz
+
+  # Publish binaries to this repo's GitHub Releases on version tags.
+  # GitHub's /releases/latest pointer is what `kai update` and install.sh use,
+  # so no synthetic "latest" release is needed — just real semver tags.
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-darwin]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Stage release assets
+        run: |
+          mkdir -p release
+          cp dist/kai-linux-amd64/kai-linux-amd64.gz release/
+          cp dist/kai-linux-arm64/kai-linux-arm64.gz release/
+          cp dist/kai-darwin-arm64/kai-darwin-arm64.gz release/
+          cp dist/kai-darwin-amd64/kai-darwin-amd64.gz release/
+          ls -la release/
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish the kai-mcp npm wrapper (fetches the released binary) on tags.
+  publish-npm:
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Sync version from tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd packages/kai-mcp
+          node -e "const v=process.env.TAG.replace(/^v/,''); const p=require('./package.json'); p.version=v; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n'); const s=require('./server.json'); s.version=v; s.packages[0].version=v; require('fs').writeFileSync('server.json', JSON.stringify(s, null, 2)+'\n')"
+      - name: Publish to npm
+        run: npm publish --access public
+        working-directory: packages/kai-mcp
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

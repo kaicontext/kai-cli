@@ -1,0 +1,22 @@
+# Binaries
+/kai
+/main
+
+# Test artifacts
+*.test
+coverage.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Kai data (from testing kai init locally)
+.kai/
+
+# Local cross-repo dev workspace (kai-cli + kai-core)
+/go.work
+/go.work.sum

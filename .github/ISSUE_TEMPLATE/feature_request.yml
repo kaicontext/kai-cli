@@ -1,0 +1,49 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Please describe what you'd like and why.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this solve? What's frustrating or missing today?
+      placeholder: |
+        When using Kai with a monorepo, there's no way to scope CI plans to a specific package.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How would you like this to work? CLI flags, config, behavior?
+      placeholder: |
+        Add a `--scope` flag to `kai ci plan` that limits selection to a subdirectory.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Other approaches you've thought about or workarounds you're using.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI
+        - CI / Test Selection
+        - Graph Engine
+        - Shadow Mode
+        - Language Support
+        - Documentation
+        - Other
+    validations:
+      required: true

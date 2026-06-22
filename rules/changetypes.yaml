@@ -1,0 +1,13 @@
+rules:
+  - id: CONDITION_CHANGED
+    match:
+      node_types: ["binary_expression","logical_expression","relational_expression"]
+      detector: "operator_or_boundary_changed"
+  - id: CONSTANT_UPDATED
+    match:
+      node_types: ["number","string"]
+      detector: "literal_value_changed"
+  - id: API_SURFACE_CHANGED
+    match:
+      node_types: ["function_declaration","method_definition","export_statement"]
+      detector: "params_or_exports_changed"

@@ -1,0 +1,3 @@
+# Override root .gitignore — bin/kai-mcp.js must be committed
+!bin/
+bin/kai

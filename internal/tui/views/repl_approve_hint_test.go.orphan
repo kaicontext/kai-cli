@@ -1,0 +1,48 @@
+package views
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+)
+
+func TestRenderApproveHintUsesBrightColors(t *testing.T) {
+	// Force lipgloss to emit ANSI escapes even when stdout is not a TTY
+	// (which is always the case under `go test`). Without this, lipgloss
+	// detects the non-TTY and strips all color, so the "\x1b[" assertion
+	// below can never pass.
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+
+	got := renderApproveHint("[y] approve · [n] reject")
+
+	// The hint must contain the key labels the UI uses for approve/reject.
+	// Depending on which key mapping is active, we accept either set.
+	if !strings.Contains(got, "y") && !strings.Contains(got, "a") {
+		t.Errorf("renderApproveHint() = %q, want key label for approve (y or a)", got)
+	}
+	if !strings.Contains(got, "n") && !strings.Contains(got, "r") {
+		t.Errorf("renderApproveHint() = %q, want key label for reject (n or r)", got)
+	}
+
+	// The hint must contain the words "approve" and "reject" so users know
+	// what the keys mean.
+	if !strings.Contains(strings.ToLower(got), "approve") {
+		t.Errorf("renderApproveHint() = %q, want 'approve' description", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "reject") {
+		t.Errorf("renderApproveHint() = %q, want 'reject' description", got)
+	}
+
+	// The hint must contain ANSI escape sequences (bright colors).
+	// The old styleDim used color 8 or 242 (dim gray), which blends in.
+	// The new style should use a bright foreground like color 14 (bright cyan)
+	// or color 12/15 (bright blue/white) — any ANSI sequence confirms we
+	// are no longer using plain dim text.
+	if !strings.Contains(got, "\x1b[") {
+		t.Errorf("renderApproveHint() = %q, want ANSI escape sequences (bright colors), got plain text", got)
+	}
+}

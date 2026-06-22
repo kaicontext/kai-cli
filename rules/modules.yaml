@@ -1,0 +1,7 @@
+modules:
+  - name: Auth
+    include: ["auth/**"]
+  - name: Billing
+    include: ["billing/**"]
+  - name: Profile
+    include: ["profile/**"]

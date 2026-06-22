@@ -1,0 +1,673 @@
+{
+  "changeset": {
+    "id": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+    "kind": "ChangeSet",
+    "payload": {
+      "base": "d9ec990243e5efea78878ffa8314a7fcdb3a69a4c89306c6e909950a4bfa00fc",
+      "description": "",
+      "head": "4a2556c086b1f664eaa5642e3bc0cddaa7423759d077701981e8e7e5ab0d39a3",
+      "intent": "Update Auth TIMEOUT",
+      "title": ""
+    }
+  },
+  "edges": [
+    {
+      "dst": "05a30fcb27d5eb534b6b9ee7165962ee6c5b206a33725f8df3cd00247adc1d49",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "06c1c983048ee845f745669cbfc285c4acb05c5aeb09300f5c18d09680b6bf3b",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "0e407b76142f9d571b37ba708992ecc38027e71c5b3a84509bfab08b3a95fd14",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "0e407b76142f9d571b37ba708992ecc38027e71c5b3a84509bfab08b3a95fd14",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "12ab3650bdf9b351667b661e174e8087602202e4f5f17af0d2e5c3c31da4a902",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "12ab3650bdf9b351667b661e174e8087602202e4f5f17af0d2e5c3c31da4a902",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "16c08be025223bb35274d3c090ef38409ef6210368e042e417f6c9839b02ba32",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "16c08be025223bb35274d3c090ef38409ef6210368e042e417f6c9839b02ba32",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "2ce9f5e61c07ba0fb3e3e1add4ee7724428c1cf290b250deeffe4c4352d606da",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "2f37640725e97e09512b1e1e3fad311a49daf2f068f205ec2cced542378a2d0d",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "2f37640725e97e09512b1e1e3fad311a49daf2f068f205ec2cced542378a2d0d",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "629fae77d50c602a29929bf4d7ae681ed80c471bde56f4cd3ac5f68e0ad07781",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "MODIFIES"
+    },
+    {
+      "dst": "2b619c9e1c9ffd896137152c346331ee59681f7e945101203c77f2c1fa44b4d2",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "3b68f073a09c4808b9230f75b66fe1c038ea3859b6f03d4f4cbefdf28f7ae834",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "3b68f073a09c4808b9230f75b66fe1c038ea3859b6f03d4f4cbefdf28f7ae834",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "4a8dc217a3b4c1b8b877862b8994f70b90b46557964996e5dbf784d3b1248436",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "648f521b67c897e2d3b278c4e8574493ae5d16c2dadaa278736d9b4bae47718d",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "686868b0dc23c5d7468ad822bd934acddd953516c65d60b06555666b7dd6fcc4",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "90badeca9719fdb9df281fc9fa749826a488d5e03112ce34d05976a342e6b3bb",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "a21eb4cfcd28389daa932101b682ebb9a0ef098887f3df973a3fb84ab4c3c8f3",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "bb273f61cb18dfa02e6ae33564f515cba183bbe0e1c5ec0fc5ceff29615fe309",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "HAS"
+    },
+    {
+      "dst": "0195f6c451bf1656d56ba5a6de266c0480776b3095e8e801d78623b47a4d1e40",
+      "src": "90cd726437a465b9602cfd7abc0bba7e1150726486013b3951539b04b72de203",
+      "type": "AFFECTS"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "05a30fcb27d5eb534b6b9ee7165962ee6c5b206a33725f8df3cd00247adc1d49",
+      "kind": "File",
+      "payload": {
+        "digest": "0ddb7931bb00b6038e334db34189a5716fc1a116e7fd594bc32df0014b61eb14",
+        "lang": "ts",
+        "path": "auth/session.ts"
+      }
+    },
+    {
+      "id": "06c1c983048ee845f745669cbfc285c4acb05c5aeb09300f5c18d09680b6bf3b",
+      "kind": "File",
+      "payload": {
+        "digest": "ae2fc5b560aa9c2f9868e0fe14f833febd9afd9b1e9654199b08394b147c5116",
+        "lang": "ts",
+        "path": "auth/constants.ts"
+      }
+    },
+    {
+      "id": "0e407b76142f9d571b37ba708992ecc38027e71c5b3a84509bfab08b3a95fd14",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "06c1c983048ee845f745669cbfc285c4acb05c5aeb09300f5c18d09680b6bf3b",
+        "fqName": "TIMEOUT",
+        "kind": "variable",
+        "range": {
+          "end": [
+            2,
+            27
+          ],
+          "start": [
+            2,
+            13
+          ]
+        },
+        "signature": "const TIMEOUT"
+      }
+    },
+    {
+      "id": "0e407b76142f9d571b37ba708992ecc38027e71c5b3a84509bfab08b3a95fd14",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "06c1c983048ee845f745669cbfc285c4acb05c5aeb09300f5c18d09680b6bf3b",
+        "fqName": "TIMEOUT",
+        "kind": "variable",
+        "range": {
+          "end": [
+            2,
+            27
+          ],
+          "start": [
+            2,
+            13
+          ]
+        },
+        "signature": "const TIMEOUT"
+      }
+    },
+    {
+      "id": "12ab3650bdf9b351667b661e174e8087602202e4f5f17af0d2e5c3c31da4a902",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "629fae77d50c602a29929bf4d7ae681ed80c471bde56f4cd3ac5f68e0ad07781",
+        "fqName": "sessionData",
+        "kind": "variable",
+        "range": {
+          "end": [
+            25,
+            3
+          ],
+          "start": [
+            19,
+            8
+          ]
+        },
+        "signature": "const sessionData"
+      }
+    },
+    {
+      "id": "12ab3650bdf9b351667b661e174e8087602202e4f5f17af0d2e5c3c31da4a902",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "629fae77d50c602a29929bf4d7ae681ed80c471bde56f4cd3ac5f68e0ad07781",
+        "fqName": "sessionData",
+        "kind": "variable",
+        "range": {
+          "end": [
+            25,
+            3
+          ],
+          "start": [
+            19,
+            8
+          ]
+        },
+        "signature": "const sessionData"
+      }
+    },
+    {
+      "id": "16c08be025223bb35274d3c090ef38409ef6210368e042e417f6c9839b02ba32",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "629fae77d50c602a29929bf4d7ae681ed80c471bde56f4cd3ac5f68e0ad07781",
+        "fqName": "login",
+        "kind": "function",
+        "range": {
+          "end": [
+            29,
+            1
+          ],
+          "start": [
+            10,
+            7
+          ]
+        },
+        "signature": "function login(user: User, device: string, ip: string)"
+      }
+    },
+    {
+      "id": "16c08be025223bb35274d3c090ef38409ef6210368e042e417f6c9839b02ba32",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "629fae77d50c602a29929bf4d7ae681ed80c471bde56f4cd3ac5f68e0ad07781",
+        "fqName": "login",
+        "kind": "function",
+        "range": {
+          "end": [
+            29,
+            1
+          ],
+          "start": [
+            10,
+            7
+          ]
+        },
+        "signature": "function login(user: User, device: string, ip: string)"
+      }
+    },
+    {
+      "id": "2ce9f5e61c07ba0fb3e3e1add4ee7724428c1cf290b250deeffe4c4352d606da",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "06c1c983048ee845f745669cbfc285c4acb05c5aeb09300f5c18d09680b6bf3b",
+        "fqName": "MAX_RETRIES",
+        "kind": "variable",
+        "range": {
+          "end": [
+            3,
+            28
+          ],
+          "start": [
+            3,
+            13
+          ]
+        },
+        "signature": "const MAX_RETRIES"
+      }
+    },
+    {
+      "id": "2f37640725e97e09512b1e1e3fad311a49daf2f068f205ec2cced542378a2d0d",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "05a30fcb27d5eb534b6b9ee7165962ee6c5b206a33725f8df3cd00247adc1d49",
+        "fqName": "age",
+        "kind": "variable",
+        "range": {
+          "end": [
+            4,
+            38
+          ],
+          "start": [
+            4,
+            8
+          ]
+        },
+        "signature": "const age"
+      }
+    },
+    {
+      "id": "2f37640725e97e09512b1e1e3fad311a49daf2f068f205ec2cced542378a2d0d",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "05a30fcb27d5eb534b6b9ee7165962ee6c5b206a33725f8df3cd00247adc1d49",
+        "fqName": "age",
+        "kind": "variable",
+        "range": {
+          "end": [
+            4,
+            38
+          ],
+          "start": [
+            4,
+            8
+          ]
+        },
+        "signature": "const age"
+      }
+    },
+    {
+      "id": "629fae77d50c602a29929bf4d7ae681ed80c471bde56f4cd3ac5f68e0ad07781",
+      "kind": "File",
+      "payload": {
+        "digest": "292baf4a3a5e52e3be823e7d9b4a60067fa951aae34739db49fd3e28ec9e1fce",
+        "lang": "ts",
+        "path": "auth/login.ts"
+      }
+    },
+    {
+      "id": "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "05a30fcb27d5eb534b6b9ee7165962ee6c5b206a33725f8df3cd00247adc1d49",
+        "fqName": "isSessionExpired",
+        "kind": "function",
+        "range": {
+          "end": [
+            12,
+            1
+          ],
+          "start": [
+            2,
+            7
+          ]
+        },
+        "signature": "function isSessionExpired(createdAt: number)"
+      }
+    },
+    {
+      "id": "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "05a30fcb27d5eb534b6b9ee7165962ee6c5b206a33725f8df3cd00247adc1d49",
+        "fqName": "isSessionExpired",
+        "kind": "function",
+        "range": {
+          "end": [
+            12,
+            1
+          ],
+          "start": [
+            2,
+            7
+          ]
+        },
+        "signature": "function isSessionExpired(createdAt: number)"
+      }
+    },
+    {
+      "id": "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "05a30fcb27d5eb534b6b9ee7165962ee6c5b206a33725f8df3cd00247adc1d49",
+        "fqName": "isSessionExpired",
+        "kind": "function",
+        "range": {
+          "end": [
+            12,
+            1
+          ],
+          "start": [
+            2,
+            7
+          ]
+        },
+        "signature": "function isSessionExpired(createdAt: number)"
+      }
+    },
+    {
+      "id": "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+      "kind": "Symbol",
+      "payload": {
+        "fileId": "05a30fcb27d5eb534b6b9ee7165962ee6c5b206a33725f8df3cd00247adc1d49",
+        "fqName": "isSessionExpired",
+        "kind": "function",
+        "range": {
+          "end": [
+            12,
+            1
+          ],
+          "start": [
+            2,
+            7
+          ]
+        },
+        "signature": "function isSessionExpired(createdAt: number)"
+      }
+    },
+    {
+      "id": "2b619c9e1c9ffd896137152c346331ee59681f7e945101203c77f2c1fa44b4d2",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "API_SURFACE_CHANGED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                29,
+                1
+              ],
+              "path": "auth/login.ts",
+              "start": [
+                10,
+                7
+              ]
+            }
+          ],
+          "symbols": [
+            "16c08be025223bb35274d3c090ef38409ef6210368e042e417f6c9839b02ba32",
+            "12ab3650bdf9b351667b661e174e8087602202e4f5f17af0d2e5c3c31da4a902"
+          ]
+        }
+      }
+    },
+    {
+      "id": "3b68f073a09c4808b9230f75b66fe1c038ea3859b6f03d4f4cbefdf28f7ae834",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "CONSTANT_UPDATED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                2,
+                27
+              ],
+              "path": "auth/constants.ts",
+              "start": [
+                2,
+                23
+              ]
+            }
+          ],
+          "symbols": [
+            "0e407b76142f9d571b37ba708992ecc38027e71c5b3a84509bfab08b3a95fd14"
+          ]
+        }
+      }
+    },
+    {
+      "id": "3b68f073a09c4808b9230f75b66fe1c038ea3859b6f03d4f4cbefdf28f7ae834",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "CONSTANT_UPDATED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                2,
+                27
+              ],
+              "path": "auth/constants.ts",
+              "start": [
+                2,
+                23
+              ]
+            }
+          ],
+          "symbols": [
+            "0e407b76142f9d571b37ba708992ecc38027e71c5b3a84509bfab08b3a95fd14"
+          ]
+        }
+      }
+    },
+    {
+      "id": "4a8dc217a3b4c1b8b877862b8994f70b90b46557964996e5dbf784d3b1248436",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "CONDITION_CHANGED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                7,
+                16
+              ],
+              "path": "auth/session.ts",
+              "start": [
+                7,
+                6
+              ]
+            }
+          ],
+          "symbols": [
+            "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd"
+          ]
+        }
+      }
+    },
+    {
+      "id": "648f521b67c897e2d3b278c4e8574493ae5d16c2dadaa278736d9b4bae47718d",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "CONSTANT_UPDATED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                3,
+                28
+              ],
+              "path": "auth/constants.ts",
+              "start": [
+                3,
+                27
+              ]
+            }
+          ],
+          "symbols": [
+            "2ce9f5e61c07ba0fb3e3e1add4ee7724428c1cf290b250deeffe4c4352d606da"
+          ]
+        }
+      }
+    },
+    {
+      "id": "686868b0dc23c5d7468ad822bd934acddd953516c65d60b06555666b7dd6fcc4",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "CONDITION_CHANGED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                4,
+                38
+              ],
+              "path": "auth/session.ts",
+              "start": [
+                4,
+                14
+              ]
+            }
+          ],
+          "symbols": [
+            "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+            "2f37640725e97e09512b1e1e3fad311a49daf2f068f205ec2cced542378a2d0d"
+          ]
+        }
+      }
+    },
+    {
+      "id": "90badeca9719fdb9df281fc9fa749826a488d5e03112ce34d05976a342e6b3bb",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "CONDITION_CHANGED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                4,
+                30
+              ],
+              "path": "auth/session.ts",
+              "start": [
+                4,
+                15
+              ]
+            }
+          ],
+          "symbols": [
+            "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd",
+            "2f37640725e97e09512b1e1e3fad311a49daf2f068f205ec2cced542378a2d0d"
+          ]
+        }
+      }
+    },
+    {
+      "id": "a21eb4cfcd28389daa932101b682ebb9a0ef098887f3df973a3fb84ab4c3c8f3",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "API_SURFACE_CHANGED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                29,
+                1
+              ],
+              "path": "auth/login.ts",
+              "start": [
+                10,
+                0
+              ]
+            }
+          ],
+          "symbols": [
+            "16c08be025223bb35274d3c090ef38409ef6210368e042e417f6c9839b02ba32",
+            "12ab3650bdf9b351667b661e174e8087602202e4f5f17af0d2e5c3c31da4a902"
+          ]
+        }
+      }
+    },
+    {
+      "id": "bb273f61cb18dfa02e6ae33564f515cba183bbe0e1c5ec0fc5ceff29615fe309",
+      "kind": "ChangeType",
+      "payload": {
+        "category": "CONSTANT_UPDATED",
+        "evidence": {
+          "fileRanges": [
+            {
+              "end": [
+                7,
+                16
+              ],
+              "path": "auth/session.ts",
+              "start": [
+                7,
+                12
+              ]
+            }
+          ],
+          "symbols": [
+            "eb88b85995a9a1eb9b90b082ccfec28bc42c280741fe86566a8825c7f4c418dd"
+          ]
+        }
+      }
+    },
+    {
+      "id": "0195f6c451bf1656d56ba5a6de266c0480776b3095e8e801d78623b47a4d1e40",
+      "kind": "Module",
+      "payload": {
+        "name": "Auth",
+        "patterns": [
+          "auth/**"
+        ]
+      }
+    }
+  ]
+}

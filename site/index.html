@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kai - The Future of Collaborative Coding for AI Agents</title>
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --fg: #e5e5e5;
+      --accent: #3b82f6;
+      --muted: #737373;
+      --code-bg: #1a1a1a;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 3rem 2rem;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .logo {
+      margin-bottom: 1.5rem;
+    }
+    .tagline {
+      font-size: 1.1rem;
+      color: var(--muted);
+      max-width: 650px;
+      margin: 0 auto;
+      line-height: 1.7;
+    }
+    .cta {
+      margin-top: 2rem;
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-block;
+      padding: 0.75rem 1.5rem;
+      background: var(--accent);
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--muted);
+      color: var(--fg);
+    }
+    section {
+      margin-bottom: 4rem;
+    }
+    h2 {
+      font-size: 1.5rem;
+      margin-bottom: 1.5rem;
+      color: var(--fg);
+    }
+    h3 {
+      font-size: 1.1rem;
+      margin-top: 2rem;
+      margin-bottom: 1rem;
+      color: var(--accent);
+    }
+    h3:first-of-type {
+      margin-top: 0;
+    }
+    .features {
+      display: grid;
+      gap: 1.5rem;
+    }
+    .feature {
+      background: var(--code-bg);
+      padding: 1.5rem;
+      border-radius: 8px;
+      border: 1px solid #262626;
+    }
+    .feature h3 {
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+      color: var(--accent);
+    }
+    .feature p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    pre {
+      background: var(--code-bg);
+      padding: 1.5rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      border: 1px solid #262626;
+    }
+    code {
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 0.9rem;
+    }
+    .highlight { color: var(--accent); }
+    .dim { color: var(--muted); }
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    .comparison > div {
+      background: var(--code-bg);
+      padding: 1rem;
+      border-radius: 8px;
+      border: 1px solid #262626;
+    }
+    .comparison h4 {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .comparison code {
+      display: block;
+      font-size: 0.85rem;
+    }
+    .install-options {
+      display: grid;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    .install-option {
+      background: var(--code-bg);
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      border: 1px solid #262626;
+    }
+    .install-option .label {
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+    }
+    .install-option code {
+      color: var(--fg);
+    }
+    /* Demo section */
+    .demo-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    @media (max-width: 600px) {
+      .demo-container { grid-template-columns: 1fr; }
+    }
+    .demo-terminal, .demo-graph {
+      background: var(--code-bg);
+      border-radius: 8px;
+      border: 1px solid #262626;
+      min-height: 320px;
+      position: relative;
+      overflow: hidden;
+    }
+    .demo-terminal {
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 0.8rem;
+      padding: 0;
+    }
+    .term-bar {
+      background: #262626;
+      padding: 6px 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .term-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .term-dot-r { background: #ff5f57; }
+    .term-dot-y { background: #ffbd2e; }
+    .term-dot-g { background: #28c840; }
+    .term-title { color: var(--muted); font-size: 0.75rem; margin-left: 8px; }
+    .term-body {
+      padding: 12px;
+      white-space: pre;
+      line-height: 1.5;
+      overflow-y: auto;
+      max-height: 280px;
+    }
+    .term-prompt { color: #28c840; }
+    .term-cmd { color: var(--fg); }
+    .term-output { color: var(--muted); }
+    .term-highlight { color: var(--accent); }
+    .term-added { color: #4ade80; }
+    .term-modified { color: #fbbf24; }
+    .term-cursor {
+      display: inline-block;
+      width: 7px;
+      height: 14px;
+      background: var(--fg);
+      animation: blink 1s step-end infinite;
+      vertical-align: text-bottom;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .demo-graph {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .demo-graph svg { width: 100%; height: 100%; }
+    .graph-node {
+      transition: opacity 0.4s, transform 0.4s;
+    }
+    .graph-edge {
+      transition: opacity 0.5s, stroke-dashoffset 0.8s;
+    }
+    .graph-node.hidden, .graph-edge.hidden {
+      opacity: 0;
+    }
+    .graph-node.pulse circle {
+      animation: nodePulse 0.6s ease-out;
+    }
+    @keyframes nodePulse {
+      0% { r: 6; }
+      50% { r: 10; }
+      100% { r: 6; }
+    }
+    .graph-edge.drawing {
+      stroke-dasharray: 200;
+      stroke-dashoffset: 200;
+      animation: drawEdge 0.6s forwards;
+    }
+    @keyframes drawEdge {
+      to { stroke-dashoffset: 0; }
+    }
+    .impact-glow {
+      animation: impactGlow 0.8s ease-out;
+    }
+    @keyframes impactGlow {
+      0% { filter: drop-shadow(0 0 0px #f59e0b); }
+      50% { filter: drop-shadow(0 0 8px #f59e0b); }
+      100% { filter: drop-shadow(0 0 2px #f59e0b); }
+    }
+    .play-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10,10,10,0.7);
+      cursor: pointer;
+      z-index: 10;
+      transition: opacity 0.3s;
+    }
+    .play-overlay:hover .play-btn { transform: scale(1.1); }
+    .play-btn {
+      width: 56px;
+      height: 56px;
+      background: var(--accent);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s;
+    }
+    .play-btn svg { margin-left: 3px; }
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding-top: 2rem;
+      border-top: 1px solid #262626;
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    @media (max-width: 600px) {
+      h1 { font-size: 2rem; }
+      .comparison { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Animated Hero -->
+    <div id="hero" style="position:relative;width:100vw;margin-left:calc(-50vw + 50%);height:100vh;min-height:600px;overflow:hidden;background:#0A0A0B;margin-bottom:3rem;">
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at center,#111114 0%,transparent 60%)"></div>
+      <!-- Header text -->
+      <div style="position:absolute;top:3rem;left:50%;transform:translateX(-50%);text-align:center;z-index:10;animation:heroFadeIn 0.6s ease-out;">
+        <div style="font-size:48px;font-weight:300;color:#F8F8F8;letter-spacing:0.05em;">Kai</div>
+        <div style="font-size:16px;color:#666672;margin-top:4px;">The future of collaborative code.</div>
+      </div>
+      <!-- Laptops container -->
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:5rem 1rem 0;">
+        <div style="position:relative;width:100%;max-width:1400px;height:600px;display:flex;align-items:center;justify-content:center;">
+          <!-- Left laptop -->
+          <div id="laptop-left" style="position:absolute;left:0;top:50%;transform:translateY(-50%);">
+            <div style="position:absolute;top:-40px;left:50%;transform:translateX(-50%);padding:4px 12px;border-radius:999px;background:#1E1E28;border:1px solid #2E2E3E;font-size:14px;color:#8888AA;white-space:nowrap;">&#x1F1EC;&#x1F1E7; London</div>
+            <div style="position:relative;width:480px;background:#1A1A1F;border:1px solid #2A2A32;border-radius:8px;overflow:hidden;transform:perspective(1200px) rotateY(8deg);">
+              <div style="padding:12px;">
+                <div style="width:100%;height:320px;border-radius:4px;overflow:hidden;position:relative;background:#0D0D10;display:flex;flex-direction:column;">
+                  <div style="padding:6px 16px;border-bottom:1px solid #2A2A32;background:#0A0A0B;flex-shrink:0;">
+                    <div style="font-size:12px;color:#8888AA;font-family:'JetBrains Mono',monospace;">auth.ts</div>
+                  </div>
+                  <div id="editor-left" style="padding:16px;font-family:'JetBrains Mono',monospace;font-size:13px;flex:1;overflow:auto;"></div>
+                  <div id="dot-left" style="display:none;position:absolute;top:8px;right:8px;width:8px;height:8px;border-radius:50%;background:#7B7BF8;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Right laptop -->
+          <div id="laptop-right" style="position:absolute;right:0;top:50%;transform:translateY(-50%);">
+            <div style="position:absolute;top:-40px;left:50%;transform:translateX(-50%);padding:4px 12px;border-radius:999px;background:#1E1E28;border:1px solid #2E2E3E;font-size:14px;color:#8888AA;white-space:nowrap;">&#x1F1FA;&#x1F1F8; New York</div>
+            <div style="position:relative;width:480px;background:#1A1A1F;border:1px solid #2A2A32;border-radius:8px;overflow:hidden;transform:perspective(1200px) rotateY(-8deg);">
+              <div style="padding:12px;">
+                <div style="width:100%;height:320px;border-radius:4px;overflow:hidden;position:relative;background:#0D0D10;display:flex;flex-direction:column;">
+                  <div style="padding:6px 16px;border-bottom:1px solid #2A2A32;background:#0A0A0B;flex-shrink:0;">
+                    <div style="font-size:12px;color:#8888AA;font-family:'JetBrains Mono',monospace;">auth.ts</div>
+                  </div>
+                  <div id="editor-right" style="padding:16px;font-family:'JetBrains Mono',monospace;font-size:13px;flex:1;overflow:auto;"></div>
+                  <div id="dot-right" style="display:none;position:absolute;top:8px;right:8px;width:8px;height:8px;border-radius:50%;background:#4FC8A0;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Sync pulses -->
+          <div id="pulse-left" style="display:none;position:absolute;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;background:#7B7BF8;box-shadow:0 0 12px #7B7BF8;z-index:5;"></div>
+          <div id="pulse-right" style="display:none;position:absolute;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;background:#4FC8A0;box-shadow:0 0 12px #4FC8A0;z-index:5;"></div>
+          <!-- Merge label -->
+          <div id="merge-label" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10;">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:12px;background:#0D1810;border:1px solid #2A4A3A;border-radius:8px;padding:16px 20px;box-shadow:0 4px 24px rgba(0,0,0,0.5);">
+              <div style="position:relative;">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4FC8A0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+                <div id="merge-check" style="display:none;position:absolute;top:-4px;right:-4px;background:#4FC8A0;border-radius:50%;padding:2px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0A0A0B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+              </div>
+              <div style="text-align:center;">
+                <div style="font-size:14px;font-weight:500;color:#C8C8D8;margin-bottom:4px;">Semantic merge</div>
+                <div style="font-size:12px;color:#4FC8A0;">0 conflicts</div>
+                <div id="merge-detail" style="display:none;font-size:11px;color:#666672;margin-top:8px;padding-top:8px;border-top:1px solid #2A2A32;">auth.ts &mdash; 2 functions</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- CTA below hero -->
+      <div style="position:absolute;bottom:2rem;left:50%;transform:translateX(-50%);text-align:center;z-index:10;">
+        <p style="color:#666672;font-size:0.95rem;margin-bottom:1rem;">Built by the team behind GitLab.</p>
+        <div class="cta" style="margin-top:0;">
+          <a href="https://github.com/kaicontext/kai-cli" class="btn">GitHub</a>
+          <a href="#install" class="btn btn-secondary">Install</a>
+          <a href="#prime" class="btn btn-secondary">See the benchmark</a>
+        </div>
+      </div>
+    </div>
+    <style>
+      @keyframes heroFadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes cursorBlink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+      .hero-cursor { display:inline-block;width:2px;height:14px;background:#7B7BF8;margin-left:1px;animation:cursorBlink 1s step-end infinite; }
+      .hero-line { display:flex;gap:16px;min-height:18px;width:100%;transition:background-color 0.3s; }
+      .hero-line-num { color:#333345;user-select:none;width:16px;text-align:right;flex-shrink:0;font-size:11px; }
+      .hero-line-code { color:#C8C8D8;white-space:nowrap;font-family:'JetBrains Mono',monospace;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis; }
+      .hero-kw { color:#7B7BF8; }
+      .hero-type { color:#4FC8A0; }
+      .hero-highlight { background-color:#1D3A2E; }
+      @media (max-width: 1100px) {
+        #hero { height: auto; min-height: auto; padding-bottom: 6rem; }
+        #hero > div:nth-child(3) { position: relative !important; padding: 8rem 1rem 2rem !important; flex-direction: column !important; }
+        #hero > div:nth-child(3) > div { position: relative !important; height: auto !important; flex-direction: column !important; align-items: center !important; gap: 3rem !important; }
+        #laptop-left, #laptop-right { position: relative !important; left: auto !important; right: auto !important; top: auto !important; transform: none !important; }
+        #laptop-left > div:last-child, #laptop-right > div:last-child { transform: none !important; width: 340px !important; }
+        #laptop-left > div:last-child > div > div, #laptop-right > div:last-child > div > div { height: 240px !important; }
+        #pulse-left, #pulse-right { display: none !important; }
+        #merge-label { position: relative !important; top: auto !important; left: auto !important; transform: none !important; }
+      }
+    </style>
+    <script>
+    (function() {
+      const londonFn = [
+        'function validateToken(token: string) {',
+        '  const decoded = jwt.verify(token);',
+        '  return decoded.exp > Date.now();',
+        '}'
+      ];
+      const nycFn = [
+        'function refreshToken(userId: string) {',
+        '  const newToken = jwt.sign({ userId });',
+        '  return newToken;',
+        '}'
+      ];
+
+      function highlight(line) {
+        if (!line) return '';
+        return line
+          .replace(/\b(function|const|return)\b/g, '<span class="hero-kw">$1</span>')
+          .replace(/:\s*(string|number|boolean)/g, ': <span class="hero-type">$1</span>');
+      }
+
+      function renderLines(el, lines, opts) {
+        opts = opts || {};
+        el.innerHTML = '';
+        lines.forEach(function(line, i) {
+          var div = document.createElement('div');
+          div.className = 'hero-line' + ((opts.highlightFrom !== undefined && i >= opts.highlightFrom && i < opts.highlightTo) ? ' hero-highlight' : '');
+          var num = document.createElement('span');
+          num.className = 'hero-line-num';
+          num.textContent = line ? (i + 1) : '';
+          var code = document.createElement('span');
+          code.className = 'hero-line-code';
+          code.innerHTML = highlight(line);
+          if (opts.cursorLine === i) code.innerHTML += '<span class="hero-cursor"></span>';
+          div.appendChild(num);
+          div.appendChild(code);
+          el.appendChild(div);
+        });
+      }
+
+      function typingLines(fn, charCount) {
+        var lines = [];
+        var rem = charCount;
+        var cursorLine = 0;
+        for (var i = 0; i < fn.length; i++) {
+          if (rem >= fn[i].length) {
+            lines.push(fn[i]);
+            rem -= fn[i].length;
+            cursorLine = i + 1;
+          } else {
+            lines.push(fn[i].substring(0, rem));
+            cursorLine = i;
+            rem = 0;
+            break;
+          }
+        }
+        while (lines.length < fn.length) lines.push('');
+        return { lines: lines, cursorLine: cursorLine < fn.length ? cursorLine : -1 };
+      }
+
+      var edL = document.getElementById('editor-left');
+      var edR = document.getElementById('editor-right');
+      var dotL = document.getElementById('dot-left');
+      var dotR = document.getElementById('dot-right');
+      var pulseL = document.getElementById('pulse-left');
+      var pulseR = document.getElementById('pulse-right');
+      var mergeLabel = document.getElementById('merge-label');
+      var mergeCheck = document.getElementById('merge-check');
+      var mergeDetail = document.getElementById('merge-detail');
+      var startTime = Date.now();
+
+      function tick() {
+        var t = ((Date.now() - startTime) / 1000) % 9;
+        var phase;
+        if (t < 3) phase = 'typing';
+        else if (t < 4) phase = 'syncing';
+        else if (t < 5.5) phase = 'merging';
+        else if (t < 7) phase = 'merged';
+        else phase = 'fading';
+
+        var opacity = phase === 'fading' ? Math.max(0, 1 - (t - 7) / 2) : 1;
+        document.getElementById('laptop-left').style.opacity = opacity;
+        document.getElementById('laptop-right').style.opacity = opacity;
+
+        if (phase === 'typing') {
+          var chars = Math.floor(t * 30);
+          var left = typingLines(londonFn, chars);
+          var right = typingLines(nycFn, chars);
+          renderLines(edL, left.lines, { cursorLine: left.cursorLine });
+          renderLines(edR, right.lines, { cursorLine: right.cursorLine });
+          dotL.style.display = 'none';
+          dotR.style.display = 'none';
+          pulseL.style.display = 'none';
+          pulseR.style.display = 'none';
+          mergeLabel.style.display = 'none';
+        } else if (phase === 'syncing') {
+          renderLines(edL, londonFn);
+          renderLines(edR, nycFn);
+          var pct = (t - 3);
+          pulseL.style.display = 'block';
+          pulseR.style.display = 'block';
+          pulseL.style.left = (pct * 50) + '%';
+          pulseR.style.right = (pct * 50) + '%';
+          mergeLabel.style.display = 'none';
+          dotL.style.display = 'none';
+          dotR.style.display = 'none';
+        } else {
+          var mergedLeft = londonFn.concat([''], nycFn);
+          var mergedRight = londonFn.concat([''], nycFn);
+          var hlFrom = londonFn.length + 1;
+          var hlTo = hlFrom + nycFn.length;
+          var hlFromR = 0;
+          var hlToR = londonFn.length;
+          var isHighlight = phase === 'merging';
+          renderLines(edL, mergedLeft, isHighlight ? { highlightFrom: hlFrom, highlightTo: hlTo } : {});
+          renderLines(edR, mergedRight, isHighlight ? { highlightFrom: hlFromR, highlightTo: hlToR } : {});
+          pulseL.style.display = 'none';
+          pulseR.style.display = 'none';
+          dotL.style.display = 'block';
+          dotR.style.display = 'block';
+          mergeLabel.style.display = 'block';
+          mergeCheck.style.display = (t > 4.2) ? 'block' : 'none';
+          mergeDetail.style.display = (t >= 5.5) ? 'block' : 'none';
+        }
+
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    })();
+    </script>
+
+    <header style="text-align:center;margin-bottom:2rem;">
+      <p class="tagline">The future of collaborative coding for AI agents.</p>
+      <p class="tagline" style="margin-top: 1rem;">Today, developers use Git to manage code changes. With AI, that workflow is obsolete. Kai replaces <code>git add, commit, push</code> with a live sync layer where AI agents coordinate code changes automatically — like Google Docs, but for code. Two agents in different parts of the world write simultaneously, and Kai handles the merge intelligently, semantically, in real time. No conflicts. No manual checkpoints. Just continuous, intelligent collaboration.</p>
+    </header>
+
+    <section id="quickstart">
+      <div class="demo-container" id="demo">
+        <div class="demo-terminal">
+          <div class="term-bar">
+            <span class="term-dot term-dot-r"></span>
+            <span class="term-dot term-dot-y"></span>
+            <span class="term-dot term-dot-g"></span>
+            <span class="term-title">Terminal</span>
+          </div>
+          <div class="term-body" id="term-body"></div>
+        </div>
+        <div class="demo-graph">
+          <svg id="graph-svg" viewBox="0 0 360 300" xmlns="http://www.w3.org/2000/svg">
+            <g id="graph-edges">
+              <line class="graph-edge hidden" data-id="e1" x1="180" y1="40" x2="90" y2="110" stroke="#3b82f6" stroke-width="1.5" opacity="0.6"/>
+              <line class="graph-edge hidden" data-id="e2" x1="180" y1="40" x2="270" y2="110" stroke="#3b82f6" stroke-width="1.5" opacity="0.6"/>
+              <line class="graph-edge hidden" data-id="e3" x1="90" y1="110" x2="60" y2="190" stroke="#3b82f6" stroke-width="1.5" opacity="0.6"/>
+              <line class="graph-edge hidden" data-id="e4" x1="90" y1="110" x2="150" y2="190" stroke="#3b82f6" stroke-width="1.5" opacity="0.6"/>
+              <line class="graph-edge hidden" data-id="e5" x1="270" y1="110" x2="230" y2="190" stroke="#3b82f6" stroke-width="1.5" opacity="0.6"/>
+              <line class="graph-edge hidden" data-id="e6" x1="270" y1="110" x2="310" y2="190" stroke="#3b82f6" stroke-width="1.5" opacity="0.6"/>
+              <line class="graph-edge hidden" data-id="e7" x1="60" y1="190" x2="90" y2="260" stroke="#3b82f6" stroke-width="1.5" opacity="0.6"/>
+              <line class="graph-edge hidden" data-id="e8" x1="150" y1="190" x2="90" y2="260" stroke="#3b82f6" stroke-width="1.5" opacity="0.6"/>
+            </g>
+            <g id="graph-nodes">
+              <g class="graph-node hidden" data-id="n1" transform="translate(180,40)">
+                <circle r="6" fill="#3b82f6"/><text x="12" y="4" fill="#e5e5e5" font-size="11" font-family="SF Mono,Consolas,monospace">app.ts</text>
+              </g>
+              <g class="graph-node hidden" data-id="n2" transform="translate(90,110)">
+                <circle r="6" fill="#3b82f6"/><text x="12" y="4" fill="#e5e5e5" font-size="11" font-family="SF Mono,Consolas,monospace">auth.ts</text>
+              </g>
+              <g class="graph-node hidden" data-id="n3" transform="translate(270,110)">
+                <circle r="6" fill="#3b82f6"/><text x="12" y="4" fill="#e5e5e5" font-size="11" font-family="SF Mono,Consolas,monospace">api.ts</text>
+              </g>
+              <g class="graph-node hidden" data-id="n4" transform="translate(60,190)">
+                <circle r="6" fill="#3b82f6"/><text x="12" y="4" fill="#e5e5e5" font-size="11" font-family="SF Mono,Consolas,monospace">validateToken</text>
+              </g>
+              <g class="graph-node hidden" data-id="n5" transform="translate(150,190)">
+                <circle r="6" fill="#3b82f6"/><text x="12" y="4" fill="#e5e5e5" font-size="11" font-family="SF Mono,Consolas,monospace">createSession</text>
+              </g>
+              <g class="graph-node hidden" data-id="n6" transform="translate(230,190)">
+                <circle r="6" fill="#3b82f6"/><text x="12" y="4" fill="#e5e5e5" font-size="11" font-family="SF Mono,Consolas,monospace">fetchUser</text>
+              </g>
+              <g class="graph-node hidden" data-id="n7" transform="translate(310,190)">
+                <circle r="6" fill="#3b82f6"/><text x="12" y="4" fill="#e5e5e5" font-size="11" font-family="SF Mono,Consolas,monospace">handleError</text>
+              </g>
+              <g class="graph-node hidden" data-id="n8" transform="translate(90,260)">
+                <circle r="6" fill="#3b82f6"/><text x="12" y="4" fill="#e5e5e5" font-size="11" font-family="SF Mono,Consolas,monospace">auth.test.ts</text>
+              </g>
+            </g>
+          </svg>
+        </div>
+        <div class="play-overlay" id="play-overlay" onclick="startDemo()" style="position:absolute; inset:0;">
+          <div class="play-btn">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><polygon points="6,3 20,12 6,21"/></svg>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Why not Git?</h2>
+      <div class="comparison">
+        <div>
+          <h4>Git</h4>
+          <code class="dim">Agent A: git add . && git commit && git push</code>
+          <code class="dim" style="display:block; margin-top:0.5rem;">Agent B: git pull --rebase</code>
+          <code class="dim" style="display:block; margin-top:0.5rem;">CONFLICT (content): Merge conflict in auth.ts</code>
+          <code class="dim" style="display:block; margin-top:0.5rem; font-size:0.8rem;">Manual resolution required. Work stopped.</code>
+        </div>
+        <div>
+          <h4>Kai</h4>
+          <code class="highlight">Agent A edits auth.ts:validateToken</code>
+          <code class="highlight" style="display:block; margin-top:0.5rem;">Agent B edits auth.ts:createSession</code>
+          <code class="highlight" style="display:block; margin-top:0.5rem;">Kai: semantic 3-way merge, auto-resolved</code>
+          <code class="highlight" style="display:block; margin-top:0.5rem; font-size:0.8rem;">Both agents continue. No interruption.</code>
+        </div>
+      </div>
+      <p style="margin-top: 1rem; color: var(--muted);">
+        Git was designed for humans committing once an hour. AI agents edit code every few seconds. Kai's semantic graph understands function boundaries — two agents editing different functions in the same file is not a conflict.
+      </p>
+    </section>
+
+    <section id="prime">
+      <h2>42% cheaper. 53% fewer tokens. 1.8x faster.</h2>
+      <p style="color: var(--muted); margin-bottom: 1.5rem;">AI coding assistants spend most of their tokens exploring your codebase — reading files, grepping for symbols, traversing imports. Each round-trip re-sends the entire conversation. Kai eliminates this by giving the agent the right context before it starts.</p>
+      <div class="comparison">
+        <div>
+          <h4>Without Kai</h4>
+          <code class="dim">18 turns, 332K tokens, $0.38</code>
+          <code class="dim" style="margin-top: 0.5rem; display: block; font-size: 0.8rem;">Claude explores: read file, grep, read file, grep...</code>
+        </div>
+        <div>
+          <h4>With Kai</h4>
+          <code class="highlight">9 turns, 156K tokens, $0.22</code>
+          <code class="highlight" style="margin-top: 0.5rem; display: block; font-size: 0.8rem;">Kai pre-loads context in 188ms. Claude answers.</code>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>How it works</h2>
+      <div class="features">
+        <div class="feature">
+          <h3>Live Sync</h3>
+          <p>Multiple AI agents working on the same codebase see each other's changes in real time via SSE. Edits are merged semantically — two agents editing different functions in the same file merge cleanly. No commits, no pull, no conflicts.</p>
+        </div>
+        <div class="feature">
+          <h3>Semantic Graph</h3>
+          <p>Tree-sitter AST parsing extracts functions, classes, call chains, imports, and test coverage into a local graph database. Kai understands what code means, not just what lines changed. This is what makes semantic merging possible.</p>
+        </div>
+        <div class="feature">
+          <h3>Semantic 3-Way Merge</h3>
+          <p>When two agents edit the same file, Kai merges at the function level, not the line level. It knows that adding a parameter to <code>validateToken</code> and adding a new function <code>refreshToken</code> are independent changes. Real conflicts — two agents changing the same function differently — are flagged precisely.</p>
+        </div>
+        <div class="feature">
+          <h3>AI Authorship Tracking</h3>
+          <p>Every AI edit is checkpointed with agent name, model, and line ranges. <code>kai blame</code> shows exactly which code was AI-generated vs human-written. Know who wrote what — human or machine.</p>
+        </div>
+        <div class="feature">
+          <h3>2x Token Efficiency</h3>
+          <p><code>kai prime</code> queries the semantic graph in 188ms and pre-loads the right files into the AI's context. 53% fewer tokens, 42% lower cost. The agent reasons instead of exploring.</p>
+        </div>
+        <div class="feature">
+          <h3>Selective CI</h3>
+          <p>Run only the tests affected by your changes. The semantic graph knows which tests cover which functions — no more running the full suite.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="mcp">
+      <h2>Setup</h2>
+      <p style="color: var(--muted); margin-bottom: 1.5rem;">Two ways to give your AI assistant Kai's semantic graph. MCP for interactive tools, prime for pre-injected context that cuts token usage in half.</p>
+
+      <h3>MCP Server</h3>
+      <div class="install-options">
+        <div class="install-option">
+          <div class="label">Claude Code</div>
+          <code>claude mcp add kai -- kai mcp serve</code>
+        </div>
+        <div class="install-option">
+          <div class="label">Without installing Kai</div>
+          <code>claude mcp add kai -- npx -y kai-mcp</code>
+        </div>
+        <div class="install-option">
+          <div class="label">Cursor</div>
+          <code>Add to .cursor/mcp.json &mdash; <a href="https://github.com/kaicontext/kai-cli/blob/main/docs/mcp.md" style="color: var(--accent); text-decoration: none;">see docs</a></code>
+        </div>
+      </div>
+
+      <h3>Pre-injection (recommended for cost savings)</h3>
+      <div class="install-options">
+        <div class="install-option">
+          <div class="label">Benchmark it</div>
+          <code>kai bench --task "explain how authentication works"</code>
+        </div>
+      </div>
+
+      <p style="color: var(--muted); margin-top: 1.5rem;">No setup required. The server lazily initializes the semantic graph on first use. Available on the <a href="https://registry.modelcontextprotocol.io" style="color: var(--accent); text-decoration: none;">MCP Registry</a> as <code>io.github.kaicontext/kai</code>.</p>
+    </section>
+
+    <section id="install">
+      <h2>Install</h2>
+      <div class="install-options">
+        <div class="install-option">
+          <div class="label">curl</div>
+          <code>curl -sSL https://get.kaicontext.com | sh</code>
+        </div>
+        <div class="install-option">
+          <div class="label">Homebrew</div>
+          <code>brew install kaicontext/kai/kai</code>
+        </div>
+        <div class="install-option">
+          <div class="label">npm (MCP server only)</div>
+          <code>npx -y kai-mcp</code>
+        </div>
+      </div>
+    </section>
+
+    <script>
+    (function() {
+      // Make demo-container position:relative for overlay
+      document.getElementById('demo').style.position = 'relative';
+
+      const termBody = document.getElementById('term-body');
+      let running = false;
+
+      function show(id, cls) {
+        const el = document.querySelector(`[data-id="${id}"]`);
+        if (!el) return;
+        el.classList.remove('hidden');
+        if (cls) el.classList.add(cls);
+      }
+
+      function recolor(id, color) {
+        const el = document.querySelector(`[data-id="${id}"] circle`);
+        if (el) el.setAttribute('fill', color);
+      }
+
+      function addGlow(id) {
+        const el = document.querySelector(`[data-id="${id}"]`);
+        if (el) el.classList.add('impact-glow');
+      }
+
+      function typeLine(text, cls, delay) {
+        return new Promise(resolve => {
+          setTimeout(() => {
+            const span = document.createElement('span');
+            span.className = cls || '';
+            span.textContent = text + '\n';
+            termBody.appendChild(span);
+            termBody.scrollTop = termBody.scrollHeight;
+            resolve();
+          }, delay || 0);
+        });
+      }
+
+      async function typeCmd(text, delay) {
+        await new Promise(r => setTimeout(r, delay || 200));
+        const line = document.createElement('span');
+        const prompt = document.createElement('span');
+        prompt.className = 'term-prompt';
+        prompt.textContent = '$ ';
+        line.appendChild(prompt);
+
+        const cmd = document.createElement('span');
+        cmd.className = 'term-cmd';
+        line.appendChild(cmd);
+        termBody.appendChild(line);
+
+        for (let i = 0; i < text.length; i++) {
+          await new Promise(r => setTimeout(r, 40));
+          cmd.textContent = text.slice(0, i + 1);
+          termBody.scrollTop = termBody.scrollHeight;
+        }
+        termBody.appendChild(document.createTextNode('\n'));
+        termBody.scrollTop = termBody.scrollHeight;
+      }
+
+      window.startDemo = async function() {
+        if (running) return;
+        running = true;
+        document.getElementById('play-overlay').style.display = 'none';
+        termBody.innerHTML = '';
+
+        // Reset graph
+        document.querySelectorAll('.graph-node, .graph-edge').forEach(el => {
+          el.classList.add('hidden');
+          el.classList.remove('pulse', 'drawing', 'impact-glow');
+        });
+        document.querySelectorAll('.graph-node circle').forEach(c => c.setAttribute('fill', '#3b82f6'));
+
+        // Phase 1: kai capture
+        await typeCmd('kai capture', 300);
+        await typeLine('Scanning files...', 'term-output', 400);
+        await typeLine('Found 6 source files', 'term-output', 300);
+
+        // Show file nodes
+        show('n1', 'pulse'); await new Promise(r => setTimeout(r, 200));
+        show('n2', 'pulse'); await new Promise(r => setTimeout(r, 200));
+        show('n3', 'pulse'); await new Promise(r => setTimeout(r, 200));
+
+        await typeLine('Analyzing symbols...', 'term-output', 400);
+
+        // Show symbol nodes
+        show('n4', 'pulse'); await new Promise(r => setTimeout(r, 150));
+        show('n5', 'pulse'); await new Promise(r => setTimeout(r, 150));
+        show('n6', 'pulse'); await new Promise(r => setTimeout(r, 150));
+        show('n7', 'pulse'); await new Promise(r => setTimeout(r, 150));
+        show('n8', 'pulse'); await new Promise(r => setTimeout(r, 150));
+
+        await typeLine('Building call graph...', 'term-output', 400);
+
+        // Show edges
+        show('e1', 'drawing'); await new Promise(r => setTimeout(r, 150));
+        show('e2', 'drawing'); await new Promise(r => setTimeout(r, 150));
+        show('e3', 'drawing'); await new Promise(r => setTimeout(r, 150));
+        show('e4', 'drawing'); await new Promise(r => setTimeout(r, 150));
+        show('e5', 'drawing'); await new Promise(r => setTimeout(r, 150));
+        show('e6', 'drawing'); await new Promise(r => setTimeout(r, 150));
+        show('e7', 'drawing'); await new Promise(r => setTimeout(r, 150));
+        show('e8', 'drawing'); await new Promise(r => setTimeout(r, 150));
+
+        await typeLine('Captured 8 nodes, 8 edges', 'term-highlight', 300);
+        await new Promise(r => setTimeout(r, 600));
+
+        // Phase 2: kai diff
+        await typeCmd('kai diff', 600);
+        await typeLine('', '', 200);
+
+        // Highlight modified node
+        recolor('n4', '#fbbf24');
+        addGlow('n4');
+        await typeLine('~ auth.ts', 'term-modified', 400);
+        await typeLine('  ~ validateToken  (modified: added expiry check)', 'term-modified', 300);
+
+        await new Promise(r => setTimeout(r, 400));
+
+        // Phase 3: kai impact
+        await typeCmd('kai impact validateToken', 600);
+        await typeLine('', '', 200);
+
+        // Highlight impact path: validateToken -> auth.ts -> app.ts, and test
+        recolor('n2', '#fbbf24'); addGlow('n2');
+        await typeLine('  auth.ts        calls validateToken', 'term-modified', 300);
+
+        recolor('n1', '#fbbf24'); addGlow('n1');
+        await typeLine('  app.ts         imports auth', 'term-modified', 300);
+
+        recolor('n5', '#fbbf24'); addGlow('n5');
+        await typeLine('  createSession   calls validateToken', 'term-modified', 300);
+
+        recolor('n8', '#4ade80'); addGlow('n8');
+        await typeLine('  auth.test.ts   covers validateToken', 'term-added', 300);
+
+        await new Promise(r => setTimeout(r, 400));
+        await typeLine('', '', 0);
+        await typeLine('4 symbols affected, 1 test covers', 'term-highlight', 300);
+
+        await new Promise(r => setTimeout(r, 1500));
+
+        // Show replay
+        document.getElementById('play-overlay').style.display = 'flex';
+        running = false;
+      };
+    })();
+    </script>
+
+    <footer>
+      <p>The future of Git for AI &middot; Apache 2.0 License &middot; <a href="https://github.com/kaicontext/kai-cli">GitHub</a> &middot; <a href="https://github.com/kaicontext/kai-cli/blob/main/docs/mcp.md">MCP Docs</a> &middot; <a href="https://join.slack.com/t/kailayer/shared_invite/zt-3q8ulczwl-vkZ05GQH~kwudonmH53hGg">Slack</a></p>
+    </footer>
+  </div>
+</body>
+</html>
