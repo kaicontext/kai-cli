@@ -5,8 +5,10 @@
 # publishes them to this repo's GitHub Releases plus the kai-mcp npm package.
 #
 # kai-core is a PRIVATE Go module (github.com/kaicontext/kai-core). Every job
-# that resolves Go dependencies authenticates with the KAI_CORE_TOKEN secret
-# (a token / fine-grained PAT with read access to kaicontext/kai-core).
+# that resolves Go dependencies mints a short-lived (1h) installation token
+# from an org-owned GitHub App (Contents: read on kaicontext/kai-core), so no
+# personal PAT or long-lived key is involved. Requires two secrets on this repo:
+#   KAI_CORE_APP_ID, KAI_CORE_APP_PRIVATE_KEY
 
 name: CI
 
@@ -29,8 +31,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+      - name: Mint short-lived kai-core read token
+        uses: actions/create-github-app-token@v3
+        id: core-token
+        with:
+          app-id: ${{ secrets.KAI_CORE_APP_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-core
       - name: Authenticate to private kai-core module
-        run: git config --global url."https://x-access-token:${{ secrets.KAI_CORE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        run: git config --global url."https://x-access-token:${{ steps.core-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y gcc
       - name: Test
@@ -45,8 +55,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+      - name: Mint short-lived kai-core read token
+        uses: actions/create-github-app-token@v3
+        id: core-token
+        with:
+          app-id: ${{ secrets.KAI_CORE_APP_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-core
       - name: Authenticate to private kai-core module
-        run: git config --global url."https://x-access-token:${{ secrets.KAI_CORE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        run: git config --global url."https://x-access-token:${{ steps.core-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y gcc gcc-aarch64-linux-gnu
       - name: Build linux/amd64
@@ -75,8 +93,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+      - name: Mint short-lived kai-core read token
+        uses: actions/create-github-app-token@v3
+        id: core-token
+        with:
+          app-id: ${{ secrets.KAI_CORE_APP_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-core
       - name: Authenticate to private kai-core module
-        run: git config --global url."https://x-access-token:${{ secrets.KAI_CORE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        run: git config --global url."https://x-access-token:${{ steps.core-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
       - name: Build darwin/arm64
         run: |
           CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o kai-darwin-arm64 ./cmd/kai
