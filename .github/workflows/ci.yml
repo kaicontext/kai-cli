@@ -130,6 +130,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
         with:
           path: dist
@@ -140,6 +141,9 @@ jobs:
           cp dist/kai-linux-arm64/kai-linux-arm64.gz release/
           cp dist/kai-darwin-arm64/kai-darwin-arm64.gz release/
           cp dist/kai-darwin-amd64/kai-darwin-amd64.gz release/
+          # The curl installer itself — get.kaicontext.com redirects to
+          # .../releases/latest/download/install.sh, so ship it as an asset.
+          cp install.sh release/
           ls -la release/
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
