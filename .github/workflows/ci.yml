@@ -8,7 +8,7 @@
 # that resolves Go dependencies mints a short-lived (1h) installation token
 # from an org-owned GitHub App (Contents: read on kaicontext/kai-core), so no
 # personal PAT or long-lived key is involved. Requires two secrets on this repo:
-#   KAI_CORE_APP_ID, KAI_CORE_APP_PRIVATE_KEY
+#   KAI_CORE_APP_CLIENT_ID, KAI_CORE_APP_PRIVATE_KEY
 
 name: CI
 
@@ -35,7 +35,7 @@ jobs:
         uses: actions/create-github-app-token@v3
         id: core-token
         with:
-          app-id: ${{ secrets.KAI_CORE_APP_ID }}
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
           private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
           owner: kaicontext
           repositories: kai-core
@@ -59,7 +59,7 @@ jobs:
         uses: actions/create-github-app-token@v3
         id: core-token
         with:
-          app-id: ${{ secrets.KAI_CORE_APP_ID }}
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
           private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
           owner: kaicontext
           repositories: kai-core
@@ -97,7 +97,7 @@ jobs:
         uses: actions/create-github-app-token@v3
         id: core-token
         with:
-          app-id: ${{ secrets.KAI_CORE_APP_ID }}
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
           private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
           owner: kaicontext
           repositories: kai-core
