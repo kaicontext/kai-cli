@@ -352,6 +352,13 @@
       <!-- CTA below hero -->
       <div style="position:absolute;bottom:2rem;left:50%;transform:translateX(-50%);text-align:center;z-index:10;">
         <p style="color:#666672;font-size:0.95rem;margin-bottom:1rem;">Built by the team behind GitLab.</p>
+        <div class="install-oneliner">
+          <code><span class="prompt">$</span>curl -fsSL https://get.kaicontext.com | sh</code>
+          <button class="copy-btn" type="button" onclick="copyInstall(this)" aria-label="Copy install command" title="Copy">
+            <svg class="ic-copy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="ic-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+        </div>
         <div class="cta" style="margin-top:0;">
           <a href="https://github.com/kaicontext/kai-cli" class="btn">GitHub</a>
           <a href="#install" class="btn btn-secondary">Install</a>
@@ -359,6 +366,14 @@
         </div>
       </div>
     </div>
+    <script>
+      function copyInstall(b){
+        var cmd = 'curl -fsSL https://get.kaicontext.com | sh';
+        if (navigator.clipboard) { navigator.clipboard.writeText(cmd); }
+        b.classList.add('copied');
+        setTimeout(function(){ b.classList.remove('copied'); }, 1500);
+      }
+    </script>
     <style>
       @keyframes heroFadeIn { from { opacity: 0; } to { opacity: 1; } }
       @keyframes cursorBlink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
@@ -369,6 +384,16 @@
       .hero-kw { color:#7B7BF8; }
       .hero-type { color:#4FC8A0; }
       .hero-highlight { background-color:#1D3A2E; }
+      .install-oneliner { display:inline-flex; align-items:center; gap:8px; max-width:100%; margin-bottom:1.25rem; }
+      .install-oneliner code { display:flex; align-items:center; font-family:'JetBrains Mono',monospace; font-size:0.9rem; color:#C8C8D8; background:#131318; border:1px solid #2A2A32; border-radius:8px; padding:0.6rem 0.9rem; white-space:nowrap; overflow-x:auto; }
+      .install-oneliner code .prompt { color:#7B7BF8; user-select:none; margin-right:0.5rem; }
+      .copy-btn { flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; width:40px; height:40px; background:#1A1A1F; border:1px solid #2A2A32; border-radius:8px; color:#8888AA; cursor:pointer; transition:border-color 0.15s, color 0.15s; }
+      .copy-btn:hover { border-color:#7B7BF8; color:#F8F8F8; }
+      .copy-btn .ic-check { display:none; }
+      .copy-btn.copied { border-color:#4FC8A0; color:#4FC8A0; }
+      .copy-btn.copied .ic-copy { display:none; }
+      .copy-btn.copied .ic-check { display:inline; }
+      @media (max-width:520px) { .install-oneliner code { font-size:0.74rem; padding:0.55rem 0.7rem; } .copy-btn { width:36px; height:36px; } }
       @media (max-width: 1100px) {
         #hero { height: auto; min-height: auto; padding-bottom: 6rem; }
         #hero > div:nth-child(3) { position: relative !important; padding: 8rem 1rem 2rem !important; flex-direction: column !important; }
