@@ -44,6 +44,13 @@ func fakeRemote(t *testing.T, tenant, repo string, tagTarget, reviewTarget []byt
 				{Name: "snap.latest", Target: tagTarget},
 				{Name: "tag.v1.0", Target: tagTarget},
 				{Name: "review." + reviewIDHex, Target: reviewTarget},
+				// A companion ref the push side emits alongside a real review: it
+				// points at the review's target changeset, NOT a Review node. Pull
+				// must skip it (only `review.<hex>` are real reviews). Note the
+				// `/v1/refs/review.` handler below would resolve THIS back to the
+				// real review, so an absent guard double-counts — which makes the
+				// `want (1, 1)` assertions a regression test for the filter.
+				{Name: "review." + reviewIDHex + ".target", Target: tagTarget},
 			}})
 		case strings.HasPrefix(p, base+"/v1/refs/review."):
 			_ = json.NewEncoder(w).Encode(remote.RefEntry{Name: "review." + reviewIDHex, Target: reviewTarget})
@@ -94,6 +101,12 @@ func TestPullTagsAndReviews_BringsUsableTagAndReview(t *testing.T) {
 	tags, reviews := pullTagsAndReviews(db, client, refMgr, "origin")
 	if tags != 1 || reviews != 1 {
 		t.Fatalf("first pull = (%d tags, %d reviews), want (1, 1)", tags, reviews)
+	}
+
+	// The `review.<hex>.target` companion ref must have been skipped, not synced
+	// as a second review — only `review.<hex>` names a Review node.
+	if r, _ := refMgr.Get("review." + reviewIDHex + ".target"); r != nil {
+		t.Error("companion ref review.<id>.target was synced as a review — the .target guard regressed")
 	}
 
 	// The tag must be a usable LOCAL ref pointing at the tagged snapshot — this
