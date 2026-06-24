@@ -16528,6 +16528,76 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// pullTagsAndReviews brings tag.* and review.* refs across during `kai pull`
+// (F-15). Pull historically synced only snap.latest/cs.latest, so a teammate who
+// pulled never saw release tags or code reviews — even though `kai push` sends
+// them. Tags become usable LOCAL tag.* refs (not just remote/origin tracking
+// refs); reviews are reconstructed via the UUID-preserving review sync and
+// skipped when already present locally, so repeated pulls are idempotent (no
+// duplicate Review nodes). Best-effort: failures are logged, not fatal — a tag
+// or review that won't fetch must not abort the snapshot pull.
+func pullTagsAndReviews(db *graph.DB, client *remote.Client, refMgr *ref.RefManager, remoteName string) (int, int) {
+	remoteRefs, err := client.ListRefs("")
+	if err != nil {
+		debugf("pull: listing remote refs for tags/reviews: %v", err)
+		return 0, 0
+	}
+	tags, reviews := 0, 0
+	for _, r := range remoteRefs {
+		switch {
+		case strings.HasPrefix(r.Name, "tag."):
+			// Ensure the tagged object is present locally.
+			if exists, _ := db.HasNode(r.Target); !exists {
+				if content, kind, gerr := client.GetObject(r.Target); gerr == nil && content != nil {
+					var payload map[string]interface{}
+					if json.Unmarshal(content, &payload) == nil {
+						if tx, terr := db.BeginTx(); terr == nil {
+							if _, ierr := db.InsertNode(tx, graph.NodeKind(kind), payload); ierr == nil {
+								tx.Commit()
+							} else {
+								tx.Rollback()
+							}
+						}
+					}
+				}
+			}
+			// Create/update a usable LOCAL tag (the whole point: `kai tag list`
+			// must show it), plus the remote tracking ref.
+			existing, _ := refMgr.Get(r.Name)
+			if existing == nil || !bytes.Equal(existing.TargetID, r.Target) {
+				if serr := refMgr.Set(r.Name, r.Target, ref.KindSnapshot); serr != nil {
+					debugf("pull: setting tag %s: %v", r.Name, serr)
+					continue
+				}
+				tags++
+			}
+			refMgr.Set("remote/"+remoteName+"/"+r.Name, r.Target, ref.KindSnapshot)
+		case strings.HasPrefix(r.Name, "review.") && !strings.Contains(strings.TrimPrefix(r.Name, "review."), "."):
+			// Only real review refs (`review.<hex-uuid>`); skip companion refs
+			// like `review.<id>.target`, which point at the review's changeset,
+			// not a Review node. (Tags legitimately contain dots, e.g. v1.0, so
+			// this guard is review-only.)
+			// Idempotent: once we have this review locally, skip re-syncing it.
+			if existing, _ := refMgr.Get(r.Name); existing != nil {
+				continue
+			}
+			reviewID := strings.TrimPrefix(r.Name, "review.")
+			if serr := syncReviewFromRemote(db, client, remoteName, reviewID); serr != nil {
+				debugf("pull: syncing review %s: %v", reviewID, serr)
+				continue
+			}
+			reviews++
+		}
+	}
+	if tags > 0 {
+		fmt.Printf("  Pulled %d tag(s)\n", tags)
+	}
+	if reviews > 0 {
+		fmt.Printf("  Pulled %d review(s)\n", reviews)
+	}
+	return tags, reviews
+}
+
 func runPull(cmd *cobra.Command, args []string) error {
 	te := telemetry.NewEvent("pull")
 	defer te.Finish()
@@ -16574,6 +16644,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 	refMgr := ref.NewRefManager(db)
 	localRef, _ := refMgr.Get("snap.latest")
 	if localRef != nil && hex.EncodeToString(localRef.TargetID) == remoteDigest {
+		// snap.latest is already current, but tags and reviews still need to be
+		// synced — they're independent of the snapshot head (F-15).
+		pullTagsAndReviews(db, client, refMgr, remoteName)
 		fmt.Println("Already up to date.")
 		return nil
 	}
@@ -16739,6 +16812,9 @@ func runPull(cmd *cobra.Command, args []string) error {
 	// Advance the remote-tracking ref to the head we just synced so a later pull
 	// short-circuits cleanly and the fast-forward guard reflects reality.
 	_ = refMgr.Set("remote/origin/snap.latest", snapRef.Target, ref.KindSnapshot)
+
+	// Bring tags and reviews across too — pull is the documented sync verb (F-15).
+	pullTagsAndReviews(db, client, refMgr, remoteName)
 
 	// Materialize the working tree to the pulled snapshot (F-10). Pull fetched
 	// the blobs into the object store but never wrote the files, leaving the
@@ -19287,7 +19363,13 @@ func fetchWorkspaceFromRemote(db *graph.DB, client *remote.Client, remoteName, w
 	return nil
 }
 
-func fetchReviewFromRemote(db *graph.DB, client *remote.Client, remoteName, reviewID string) error {
+// syncReviewFromRemote reconstructs review <reviewID> from the remote into the
+// local graph: it fetches the Review node (preserving its transport _uuid so
+// repeated syncs are idempotent), its target changeset and dependencies, creates
+// the local review + ref, and syncs comments. Used by `kai fetch --review` and
+// by `kai pull` (F-15). It prints per-review progress but no command-completion
+// line, so callers can drive it in a loop.
+func syncReviewFromRemote(db *graph.DB, client *remote.Client, remoteName, reviewID string) error {
 	// Construct the review ref name
 	refName := "review." + reviewID
 
@@ -19488,6 +19570,15 @@ func fetchReviewFromRemote(db *graph.DB, client *remote.Client, remoteName, revi
 		}
 	}
 
+	return nil
+}
+
+// fetchReviewFromRemote is the `kai fetch --review <id>` entry point: sync the
+// review, then print the command's completion line.
+func fetchReviewFromRemote(db *graph.DB, client *remote.Client, remoteName, reviewID string) error {
+	if err := syncReviewFromRemote(db, client, remoteName, reviewID); err != nil {
+		return err
+	}
 	fmt.Println("Fetch complete.")
 	return nil
 }
