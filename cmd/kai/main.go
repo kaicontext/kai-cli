@@ -15250,6 +15250,34 @@ func isNonFastForwardPush(remoteTarget, trackedTarget, newTarget []byte) bool {
 	return len(trackedTarget) == 0 || !bytes.Equal(trackedTarget, remoteTarget)
 }
 
+// isFastForwardPull reports whether pulling remoteTarget over our localTarget is
+// a clean fast-forward — i.e. everything we hold locally was already synced from
+// the remote (local == the remote/origin/* tracking ref), so the remote has
+// merely advanced and we hold no unpushed local snapshots that pulling would
+// orphan (F-9). The already-up-to-date case (local == remote) is handled by the
+// caller before this is called.
+//
+//   - localTarget   — our current snap.latest
+//   - trackedTarget — the value we last pulled/pushed (the remote/origin/* ref)
+//   - remoteTarget  — the ref's current value on the remote
+//
+// Like isNonFastForwardPush this is a tracking-ref heuristic, not true ancestry
+// (snapshots carry no parent link — see F-14). It is exact for the common case:
+// a behind clone whose head is still what it last synced is always a safe
+// fast-forward, while a head that has moved past the tracking ref is treated as
+// divergence and left for the user to reconcile.
+func isFastForwardPull(localTarget, trackedTarget, remoteTarget []byte) bool {
+	if len(localTarget) == 0 {
+		return true // nothing local — any remote head is a fast-forward
+	}
+	if len(trackedTarget) == 0 {
+		return false // never synced — can't prove our local isn't unpushed work
+	}
+	// Fast-forward iff our local head is exactly what we last synced; anything
+	// else means we have local snapshots beyond the remote's prior state.
+	return bytes.Equal(localTarget, trackedTarget)
+}
+
 func runPush(cmd *cobra.Command, args []string) error {
 	te := telemetry.NewEvent("push")
 	defer te.Finish()
@@ -16466,13 +16494,23 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Check for divergence: local snap.latest differs from remote
+	// Reconcile against the remote (F-9): the remote head differs from ours
+	// (the equal case returned above). Distinguish a clean fast-forward — our
+	// local head is exactly what we last synced, so we hold no unpushed work and
+	// the remote has merely advanced — from a real divergence. A behind clone is
+	// the former and must be allowed to catch up without --force; only the latter
+	// aborts. Compares against the remote/origin/* tracking ref (what we last
+	// pulled/pushed), mirroring the push-side guard, since snapshots carry no
+	// ancestry to compute a true merge-base (F-14).
 	if localRef != nil && !pullForce {
 		localDigest := hex.EncodeToString(localRef.TargetID)
-		// Check if the remote knows about our local snapshot
-		_, _, err := client.GetObject(localRef.TargetID)
-		if err != nil || localDigest != remoteDigest {
-			// Local has a different snapshot that may not be on the remote
+		var trackedTarget []byte
+		if tracked, _ := refMgr.Get("remote/origin/snap.latest"); tracked != nil {
+			trackedTarget = tracked.TargetID
+		}
+		if !isFastForwardPull(localRef.TargetID, trackedTarget, snapRef.Target) {
+			// Local has snapshots beyond what we last synced; pulling would
+			// orphan them. Make the user reconcile explicitly.
 			fmt.Printf("  Warning: local snap.latest (%s) differs from remote (%s)\n",
 				localDigest[:12], remoteDigest[:12])
 			fmt.Println("  You have unpushed local snapshots that will become orphaned.")
@@ -16481,6 +16519,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			fmt.Println("  To push first:   kai push")
 			return fmt.Errorf("pull aborted: local and remote have diverged")
 		}
+		// Clean fast-forward: fall through to fetch and advance to the remote head.
 	}
 
 	// Fetch the snapshot node if we don't have it
@@ -16604,6 +16643,10 @@ func runPull(cmd *cobra.Command, args []string) error {
 	if err := refMgr.Set("snap.latest", snapRef.Target, ref.KindSnapshot); err != nil {
 		return fmt.Errorf("updating local snap.latest: %w", err)
 	}
+
+	// Advance the remote-tracking ref to the head we just synced so a later pull
+	// short-circuits cleanly and the fast-forward guard reflects reality.
+	_ = refMgr.Set("remote/origin/snap.latest", snapRef.Target, ref.KindSnapshot)
 
 	fmt.Printf("  snap.latest -> %s\n", remoteDigest[:12])
 	fmt.Println("Pull complete.")
