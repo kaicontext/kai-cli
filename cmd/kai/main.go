@@ -15278,6 +15278,33 @@ func isFastForwardPull(localTarget, trackedTarget, remoteTarget []byte) bool {
 	return bytes.Equal(localTarget, trackedTarget)
 }
 
+// onDiskContentMatches reports whether the working-tree file at path already
+// holds exactly the target content (its blake3 hex == contentDigest). Pull uses
+// it to decide it can skip fetching/writing a blob when the remote can't supply
+// it: if the file on disk is already the right content there is nothing to
+// materialize. A missing or unreadable file returns false. (F-10/F-6)
+func onDiskContentMatches(path, contentDigest string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return util.Blake3HashHex(data) == contentDigest
+}
+
+// materializeWorkingTree writes the files of snapshot `head` into worktreeRoot,
+// overwriting only files whose on-disk content differs from the snapshot and
+// never deleting (clean=false). It is the post-pull step that keeps the working
+// tree in sync with snap.latest (F-10): without it, pull advanced the graph but
+// left the files stale. It is a no-op when the tree is already current. Returns
+// the number of files written.
+func materializeWorkingTree(db *graph.DB, head []byte, worktreeRoot string) (int, error) {
+	result, err := snapshot.NewCreator(db, nil).Checkout(head, worktreeRoot, false)
+	if err != nil {
+		return 0, err
+	}
+	return result.FilesWritten, nil
+}
+
 func runPush(cmd *cobra.Command, args []string) error {
 	te := telemetry.NewEvent("push")
 	defer te.Finish()
@@ -16588,15 +16615,23 @@ func runPull(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Check if we have the content blob
+		// Check if we have the content blob. The /v1/raw/ endpoint dereferences
+		// the file NODE digest (f.Digest) to its content — fetching by the content
+		// digest 404s — so request by f.Digest (matching clone). The blob must land
+		// in the object store for the post-pull working-tree materialization below
+		// (F-10) to write it. The old code fetched by the wrong digest and then,
+		// on the resulting failure, skipped whenever any file existed on disk —
+		// even a stale one — which is exactly why the tree was left out of date.
 		_, readErr := db.ReadObject(f.ContentDigest)
 		if readErr != nil {
 			// Fetch raw content from remote
-			rawContent, err := client.GetRawContent(f.ContentDigest)
+			rawContent, err := client.GetRawContent(f.Digest)
 			if err != nil {
-				// If the file exists on disk, that's fine — git has it
-				if _, diskErr := os.Stat(f.Path); diskErr == nil {
-					continue // file on disk, no need for blob
+				// Remote couldn't supply the blob. If the on-disk file already
+				// matches the target content we don't need it; otherwise warn —
+				// the working tree will be left stale for this file.
+				if onDiskContentMatches(f.Path, f.ContentDigest) {
+					continue // on-disk content already matches — no blob needed
 				}
 				if os.Getenv("KAI_PULL_QUIET") == "" {
 					fmt.Printf("  Warning: failed to fetch content for %s: %v\n", f.Path, err)
@@ -16647,6 +16682,23 @@ func runPull(cmd *cobra.Command, args []string) error {
 	// Advance the remote-tracking ref to the head we just synced so a later pull
 	// short-circuits cleanly and the fast-forward guard reflects reality.
 	_ = refMgr.Set("remote/origin/snap.latest", snapRef.Target, ref.KindSnapshot)
+
+	// Materialize the working tree to the pulled snapshot (F-10). Pull fetched
+	// the blobs into the object store but never wrote the files, leaving the
+	// graph at the new head while the working tree kept the old content — a
+	// silent ref-vs-disk drift, acute on kai-only clones with no git tree to
+	// fall back on. Checkout(clean=false) overwrites only files whose on-disk
+	// content differs from the snapshot and never deletes, so it is a no-op when
+	// the tree is already current (e.g. a git-backed repo git already updated).
+	worktreeRoot, err := filepath.Abs(".")
+	if err != nil {
+		return fmt.Errorf("resolving working directory: %w", err)
+	}
+	if written, cerr := materializeWorkingTree(db, snapRef.Target, worktreeRoot); cerr != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: pulled the graph but failed to update the working tree: %v\n", cerr)
+	} else if written > 0 {
+		fmt.Printf("  Updated %d file(s) in the working tree\n", written)
+	}
 
 	fmt.Printf("  snap.latest -> %s\n", remoteDigest[:12])
 	fmt.Println("Pull complete.")
