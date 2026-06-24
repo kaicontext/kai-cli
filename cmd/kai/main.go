@@ -13818,6 +13818,19 @@ func jsonStringField(s string) string {
 	return b.String()
 }
 
+// heldByGateHint returns the message shown when the safety gate holds an
+// integration. It must name the command that actually unblocks a held change —
+// `kai gate approve <id>` — not `kai review`, which errors on a held (draft)
+// change with "cannot transition from draft to approved" (F-17). The held
+// result snapshot id is embedded so the suggested command is runnable as-is.
+func heldByGateHint(resultSnapshot []byte) string {
+	id := util.BytesToHex(resultSnapshot)
+	if len(id) > 12 {
+		id = id[:12]
+	}
+	return fmt.Sprintf("Change held by the safety gate. Run `kai gate approve %s` to publish it, or `kai gate list` to see held changes.", id)
+}
+
 func runIntegrate(cmd *cobra.Command, args []string) error {
 	db, err := openDB()
 	if err != nil {
@@ -13888,7 +13901,7 @@ func runIntegrate(cmd *cobra.Command, args []string) error {
 				fmt.Printf("  %s -> %s\n", name, util.BytesToHex(result.ResultSnapshot)[:12])
 			}
 			if report.HeldByGate {
-				fmt.Println("  Change held: run `kai review` to inspect.")
+				fmt.Printf("  %s\n", heldByGateHint(result.ResultSnapshot))
 			}
 		}
 	}
