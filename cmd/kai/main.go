@@ -15307,6 +15307,27 @@ func isNonFastForwardPush(remoteTarget, trackedTarget, newTarget []byte) bool {
 	return len(trackedTarget) == 0 || !bytes.Equal(trackedTarget, remoteTarget)
 }
 
+// workspaceRefSet builds the refs that publish a workspace to a remote so that
+// `kai fetch --ws <name>` can reconstruct it. The ws.<name> node ref (target =
+// the workspace's content-addressed digest) is the name fetch --ws looks up;
+// ws.<name>.base / ws.<name>.head carry the snapshot bounds; and one
+// ws.<name>.cs.<id> ref is emitted per open changeset. Keeping this contract in
+// one place is what makes a workspace shareable (F-12).
+func workspaceRefSet(name string, wsContentDigest, base, head []byte, changesets [][]byte) []*ref.Ref {
+	refs := []*ref.Ref{
+		{Name: fmt.Sprintf("ws.%s", name), TargetID: wsContentDigest, TargetKind: ref.KindWorkspace},
+		{Name: fmt.Sprintf("ws.%s.base", name), TargetID: base, TargetKind: ref.KindSnapshot},
+		{Name: fmt.Sprintf("ws.%s.head", name), TargetID: head, TargetKind: ref.KindSnapshot},
+	}
+	for _, csID := range changesets {
+		refs = append(refs, &ref.Ref{
+			Name:     fmt.Sprintf("ws.%s.cs.%s", name, hex.EncodeToString(csID)[:8]),
+			TargetID: csID,
+		})
+	}
+	return refs
+}
+
 // isFastForwardPull reports whether pulling remoteTarget over our localTarget is
 // a clean fast-forward — i.e. everything we hold locally was already synced from
 // the remote (local == the remote/origin/* tracking ref), so the remote has
@@ -15595,42 +15616,19 @@ func runPush(cmd *cobra.Command, args []string) error {
 			Content: wsContent,
 		}
 
-		// Add workspace node ref (for fetch --ws to work)
-		// Uses content-addressed digest so server can verify
-		wsNodeRef := &ref.Ref{
-			Name:       fmt.Sprintf("ws.%s", workspaceToPush.Name),
-			TargetID:   wsContentDigest,
-			TargetKind: ref.KindWorkspace,
-		}
-		// Add workspace snapshot refs
-		wsBaseRef := &ref.Ref{
-			Name:       fmt.Sprintf("ws.%s.base", workspaceToPush.Name),
-			TargetID:   workspaceToPush.BaseSnapshot,
-			TargetKind: ref.KindSnapshot,
-		}
-		wsHeadRef := &ref.Ref{
-			Name:       fmt.Sprintf("ws.%s.head", workspaceToPush.Name),
-			TargetID:   workspaceToPush.HeadSnapshot,
-			TargetKind: ref.KindSnapshot,
-		}
-		refsToSync = append(refsToSync, wsNodeRef, wsBaseRef, wsHeadRef)
-
-		// Add all changesets in the workspace
+		// Build the refs that publish this workspace so `kai fetch --ws` can
+		// reconstruct it: the node ref (ws.<name>), base/head snapshot refs, and
+		// one ref per open changeset. Only include changesets whose node exists
+		// locally.
+		var openCS [][]byte
 		for _, csID := range workspaceToPush.OpenChangeSets {
-			// Get the changeset node to find its base/head snapshots
-			csNode, err := db.GetNode(csID)
-			if err != nil || csNode == nil {
-				continue
+			if csNode, err := db.GetNode(csID); err == nil && csNode != nil {
+				openCS = append(openCS, csID)
 			}
-
-			// Create a ref for this changeset
-			csRefName := fmt.Sprintf("ws.%s.cs.%s", workspaceToPush.Name, hex.EncodeToString(csID)[:8])
-			csRef := &ref.Ref{
-				Name:     csRefName,
-				TargetID: csID,
-			}
-			refsToSync = append(refsToSync, csRef)
 		}
+		refsToSync = append(refsToSync, workspaceRefSet(
+			workspaceToPush.Name, wsContentDigest,
+			workspaceToPush.BaseSnapshot, workspaceToPush.HeadSnapshot, openCS)...)
 
 		debugf("  Base: %s", hex.EncodeToString(workspaceToPush.BaseSnapshot)[:12])
 		debugf("  Head: %s", hex.EncodeToString(workspaceToPush.HeadSnapshot)[:12])
@@ -15744,8 +15742,12 @@ func runPush(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Skip push if snap.latest hasn't changed since last push
-	if !pushForce {
+	// Skip push if snap.latest hasn't changed since last push. This does NOT
+	// apply to a workspace push (--ws): a workspace's state lives in
+	// ws.<name>.head, which advances independently of snap.latest, so this
+	// snap.latest check would wrongly report "Already up to date." and transmit
+	// nothing — leaving the workspace unshareable (F-12).
+	if !pushForce && workspaceToPush == nil {
 		localLatest, _ := refMgr.Get("snap.latest")
 		lastPushed, _ := refMgr.Get("remote/origin/snap.latest")
 		if localLatest != nil && lastPushed != nil && bytes.Equal(localLatest.TargetID, lastPushed.TargetID) {
