@@ -16943,10 +16943,62 @@ func runCloneKaiOnly(args []string) error {
 	return nil
 }
 
+// gitCloneTargetDir returns the directory `git clone <url> [dir]` writes into:
+// the explicit second arg if given, otherwise the final path segment of the URL
+// with any trailing ".git", scheme, and host stripped — mirroring git's own
+// naming rule. Returns "" when there are no args. Used to locate the directory
+// to clean up after a failed clone and to set up Kai afterwards.
+func gitCloneTargetDir(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	if len(args) > 1 && args[1] != "" {
+		return args[1]
+	}
+	name := strings.TrimSuffix(args[0], ".git")
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	} else if idx := strings.LastIndex(name, ":"); idx >= 0 {
+		name = name[idx+1:]
+		if idx2 := strings.LastIndex(name, "/"); idx2 >= 0 {
+			name = name[idx2+1:]
+		}
+	}
+	return name
+}
+
+// shouldCleanPartialClone reports whether, after a failed `git clone`, it is
+// safe to remove targetDir before retrying as a Kai-only clone. It is safe only
+// when the directory did not already exist with content before the clone — i.e.
+// git created it (and usually cleans it up itself, but not always), so removing
+// it destroys nothing the user had. existedNonEmpty is sampled BEFORE git runs;
+// when it is true, git refused to touch the directory and we must never delete
+// the user's data.
+func shouldCleanPartialClone(targetDir string, existedNonEmpty bool) bool {
+	return targetDir != "" && !existedNonEmpty
+}
+
+// dirExistsNonEmpty reports whether path is an existing directory with at least
+// one entry.
+func dirExistsNonEmpty(path string) bool {
+	if path == "" {
+		return false
+	}
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) > 0
+}
+
 func runClone(cmd *cobra.Command, args []string) error {
 	if cloneKaiOnly {
 		return runCloneKaiOnly(args)
 	}
+
+	// The directory git will create, and whether it already held content before
+	// we touched it — captured up front so a failed clone can be cleaned up
+	// safely before the Kai-only fallback (which refuses a non-empty target).
+	dirName := gitCloneTargetDir(args)
+	existedNonEmpty := dirExistsNonEmpty(dirName)
+
 	// Forward to git clone, then set up kai
 	gitArgs := append([]string{"clone"}, args...)
 	gitCmd := exec.Command("git", gitArgs...)
@@ -16954,26 +17006,19 @@ func runClone(cmd *cobra.Command, args []string) error {
 	gitCmd.Stderr = os.Stderr
 	gitCmd.Stdin = os.Stdin
 	if err := gitCmd.Run(); err != nil {
-		return fmt.Errorf("git clone failed: %w", err)
-	}
-
-	// Determine the directory git cloned into
-	rawURL := args[0]
-	dirName := ""
-	if len(args) > 1 {
-		dirName = args[1]
-	} else {
-		name := rawURL
-		name = strings.TrimSuffix(name, ".git")
-		if idx := strings.LastIndex(name, "/"); idx >= 0 {
-			name = name[idx+1:]
-		} else if idx := strings.LastIndex(name, ":"); idx >= 0 {
-			name = name[idx+1:]
-			if idx2 := strings.LastIndex(name, "/"); idx2 >= 0 {
-				name = name[idx2+1:]
-			}
+		// The remote may be Kai-only (no git backing) — exactly the repos that
+		// `kai init` + push produce. Rather than failing, fall back to the
+		// Kai-only clone path. Remove any partial directory git left behind
+		// first (a no-op when git already cleaned up), but only when it is safe
+		// to do so — never delete a directory the user already had.
+		if shouldCleanPartialClone(dirName, existedNonEmpty) {
+			_ = os.RemoveAll(dirName)
 		}
-		dirName = name
+		fmt.Fprintln(os.Stderr, "git clone failed; trying Kai-only clone (the remote may have no git backing)...")
+		if kaiErr := runCloneKaiOnly(args); kaiErr != nil {
+			return fmt.Errorf("git clone failed (%v); Kai-only clone also failed: %w", err, kaiErr)
+		}
+		return nil
 	}
 
 	if dirName == "" || dirName == "." {
