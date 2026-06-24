@@ -3338,6 +3338,25 @@ func runBridgeMilestone(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// gitHistoryRewritten reports whether advancing git.HEAD from prevSHA to newSHA
+// represents an upstream history rewrite (rebase / force-push) rather than a
+// normal fast-forward — i.e. prevSHA is NOT an ancestor of newSHA. Snapshots
+// carry no ancestry (F-14), but git does, so we ask git. dir is the repo working
+// directory ("" = current process dir). A prevSHA that no longer resolves
+// (gc'd away after the rewrite) also counts as rewritten, since its history is
+// gone from the new line.
+func gitHistoryRewritten(dir, prevSHA, newSHA string) bool {
+	if prevSHA == "" || newSHA == "" || prevSHA == newSHA {
+		return false
+	}
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", prevSHA, newSHA)
+	cmd.Dir = dir
+	// Exit 0 => prevSHA is an ancestor of newSHA => normal fast-forward advance.
+	// Exit 1 => not an ancestor (rewrite); any other error (e.g. prevSHA gc'd) =>
+	// the old history is gone, also a rewrite.
+	return cmd.Run() != nil
+}
+
 func runBridgeImport(cmd *cobra.Command, args []string) error {
 	if !bridgeEnabled() {
 		// Hook may have been installed manually; be a no-op instead of loud.
@@ -3385,6 +3404,17 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Snapshot the previous git.HEAD before we move it, so we can detect an
+	// upstream history rewrite (rebase/force-push) and link the old line to the
+	// new one with a SUPERSEDES edge below (F-16). Without this, a rewrite
+	// imports as a fresh, unconnected snapshot and the graph silently forks into
+	// two unrelated lineages.
+	prevHead, _ := refMgr.Get("git.HEAD")
+	var prevHeadSHA string
+	if prevHead != nil {
+		prevHeadSHA = prevHead.Meta["git_commit"]
+	}
+
 	// Capture current tree, then point git.<sha> at whatever snap.latest becomes.
 	// runCapture is idempotent (content-addressed) — if nothing changed since
 	// the last capture, snap.latest is unchanged and the ref just points there.
@@ -3407,8 +3437,35 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 		debugf("bridge import: writing %s: %v", refName, err)
 		return nil
 	}
+
+	// Detect an upstream history rewrite (F-16): if git.HEAD's previous commit is
+	// no longer an ancestor of the one we just imported, the shared history was
+	// rebased/force-pushed. Link the superseded snapshot to the new one so the
+	// two lineages are connected instead of silently forked, and signal it. The
+	// edge is idempotent (INSERT OR IGNORE) and only added when the two snapshots
+	// actually differ.
+	if prevHead != nil && !bytes.Equal(prevHead.TargetID, latest.TargetID) &&
+		gitHistoryRewritten("", prevHeadSHA, fullSHA) {
+		if err := db.InsertEdgeDirect(prevHead.TargetID, graph.EdgeSupersedes, latest.TargetID, nil); err != nil {
+			debugf("bridge import: writing SUPERSEDES edge: %v", err)
+		} else {
+			debugf("bridge import: history rewrite detected (%s no longer ancestor of %s); linked SUPERSEDES %s -> %s",
+				shortPrefix(prevHeadSHA), shortSHA,
+				hex.EncodeToString(prevHead.TargetID)[:12], hex.EncodeToString(latest.TargetID)[:12])
+		}
+	}
+
 	_ = refMgr.SetWithMeta("git.HEAD", latest.TargetID, ref.KindSnapshot, "", meta)
 	return nil
+}
+
+// shortPrefix returns the first 12 chars of s (or all of s if shorter) for
+// concise log lines.
+func shortPrefix(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
 }
 
 // installOrUpgradeBridgeHook is the DRY helper for the three bridge-only
@@ -15250,6 +15307,61 @@ func isNonFastForwardPush(remoteTarget, trackedTarget, newTarget []byte) bool {
 	return len(trackedTarget) == 0 || !bytes.Equal(trackedTarget, remoteTarget)
 }
 
+// isFastForwardPull reports whether pulling remoteTarget over our localTarget is
+// a clean fast-forward — i.e. everything we hold locally was already synced from
+// the remote (local == the remote/origin/* tracking ref), so the remote has
+// merely advanced and we hold no unpushed local snapshots that pulling would
+// orphan (F-9). The already-up-to-date case (local == remote) is handled by the
+// caller before this is called.
+//
+//   - localTarget   — our current snap.latest
+//   - trackedTarget — the value we last pulled/pushed (the remote/origin/* ref)
+//   - remoteTarget  — the ref's current value on the remote
+//
+// Like isNonFastForwardPush this is a tracking-ref heuristic, not true ancestry
+// (snapshots carry no parent link — see F-14). It is exact for the common case:
+// a behind clone whose head is still what it last synced is always a safe
+// fast-forward, while a head that has moved past the tracking ref is treated as
+// divergence and left for the user to reconcile.
+func isFastForwardPull(localTarget, trackedTarget, remoteTarget []byte) bool {
+	if len(localTarget) == 0 {
+		return true // nothing local — any remote head is a fast-forward
+	}
+	if len(trackedTarget) == 0 {
+		return false // never synced — can't prove our local isn't unpushed work
+	}
+	// Fast-forward iff our local head is exactly what we last synced; anything
+	// else means we have local snapshots beyond the remote's prior state.
+	return bytes.Equal(localTarget, trackedTarget)
+}
+
+// onDiskContentMatches reports whether the working-tree file at path already
+// holds exactly the target content (its blake3 hex == contentDigest). Pull uses
+// it to decide it can skip fetching/writing a blob when the remote can't supply
+// it: if the file on disk is already the right content there is nothing to
+// materialize. A missing or unreadable file returns false. (F-10/F-6)
+func onDiskContentMatches(path, contentDigest string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return util.Blake3HashHex(data) == contentDigest
+}
+
+// materializeWorkingTree writes the files of snapshot `head` into worktreeRoot,
+// overwriting only files whose on-disk content differs from the snapshot and
+// never deleting (clean=false). It is the post-pull step that keeps the working
+// tree in sync with snap.latest (F-10): without it, pull advanced the graph but
+// left the files stale. It is a no-op when the tree is already current. Returns
+// the number of files written.
+func materializeWorkingTree(db *graph.DB, head []byte, worktreeRoot string) (int, error) {
+	result, err := snapshot.NewCreator(db, nil).Checkout(head, worktreeRoot, false)
+	if err != nil {
+		return 0, err
+	}
+	return result.FilesWritten, nil
+}
+
 func runPush(cmd *cobra.Command, args []string) error {
 	te := telemetry.NewEvent("push")
 	defer te.Finish()
@@ -16539,13 +16651,23 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Check for divergence: local snap.latest differs from remote
+	// Reconcile against the remote (F-9): the remote head differs from ours
+	// (the equal case returned above). Distinguish a clean fast-forward — our
+	// local head is exactly what we last synced, so we hold no unpushed work and
+	// the remote has merely advanced — from a real divergence. A behind clone is
+	// the former and must be allowed to catch up without --force; only the latter
+	// aborts. Compares against the remote/origin/* tracking ref (what we last
+	// pulled/pushed), mirroring the push-side guard, since snapshots carry no
+	// ancestry to compute a true merge-base (F-14).
 	if localRef != nil && !pullForce {
 		localDigest := hex.EncodeToString(localRef.TargetID)
-		// Check if the remote knows about our local snapshot
-		_, _, err := client.GetObject(localRef.TargetID)
-		if err != nil || localDigest != remoteDigest {
-			// Local has a different snapshot that may not be on the remote
+		var trackedTarget []byte
+		if tracked, _ := refMgr.Get("remote/origin/snap.latest"); tracked != nil {
+			trackedTarget = tracked.TargetID
+		}
+		if !isFastForwardPull(localRef.TargetID, trackedTarget, snapRef.Target) {
+			// Local has snapshots beyond what we last synced; pulling would
+			// orphan them. Make the user reconcile explicitly.
 			fmt.Printf("  Warning: local snap.latest (%s) differs from remote (%s)\n",
 				localDigest[:12], remoteDigest[:12])
 			fmt.Println("  You have unpushed local snapshots that will become orphaned.")
@@ -16554,6 +16676,7 @@ func runPull(cmd *cobra.Command, args []string) error {
 			fmt.Println("  To push first:   kai push")
 			return fmt.Errorf("pull aborted: local and remote have diverged")
 		}
+		// Clean fast-forward: fall through to fetch and advance to the remote head.
 	}
 
 	// Fetch the snapshot node if we don't have it
@@ -16622,15 +16745,23 @@ func runPull(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Check if we have the content blob
+		// Check if we have the content blob. The /v1/raw/ endpoint dereferences
+		// the file NODE digest (f.Digest) to its content — fetching by the content
+		// digest 404s — so request by f.Digest (matching clone). The blob must land
+		// in the object store for the post-pull working-tree materialization below
+		// (F-10) to write it. The old code fetched by the wrong digest and then,
+		// on the resulting failure, skipped whenever any file existed on disk —
+		// even a stale one — which is exactly why the tree was left out of date.
 		_, readErr := db.ReadObject(f.ContentDigest)
 		if readErr != nil {
 			// Fetch raw content from remote
-			rawContent, err := client.GetRawContent(f.ContentDigest)
+			rawContent, err := client.GetRawContent(f.Digest)
 			if err != nil {
-				// If the file exists on disk, that's fine — git has it
-				if _, diskErr := os.Stat(f.Path); diskErr == nil {
-					continue // file on disk, no need for blob
+				// Remote couldn't supply the blob. If the on-disk file already
+				// matches the target content we don't need it; otherwise warn —
+				// the working tree will be left stale for this file.
+				if onDiskContentMatches(f.Path, f.ContentDigest) {
+					continue // on-disk content already matches — no blob needed
 				}
 				if os.Getenv("KAI_PULL_QUIET") == "" {
 					fmt.Printf("  Warning: failed to fetch content for %s: %v\n", f.Path, err)
@@ -16678,8 +16809,29 @@ func runPull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("updating local snap.latest: %w", err)
 	}
 
+	// Advance the remote-tracking ref to the head we just synced so a later pull
+	// short-circuits cleanly and the fast-forward guard reflects reality.
+	_ = refMgr.Set("remote/origin/snap.latest", snapRef.Target, ref.KindSnapshot)
+
 	// Bring tags and reviews across too — pull is the documented sync verb (F-15).
 	pullTagsAndReviews(db, client, refMgr, remoteName)
+
+	// Materialize the working tree to the pulled snapshot (F-10). Pull fetched
+	// the blobs into the object store but never wrote the files, leaving the
+	// graph at the new head while the working tree kept the old content — a
+	// silent ref-vs-disk drift, acute on kai-only clones with no git tree to
+	// fall back on. Checkout(clean=false) overwrites only files whose on-disk
+	// content differs from the snapshot and never deletes, so it is a no-op when
+	// the tree is already current (e.g. a git-backed repo git already updated).
+	worktreeRoot, err := filepath.Abs(".")
+	if err != nil {
+		return fmt.Errorf("resolving working directory: %w", err)
+	}
+	if written, cerr := materializeWorkingTree(db, snapRef.Target, worktreeRoot); cerr != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: pulled the graph but failed to update the working tree: %v\n", cerr)
+	} else if written > 0 {
+		fmt.Printf("  Updated %d file(s) in the working tree\n", written)
+	}
 
 	fmt.Printf("  snap.latest -> %s\n", remoteDigest[:12])
 	fmt.Println("Pull complete.")
@@ -16924,10 +17076,62 @@ func runCloneKaiOnly(args []string) error {
 	return nil
 }
 
+// gitCloneTargetDir returns the directory `git clone <url> [dir]` writes into:
+// the explicit second arg if given, otherwise the final path segment of the URL
+// with any trailing ".git", scheme, and host stripped — mirroring git's own
+// naming rule. Returns "" when there are no args. Used to locate the directory
+// to clean up after a failed clone and to set up Kai afterwards.
+func gitCloneTargetDir(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	if len(args) > 1 && args[1] != "" {
+		return args[1]
+	}
+	name := strings.TrimSuffix(args[0], ".git")
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	} else if idx := strings.LastIndex(name, ":"); idx >= 0 {
+		name = name[idx+1:]
+		if idx2 := strings.LastIndex(name, "/"); idx2 >= 0 {
+			name = name[idx2+1:]
+		}
+	}
+	return name
+}
+
+// shouldCleanPartialClone reports whether, after a failed `git clone`, it is
+// safe to remove targetDir before retrying as a Kai-only clone. It is safe only
+// when the directory did not already exist with content before the clone — i.e.
+// git created it (and usually cleans it up itself, but not always), so removing
+// it destroys nothing the user had. existedNonEmpty is sampled BEFORE git runs;
+// when it is true, git refused to touch the directory and we must never delete
+// the user's data.
+func shouldCleanPartialClone(targetDir string, existedNonEmpty bool) bool {
+	return targetDir != "" && !existedNonEmpty
+}
+
+// dirExistsNonEmpty reports whether path is an existing directory with at least
+// one entry.
+func dirExistsNonEmpty(path string) bool {
+	if path == "" {
+		return false
+	}
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) > 0
+}
+
 func runClone(cmd *cobra.Command, args []string) error {
 	if cloneKaiOnly {
 		return runCloneKaiOnly(args)
 	}
+
+	// The directory git will create, and whether it already held content before
+	// we touched it — captured up front so a failed clone can be cleaned up
+	// safely before the Kai-only fallback (which refuses a non-empty target).
+	dirName := gitCloneTargetDir(args)
+	existedNonEmpty := dirExistsNonEmpty(dirName)
+
 	// Forward to git clone, then set up kai
 	gitArgs := append([]string{"clone"}, args...)
 	gitCmd := exec.Command("git", gitArgs...)
@@ -16935,26 +17139,19 @@ func runClone(cmd *cobra.Command, args []string) error {
 	gitCmd.Stderr = os.Stderr
 	gitCmd.Stdin = os.Stdin
 	if err := gitCmd.Run(); err != nil {
-		return fmt.Errorf("git clone failed: %w", err)
-	}
-
-	// Determine the directory git cloned into
-	rawURL := args[0]
-	dirName := ""
-	if len(args) > 1 {
-		dirName = args[1]
-	} else {
-		name := rawURL
-		name = strings.TrimSuffix(name, ".git")
-		if idx := strings.LastIndex(name, "/"); idx >= 0 {
-			name = name[idx+1:]
-		} else if idx := strings.LastIndex(name, ":"); idx >= 0 {
-			name = name[idx+1:]
-			if idx2 := strings.LastIndex(name, "/"); idx2 >= 0 {
-				name = name[idx2+1:]
-			}
+		// The remote may be Kai-only (no git backing) — exactly the repos that
+		// `kai init` + push produce. Rather than failing, fall back to the
+		// Kai-only clone path. Remove any partial directory git left behind
+		// first (a no-op when git already cleaned up), but only when it is safe
+		// to do so — never delete a directory the user already had.
+		if shouldCleanPartialClone(dirName, existedNonEmpty) {
+			_ = os.RemoveAll(dirName)
 		}
-		dirName = name
+		fmt.Fprintln(os.Stderr, "git clone failed; trying Kai-only clone (the remote may have no git backing)...")
+		if kaiErr := runCloneKaiOnly(args); kaiErr != nil {
+			return fmt.Errorf("git clone failed (%v); Kai-only clone also failed: %w", err, kaiErr)
+		}
+		return nil
 	}
 
 	if dirName == "" || dirName == "." {
