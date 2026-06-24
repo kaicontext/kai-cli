@@ -3338,6 +3338,25 @@ func runBridgeMilestone(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// gitHistoryRewritten reports whether advancing git.HEAD from prevSHA to newSHA
+// represents an upstream history rewrite (rebase / force-push) rather than a
+// normal fast-forward — i.e. prevSHA is NOT an ancestor of newSHA. Snapshots
+// carry no ancestry (F-14), but git does, so we ask git. dir is the repo working
+// directory ("" = current process dir). A prevSHA that no longer resolves
+// (gc'd away after the rewrite) also counts as rewritten, since its history is
+// gone from the new line.
+func gitHistoryRewritten(dir, prevSHA, newSHA string) bool {
+	if prevSHA == "" || newSHA == "" || prevSHA == newSHA {
+		return false
+	}
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", prevSHA, newSHA)
+	cmd.Dir = dir
+	// Exit 0 => prevSHA is an ancestor of newSHA => normal fast-forward advance.
+	// Exit 1 => not an ancestor (rewrite); any other error (e.g. prevSHA gc'd) =>
+	// the old history is gone, also a rewrite.
+	return cmd.Run() != nil
+}
+
 func runBridgeImport(cmd *cobra.Command, args []string) error {
 	if !bridgeEnabled() {
 		// Hook may have been installed manually; be a no-op instead of loud.
@@ -3385,6 +3404,17 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Snapshot the previous git.HEAD before we move it, so we can detect an
+	// upstream history rewrite (rebase/force-push) and link the old line to the
+	// new one with a SUPERSEDES edge below (F-16). Without this, a rewrite
+	// imports as a fresh, unconnected snapshot and the graph silently forks into
+	// two unrelated lineages.
+	prevHead, _ := refMgr.Get("git.HEAD")
+	var prevHeadSHA string
+	if prevHead != nil {
+		prevHeadSHA = prevHead.Meta["git_commit"]
+	}
+
 	// Capture current tree, then point git.<sha> at whatever snap.latest becomes.
 	// runCapture is idempotent (content-addressed) — if nothing changed since
 	// the last capture, snap.latest is unchanged and the ref just points there.
@@ -3407,8 +3437,35 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 		debugf("bridge import: writing %s: %v", refName, err)
 		return nil
 	}
+
+	// Detect an upstream history rewrite (F-16): if git.HEAD's previous commit is
+	// no longer an ancestor of the one we just imported, the shared history was
+	// rebased/force-pushed. Link the superseded snapshot to the new one so the
+	// two lineages are connected instead of silently forked, and signal it. The
+	// edge is idempotent (INSERT OR IGNORE) and only added when the two snapshots
+	// actually differ.
+	if prevHead != nil && !bytes.Equal(prevHead.TargetID, latest.TargetID) &&
+		gitHistoryRewritten("", prevHeadSHA, fullSHA) {
+		if err := db.InsertEdgeDirect(prevHead.TargetID, graph.EdgeSupersedes, latest.TargetID, nil); err != nil {
+			debugf("bridge import: writing SUPERSEDES edge: %v", err)
+		} else {
+			debugf("bridge import: history rewrite detected (%s no longer ancestor of %s); linked SUPERSEDES %s -> %s",
+				shortPrefix(prevHeadSHA), shortSHA,
+				hex.EncodeToString(prevHead.TargetID)[:12], hex.EncodeToString(latest.TargetID)[:12])
+		}
+	}
+
 	_ = refMgr.SetWithMeta("git.HEAD", latest.TargetID, ref.KindSnapshot, "", meta)
 	return nil
+}
+
+// shortPrefix returns the first 12 chars of s (or all of s if shorter) for
+// concise log lines.
+func shortPrefix(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
 }
 
 // installOrUpgradeBridgeHook is the DRY helper for the three bridge-only
