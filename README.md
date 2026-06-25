@@ -28,10 +28,16 @@ brew install kaicontext/kai/kai
 
 ```bash
 kai init                      # One-shot setup: graph, MCP, account, remote
+kai code                      # Launch the interactive coding experience
 kai capture -m "Initial"      # Snapshot your code with a message
 kai push                      # Push to atlas.kaicontext.com
 kai diff                      # Semantic change impact
 ```
+
+`kai code` is the single front door to Kai's interactive coding agent. On
+first use it downloads its backing component to `~/.kai/bin` automatically,
+then launches it — no extra setup, on any install path (curl, Homebrew, or
+manual). Every flag after `code` is forwarded to the experience unchanged.
 
 `kai init` runs a single, low-friction setup flow:
 
@@ -76,7 +82,7 @@ See [docs/mcp.md](docs/mcp.md) for Cursor setup, tool reference, and troubleshoo
 
 ## Bring Your Own Model
 
-Kai's agentic TUI (`kai`) uses kailab as the default LLM provider — you sign in with `kai auth login` and the server holds the upstream key. If you'd rather use your own API key (or a local model), set `KAI_PROVIDER` and the matching key.
+Kai's agentic coding experience (`kai code`) uses kailab as the default LLM provider — you sign in with `kai auth login` and the server holds the upstream key. If you'd rather use your own API key (or a local model), set `KAI_PROVIDER` and the matching key.
 
 Kailab credentials are still used for sync, shared safety gates, and team features when present, regardless of which LLM provider you pick.
 
@@ -85,7 +91,7 @@ Kailab credentials are still used for sync, shared safety gates, and team featur
 ```bash
 export KAI_PROVIDER=anthropic
 export ANTHROPIC_API_KEY=sk-ant-...
-kai
+kai code
 ```
 
 Same wire shape and prompt-caching behavior as kailab. Costs and rate limits are billed to your Anthropic account.
@@ -96,7 +102,7 @@ Same wire shape and prompt-caching behavior as kailab. Costs and rate limits are
 export KAI_PROVIDER=openai
 export OPENAI_API_KEY=sk-...
 export KAI_OPENAI_MODEL=gpt-4o
-kai
+kai code
 ```
 
 Works with OpenAI, Together, Groq, OpenRouter, and any endpoint that speaks the `chat.completions` protocol. **No prompt caching** — every turn re-sends the conversation at full cost. Expect 5–10× the per-session cost of an equivalent Anthropic run.
@@ -110,7 +116,7 @@ Works with OpenAI, Together, Groq, OpenRouter, and any endpoint that speaks the 
 export KAI_PROVIDER=openai-compatible
 export KAI_OPENAI_BASE_URL=http://localhost:11434/v1
 export KAI_OPENAI_MODEL=llama3.1:70b
-kai
+kai code
 ```
 
 `OPENAI_API_KEY` is optional for endpoints that don't require auth. Tool-use quality varies sharply by model — pick one that natively supports the OpenAI tool-call protocol (Llama 3.1 70B+, Qwen 2.5 32B+, Hermes-tuned models). Smaller models often emit tool calls as text, which Kai can extract with limited fidelity (set `KAI_OPENAI_TOOL_FORMAT=hermes|llama3` to opt into a specific text format).

@@ -7,10 +7,14 @@ import (
 )
 
 // TestLoadCommandIndex_FindsKaiCode is the regression: scanning the
-// kai-cli source must produce a "code" → "runCodeTUI" entry, with
-// the handler file resolving to cmd/kai/tui.go. This is the actual
-// data the v1 success criterion depends on — if this passes, the
-// kai code bug's call chain becomes resolvable.
+// kai-cli source must produce a "code" → "runCode" entry, with the
+// handler file resolving to cmd/kai/code.go. This is the actual data
+// the v1 success criterion depends on — if this passes, the kai code
+// call chain becomes resolvable.
+//
+// (As of kit-in-kai Phase 1, `kai code` was repointed from the native
+// Bubble Tea TUI handler `runCodeTUI` in tui.go to the kit-launcher
+// passthrough `runCode` in code.go; this test tracks the live wiring.)
 func TestLoadCommandIndex_FindsKaiCode(t *testing.T) {
 	// kai-cli root: this test file lives at
 	// internal/planner/commandindex_test.go, so two levels up is the
@@ -22,11 +26,11 @@ func TestLoadCommandIndex_FindsKaiCode(t *testing.T) {
 	idx := LoadCommandIndex(moduleRoot)
 
 	handler, file := idx.LookupCommand("kai code")
-	if handler != "runCodeTUI" {
-		t.Errorf("LookupCommand(\"kai code\") handler = %q, want runCodeTUI", handler)
+	if handler != "runCode" {
+		t.Errorf("LookupCommand(\"kai code\") handler = %q, want runCode", handler)
 	}
-	if !filepath.IsAbs(file) || filepath.Base(file) != "tui.go" {
-		t.Errorf("LookupCommand(\"kai code\") file = %q, want absolute path ending in tui.go", file)
+	if !filepath.IsAbs(file) || filepath.Base(file) != "code.go" {
+		t.Errorf("LookupCommand(\"kai code\") file = %q, want absolute path ending in code.go", file)
 	}
 }
 

@@ -28,8 +28,8 @@ import (
 	"unicode"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/mattn/go-isatty"
+	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
@@ -179,8 +179,10 @@ var rootCmd = &cobra.Command{
 	Short:   "Kai - semantic, intent-based version control",
 	Long:    `Kai is a local CLI that creates semantic snapshots from Git refs, computes changesets, classifies change types, and generates intent sentences.`,
 	Version: Version,
-	// Bare `kai` prints help. The TUI is launched explicitly via
-	// `kai code` (see cmd/kai/tui.go).
+	// Bare `kai` prints help. The interactive coding experience is
+	// launched explicitly via `kai code`, which resolves (and
+	// self-installs) the managed `kit` binary and hands off to it
+	// (see cmd/kai/code.go and internal/kitlauncher; kit-in-kai Phase 1).
 	SilenceUsage:  true,
 	SilenceErrors: false,
 }
@@ -204,18 +206,18 @@ server, signs you up for kaicontext.com, and pushes the first
 capture.
 
 Bring Your Own Model:
-  By default, the kai TUI uses kailab as the LLM provider (one
-  bearer, server holds the upstream key). To use your own keys
-  instead, set KAI_PROVIDER before running kai:
+  By default, the kai coding experience (kai code) uses kailab as the
+  LLM provider (one bearer, server holds the upstream key). To use your
+  own keys instead, set KAI_PROVIDER before running kai code:
 
-    KAI_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... kai
-    KAI_PROVIDER=openai    OPENAI_API_KEY=sk-...        kai
+    KAI_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... kai code
+    KAI_PROVIDER=openai    OPENAI_API_KEY=sk-...        kai code
 
   Local OpenAI-compatible endpoints (Ollama, vLLM, LM Studio):
 
     KAI_PROVIDER=openai \
       KAI_OPENAI_BASE_URL=http://localhost:11434/v1 \
-      KAI_OPENAI_MODEL=llama3.1:70b kai
+      KAI_OPENAI_MODEL=llama3.1:70b kai code
 
   See ` + "`kai auth status`" + ` for the active provider and tradeoffs,
   or the README's "Bring Your Own Model" section.`,
@@ -3637,8 +3639,14 @@ func init() {
 		// print colored output (e.g. kai diff) can decide whether to emit
 		// ANSI escapes. Respects NO_COLOR.
 		initColors()
-		printUpdateNotice()
-		backgroundUpdateCheck()
+		// `kai code` hands off to kit (syscall.Exec) moments later, which
+		// replaces this process — killing the backgroundUpdateCheck goroutine
+		// mid-write and bleeding the update notice into kit's first frame.
+		// Skip both for code; kit owns the terminal from here.
+		if cmd != codeCmd {
+			printUpdateNotice()
+			backgroundUpdateCheck()
+		}
 		// Silently upgrade old (dangerous v1) kai-managed git hooks if present.
 		// Heals users who installed hooks on an older release.
 		selfHealHooks()
@@ -4040,6 +4048,15 @@ func init() {
 	initCmd.Flags().StringVar(&initEmail, "email", "", "Email to sign up / log in with non-interactively (also via KAI_INIT_EMAIL)")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(captureCmd)
+
+	// `kai code` — unified coding entrypoint (kit-in-kai Phase 1). Resolves
+	// and self-installs the managed kit binary, then hands off to it.
+	// groupStart so it surfaces alongside init/capture as a primary action.
+	// codeCmd is declared in tui.go (repurposed from the old orphaned
+	// native-TUI command); it must be registered exactly once.
+	codeCmd.GroupID = groupStart
+	rootCmd.AddCommand(codeCmd)
+
 	rootCmd.AddCommand(importCmd)
 	importCmd.GroupID = groupStart
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import entire git history")
@@ -5535,7 +5552,6 @@ func printBYOMHintIfActive() {
 		fmt.Fprintf(os.Stderr, "          run `kai auth login` to enable\n")
 	}
 }
-
 
 // ensureGitignore appends entry to .gitignore if not already present.
 func ensureGitignore(entry string) {
