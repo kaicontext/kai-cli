@@ -76,8 +76,8 @@ func TestIntentCommand(t *testing.T) {
 	if intentCmd == nil {
 		t.Fatal("intentCmd should not be nil")
 	}
-	if intentCmd.Use != "intent" {
-		t.Errorf("expected Use 'intent', got %q", intentCmd.Use)
+	if intentCmd.Use != "intent [statement]" {
+		t.Errorf("expected Use 'intent [statement]', got %q", intentCmd.Use)
 	}
 }
 

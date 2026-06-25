@@ -44,7 +44,7 @@ jobs:
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y gcc
       - name: Test
-        run: CGO_ENABLED=1 go test -timeout 5m -run '!TestRunCompletion' ./...
+        run: CGO_ENABLED=1 go test -timeout 5m -skip 'TestRunCompletion' ./...
 
   build-linux:
     runs-on: ubuntu-latest
