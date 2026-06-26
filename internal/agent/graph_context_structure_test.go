@@ -17,7 +17,7 @@ func TestOverviewStructure_FindsNestedGoModules(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/outer\n\ngo 1.22\n")
 	mustWriteFile(t, filepath.Join(root, "kailab", "go.mod"), "module kailab\n\ngo 1.22\n")
-	mustWriteFile(t, filepath.Join(root, "github.com/kaicontext/kai-core", "go.mod"), "module kai-core\n\ngo 1.22\n")
+	mustWriteFile(t, filepath.Join(root, "kai-core", "go.mod"), "module kai-core\n\ngo 1.22\n")
 	// node_modules + .git should be filtered out so we don't list
 	// vendored modules as project structure.
 	mustWriteFile(t, filepath.Join(root, "node_modules", "react", "package.json"), `{"name":"react"}`)
@@ -215,7 +215,7 @@ func TestOverviewStructure_NodeImportNameSurfaced(t *testing.T) {
 func TestOverviewStructure_SharedModulesSection(t *testing.T) {
 	root := t.TempDir()
 	// kai-core: shared dep
-	mustWriteFile(t, filepath.Join(root, "github.com/kaicontext/kai-core", "go.mod"), "module kai-core\n\ngo 1.22\n")
+	mustWriteFile(t, filepath.Join(root, "kai-core", "go.mod"), "module kai-core\n\ngo 1.22\n")
 	// kailab: requires kai-core
 	mustWriteFile(t, filepath.Join(root, "kailab", "go.mod"), `module kailab
 
