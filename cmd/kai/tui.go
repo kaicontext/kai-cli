@@ -28,22 +28,38 @@ import (
 	"kai/internal/tui/views"
 )
 
-// codeCmd launches the TUI. Bare `kai` (no subcommand) falls back to
-// cobra's default help output — explicit invocation via `kai code`
-// makes the TUI an opt-in surface rather than a magic no-args trigger.
+// codeCmd is `kai code` — the unified entrypoint to the kai coding
+// experience (kit-in-kai Phase 1). It is a thin passthrough: it resolves
+// (and, on first use, self-installs) the managed `kit` binary and hands
+// off to it, forwarding every trailing arg/flag verbatim. DisableFlagParsing
+// keeps cobra from intercepting flags meant for kit. The command name
+// `kai code` is permanent; only the implementation changes later (Phase 4
+// runs the experience in-process instead of shelling out). RunE lives in
+// code.go; the installer/exec logic lives in internal/kitlauncher.
+//
+// NOTE: runCodeTUI / runCodeHeadless / buildPlannerServices below (and the
+// whole of headless.go) are the *previous* native Bubble Tea TUI that
+// `kai code` used to point at. As of Phase 1 they are dead, vestigial code:
+// no longer wired to any command, kept intact only so Phase 4/5 can revive
+// the experience in-process or delete it. Do not mistake them for live
+// behavior — `kai code` now goes through code.go → kitlauncher → kit.
 var codeCmd = &cobra.Command{
-	Use:   "code",
-	Short: "Launch the kai TUI (REPL + sync + gate panes)",
-	Long: `Open the interactive Bubble Tea front-end. Three panes:
-  - REPL: type kai subcommands or, if ANTHROPIC_API_KEY is set,
-    describe a change in plain English to invoke the planner.
-  - Sync: live agent activity from the file watcher.
-  - Gate: integrations held by the safety gate, with approve/reject
-    hotkeys.
+	Use:   "code [-- kit args…]",
+	Short: "Launch the kai coding experience (installs kit on first use)",
+	Long: `Launch the interactive kai coding experience.
 
-If stdin or stdout isn't a terminal (piped or redirected), prints
-this help instead of launching the TUI.`,
-	RunE: runCodeTUI,
+kai code resolves the managed kit binary — downloading it to
+~/.kai/bin on first use — then hands off to it. Every argument and
+flag after "code" is forwarded to kit unchanged, so:
+
+    kai code --some-kit-flag value
+
+behaves exactly like running kit directly. Ctrl+C, terminal resize,
+and exit codes all behave as they do under kit.`,
+	// Forward everything after `code` to kit verbatim; do not let cobra
+	// parse flags meant for the child.
+	DisableFlagParsing: true,
+	RunE:               runCode,
 }
 
 // fixxyUpper is the activation level for the secret fixxy-upper
@@ -92,7 +108,9 @@ func handsOffEnabled(cfg config.Config) bool {
 // beats 20+ thrashing cheap-model turns that produce no edit.
 //
 // KAI_CONSULT_MODEL=<id>  → use that model (e.g. claude-sonnet-4-6 to
-//                            trade some quality for ~5× lower cost)
+//
+//	trade some quality for ~5× lower cost)
+//
 // KAI_CONSULT_MODEL=off   → disable kai_consult entirely (returns "")
 //
 // Single function rather than a config-file knob because the choice is
@@ -130,7 +148,11 @@ func modelFromEnv(envVar, fallback string) string {
 // transcript on the first turn after resume.
 var resumeSessionID string
 
-// runCodeTUI is wired as codeCmd.RunE — `kai code` enters the TUI.
+// runCodeTUI was codeCmd.RunE before kit-in-kai Phase 1 — it is the
+// native Bubble Tea TUI `kai code` used to enter. It is now dead code:
+// codeCmd.RunE points at runCode (the kit passthrough, in code.go). Kept
+// per the note at the top of this file so Phase 4/5 can revive or delete
+// it. See codeCmd for the live behavior.
 //
 // Refuses in the following cases:
 //   - stdin or stdout is not a terminal (piped or redirected)
@@ -529,7 +551,7 @@ func buildPlannerServices(db *graph.DB, kaiDir, workDir string, liveSync *liveSy
 		PlannerFinalizeModel: plannerFinalizeModel,
 		ChatModel:            chatModel,
 		ReviewModel:          reviewModel,
-		HandsOff:        handsOffEnabled(cfg),
+		HandsOff:             handsOffEnabled(cfg),
 		PlannerCfg: planner.Config{
 			Model:     cfg.Planner.Model,
 			MaxAgents: cfg.Planner.MaxAgents,
@@ -537,7 +559,7 @@ func buildPlannerServices(db *graph.DB, kaiDir, workDir string, liveSync *liveSy
 		OrchestratorCfg: orchestrator.Config{
 			AgentTimeout:     time.Duration(cfg.Agent.TimeoutSeconds) * time.Second,
 			AgentIdleTimeout: time.Duration(cfg.Agent.IdleTimeoutSeconds) * time.Second,
-			GateConfig:   gateCfg,
+			GateConfig:       gateCfg,
 			// Provider chosen via KAI_PROVIDER (kailab default).
 			// All three implementations share the same Provider
 			// interface, so the runner is provider-agnostic.
