@@ -168,6 +168,13 @@ type Config struct {
 	// outer safety net.
 	AgentIdleTimeout time.Duration
 
+	// ExecutorMaxTurns overrides the per-executor turn cap. 0 uses the
+	// default (20), which is tuned for the interactive loop where a human
+	// re-drives across messages. Headless callers (e.g. `kai autofix`) that
+	// must finish a whole fix in one unattended spawn can raise it so a
+	// slower model isn't cut off mid-fix.
+	ExecutorMaxTurns int
+
 	// PushRemote is the remote name agents push to. Default "origin".
 	PushRemote string
 
@@ -1219,7 +1226,12 @@ func runOneAgent(ctx context.Context, run *AgentRun, cfg Config, mainRepo string
 		// pass — exploration, edits, build/test, checkpoint — while
 		// firing the wind-down hint at turn 17 so a stuck executor
 		// gets convergence pressure before token waste mounts.
-		MaxTurns: 20,
+		MaxTurns: func() int {
+			if cfg.ExecutorMaxTurns > 0 {
+				return cfg.ExecutorMaxTurns
+			}
+			return 20
+		}(),
 		RunLogDir: func() string {
 			if cfg.RunLogDir != "" {
 				return cfg.RunLogDir

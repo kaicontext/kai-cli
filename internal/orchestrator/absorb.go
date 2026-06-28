@@ -85,6 +85,9 @@ func absorbSpawnIntoMain(spawnDir, mainDir string) ([]string, error) {
 
 	// Files added or modified in the spawn relative to main.
 	for path, spawnDigest := range spawnFiles {
+		if isKaiToolingArtifact(path) {
+			continue // kai's own spawn-setup files — never an agent edit
+		}
 		mainDigest, exists := mainFiles[path]
 		if exists && mainDigest == spawnDigest {
 			continue
@@ -99,6 +102,9 @@ func absorbSpawnIntoMain(spawnDir, mainDir string) ([]string, error) {
 
 	// Files the agent deleted (present in main, absent in spawn).
 	for path := range mainFiles {
+		if isKaiToolingArtifact(path) {
+			continue
+		}
 		if _, ok := spawnFiles[path]; ok {
 			continue
 		}
@@ -113,6 +119,21 @@ func absorbSpawnIntoMain(spawnDir, mainDir string) ([]string, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// isKaiToolingArtifact reports whether relpath is a file kai itself writes
+// into a spawn workspace during setup — the agent-session ingest hooks
+// installed by `kai init --force` (see cmd/kai writeAgentHooks). They embed a
+// machine-local absolute path and are never part of an agent's fix, so absorb
+// must neither propagate them into the main repo nor report them as changed.
+// Without this, a run where the agent edited nothing still "changes"
+// .codex/hooks.json — which once shipped as an entire PR diff.
+func isKaiToolingArtifact(relpath string) bool {
+	switch filepath.ToSlash(relpath) {
+	case ".codex/hooks.json", ".claude/settings.local.json":
+		return true
+	}
+	return false
 }
 
 // validateNoCaseCollisions refuses an absorb whose spawn-vs-main

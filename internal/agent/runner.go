@@ -1660,6 +1660,14 @@ func runLoop(ctx context.Context, opts Options) (res *Result, err error) {
 	// genuinely too long and the user should split the request.
 	const maxContinuations = 3
 	continuations := 0
+	// dsmlRecoveries caps how many times we re-prompt after a tool-use stop
+	// that carried no parsed tool call — the "DSML-delimiter leak" where a
+	// model (notably the Claude family on this provider) emits its tool call
+	// as text instead of a structured block, so nothing executes and the run
+	// would otherwise die with zero edits and a "0/0/0" summary. 2 is enough
+	// to clear a transient leak without looping a model that simply can't.
+	const maxDSMLRecoveries = 2
+	dsmlRecoveries := 0
 	// finalizeAttempted guards the budget-exceeded recovery to a
 	// single retry so a self-overshooting finalize turn can't loop.
 	// Set in the budget-exceeded branch when we inject the
@@ -2157,6 +2165,31 @@ func runLoop(ctx context.Context, opts Options) (res *Result, err error) {
 		// below.
 		toolCalls := extractToolCalls(resp.Parts)
 		if len(toolCalls) == 0 {
+			// DSML-leak recovery: the model stopped on tool_use but no tool
+			// call parsed — it emitted the call as text (delimiter leak)
+			// instead of a structured block. Left alone this leads to a
+			// zero-edit "0/0/0" death (see config.go defaultAgentModel). Nudge
+			// it to re-emit the call properly, capped so a model that can't
+			// won't loop. Placed first: this is a thwarted tool-use turn, not
+			// a prose answer, so the answer-oriented guards below don't apply.
+			if resp.FinishReason == message.FinishReasonToolUse && dsmlRecoveries < maxDSMLRecoveries {
+				dsmlRecoveries++
+				nudge := message.Message{
+					Role: message.RoleUser,
+					Parts: []message.ContentPart{
+						message.TextContent{Text: "Your last turn ended on a tool call, but none was received — it looks like the tool call was written as plain text instead of an actual tool invocation. Re-issue it now as a real tool call. Do not narrate; just make the call."},
+					},
+				}
+				history = append(history, nudge)
+				if sess != nil {
+					if err := sess.AppendMessage(nudge, 0, 0); err != nil {
+						rec.End(&resp, err)
+						return res, err
+					}
+				}
+				rec.End(&resp, nil)
+				continue
+			}
 			if resp.FinishReason == message.FinishReasonMaxTokens && continuations < maxContinuations {
 				continuations++
 				cont := message.Message{
