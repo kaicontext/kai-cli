@@ -70,6 +70,48 @@ func WorkingTreeDirty(dir string) (bool, error) {
 	return out != "", nil
 }
 
+// DirtyPaths returns the repo-relative paths of every uncommitted change
+// (staged, unstaged, or untracked) in dir. Lets a caller decide dirtiness
+// per-path — e.g. tolerate files a tool wrote for its own operation while
+// still blocking on real user changes. For a rename it reports the new path.
+func DirtyPaths(dir string) ([]string, error) {
+	out, err := runGit(dir, "status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 4 { // "XY path" — 2 status chars, a space, then the path
+			continue
+		}
+		p := strings.TrimSpace(line[3:])
+		if i := strings.Index(p, " -> "); i >= 0 { // rename: take the destination
+			p = p[i+len(" -> "):]
+		}
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
+// DeleteBranch force-deletes a local branch (git branch -D). Used to
+// un-strand the issue branch after a failed run so a retry isn't blocked by
+// the "branch already exists" idempotency guard.
+func DeleteBranch(dir, branch string) error {
+	_, err := runGit(dir, "branch", "-D", branch)
+	return err
+}
+
+// DiscardChanges hard-resets tracked files in dir to HEAD, dropping any
+// uncommitted edits. Untracked files are left alone. Used in failure cleanup
+// so the subsequent CheckoutBranch back to base can't be blocked by the
+// agent's half-applied, uncommitted work.
+func DiscardChanges(dir string) error {
+	_, err := runGit(dir, "reset", "--hard")
+	return err
+}
+
 // CommitAll stages every change (tracked, untracked, and deletions) and
 // commits with the given message. Returns ErrNothingToCommit when the
 // tree is clean so the caller can distinguish "agent made no changes"
@@ -119,6 +161,40 @@ func DiffAgainst(dir, base string) (string, error) {
 		return "", err
 	}
 	return out, nil
+}
+
+// StageAndDiffPaths stages exactly the given paths (additions, modifications,
+// and deletions among them) and returns their unified diff against base.
+// Unlike DiffAgainst it never runs `git add -A`, so files outside paths —
+// e.g. the .codex/.claude/.kai tooling kai writes for its own operation
+// during a run — stay out of both the diff and any subsequent CommitStaged.
+// An empty paths slice yields an empty diff and stages nothing.
+func StageAndDiffPaths(dir, base string, paths []string) (string, error) {
+	if len(paths) == 0 {
+		return "", nil
+	}
+	if _, err := runGit(dir, append([]string{"add", "--"}, paths...)...); err != nil {
+		return "", err
+	}
+	return runGit(dir, append([]string{"diff", "--staged", base, "--"}, paths...)...)
+}
+
+// CommitStaged commits whatever is currently staged with the given message,
+// returning ErrNothingToCommit when the index is empty. Pairs with
+// StageAndDiffPaths: stage exactly the fix's files, then commit only those —
+// no `git add -A` that would absorb unrelated tree contents.
+func CommitStaged(dir, message string) error {
+	staged, err := runGit(dir, "diff", "--cached", "--name-only")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(staged) == "" {
+		return ErrNothingToCommit
+	}
+	if _, err := runGit(dir, "commit", "-m", message); err != nil {
+		return err
+	}
+	return nil
 }
 
 // RemoteURL returns the fetch URL of the named remote, used to derive
