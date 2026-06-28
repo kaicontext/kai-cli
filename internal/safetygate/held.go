@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/util"
 )
 

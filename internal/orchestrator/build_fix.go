@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"kai/internal/agent"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/kaipath"
 	"kai/internal/snapshot"
 )

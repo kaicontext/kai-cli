@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // TestFormatCallChains_RendersKaiCodeChain is the formatter side of

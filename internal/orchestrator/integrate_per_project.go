@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 	"kai/internal/safetygate"
 )

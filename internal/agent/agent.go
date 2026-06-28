@@ -23,7 +23,7 @@ import (
 	"kai/internal/agent/session"
 	"kai/internal/agent/tools"
 	"kai/internal/authorship"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 	"kai/internal/safetygate"
 )

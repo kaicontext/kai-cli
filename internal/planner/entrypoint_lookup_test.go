@@ -3,7 +3,7 @@ package planner
 import (
 	"testing"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // epGraph is the minimal GraphAccess fake for entry-point lookup

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"kai/internal/classify"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/util"
 
 	coreintent "github.com/kaicontext/kai-core/intent"

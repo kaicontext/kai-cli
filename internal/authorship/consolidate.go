@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 
 	"github.com/kaicontext/kai-core/cas"
 )

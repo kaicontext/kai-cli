@@ -12,7 +12,7 @@ import (
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
 	"kai/internal/agentprompt"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/planner"
 	"kai/internal/safetygate"
 )

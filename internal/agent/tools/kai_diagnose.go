@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // kaiDiagnoseTool is a single-call replacement for "read 30 files chasing

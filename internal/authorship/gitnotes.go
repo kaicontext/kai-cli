@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // GitNotePayload is the JSON structure written to git notes.

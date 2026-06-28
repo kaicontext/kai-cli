@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"kai/internal/authorship"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 )
 

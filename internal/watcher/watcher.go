@@ -18,7 +18,7 @@ import (
 	"lukechampine.com/blake3"
 
 	"kai/internal/dirio"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/ignore"
 	"kai/internal/kaipath"
 	"kai/internal/snapshot"

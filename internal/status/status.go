@@ -8,7 +8,7 @@ import (
 
 	"kai/internal/cache"
 	"kai/internal/dirio"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/ref"
 	"kai/internal/snapshot"
 	"kai/internal/util"

@@ -3,7 +3,7 @@ package planner
 import (
 	"testing"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // addCalls is a fake-graph helper for wiring up CALLS edges in

@@ -9,7 +9,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 func TestDetectMode_SlashOverrides(t *testing.T) {

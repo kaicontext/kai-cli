@@ -12,7 +12,7 @@ import (
 	"kai/internal/agent/session"
 	"kai/internal/agentprompt"
 	"kai/internal/config"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/orchestrator"
 	"kai/internal/planner"
 	"kai/internal/projects"

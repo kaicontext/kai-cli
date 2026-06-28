@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/ref"
 	"kai/internal/safetygate"
 	"kai/internal/util"

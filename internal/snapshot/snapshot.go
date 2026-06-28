@@ -13,7 +13,7 @@ import (
 
 	"github.com/kaicontext/kai-core/cas"
 	"kai/internal/filesource"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/module"
 	"kai/internal/parse"
 	"kai/internal/util"
@@ -1160,7 +1160,7 @@ func (c *Creator) AnalyzeCalls(snapshotID []byte, progress ProgressFunc) error {
 			switch fi.lang {
 			case "go":
 				// Go: match import path against directory suffixes
-				// e.g. "kai/internal/graph" matches files in any dir ending with "kai/internal/graph"
+				// e.g. "github.com/kaicontext/kai-engine/graph" matches files in any dir ending with "github.com/kaicontext/kai-engine/graph"
 				resolved := resolveGoImport(imp.Source, fi.path, goPkgIndex)
 				imports = append(imports, resolved...)
 
@@ -1880,7 +1880,7 @@ func isLockFile(filename string) bool {
 }
 
 // resolveGoImport resolves a Go import path to files in the snapshot.
-// Go imports are package paths like "fmt", "kai/internal/graph", "github.com/kaicontext/kai-core/diff".
+// Go imports are package paths like "fmt", "github.com/kaicontext/kai-engine/graph", "github.com/kaicontext/kai-core/diff".
 // We match by finding directories whose path suffix matches the import path.
 // Returns all .go files in the matched package directory (excluding the importing file's own dir).
 func resolveGoImport(importPath, importingFile string, goPkgIndex map[string][]string) []string {
@@ -1892,7 +1892,7 @@ func resolveGoImport(importPath, importingFile string, goPkgIndex map[string][]s
 	importingDir := filepath.Dir(importingFile)
 
 	// Try exact match first, then progressively shorter suffixes
-	// For "kai/internal/graph", try: "kai/internal/graph", "internal/graph", "graph"
+	// For "github.com/kaicontext/kai-engine/graph", try: "github.com/kaicontext/kai-engine/graph", "internal/graph", "graph"
 	parts := strings.Split(importPath, "/")
 	for i := 0; i < len(parts); i++ {
 		suffix := strings.Join(parts[i:], "/")

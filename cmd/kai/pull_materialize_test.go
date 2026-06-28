@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"kai/internal/filesource"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/snapshot"
 	"kai/internal/util"
 )

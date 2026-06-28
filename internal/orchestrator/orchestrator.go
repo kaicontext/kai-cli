@@ -45,7 +45,7 @@ import (
 	"kai/internal/agent/tools"
 	"kai/internal/agentprompt"
 	"kai/internal/authorship"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/kaipath"
 	"kai/internal/planner"
 	"kai/internal/projects"

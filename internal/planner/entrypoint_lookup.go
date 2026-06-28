@@ -3,7 +3,7 @@ package planner
 import (
 	"strings"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // ResolvedEntryPoint is one successful lookup against the graph.

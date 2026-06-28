@@ -46,7 +46,7 @@ import (
 	"kai/internal/explain"
 	"kai/internal/filesource"
 	"kai/internal/gitio"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/intent"
 	"kai/internal/kaipath"
 	"kai/internal/memstat"

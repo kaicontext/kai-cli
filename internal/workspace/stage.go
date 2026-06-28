@@ -6,7 +6,7 @@ import (
 
 	"kai/internal/classify"
 	"kai/internal/filesource"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/module"
 	"kai/internal/signing"
 	"kai/internal/snapshot"

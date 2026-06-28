@@ -1,7 +1,7 @@
 package authorship
 
 import (
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // Blame returns authorship ranges for a file in the given snapshot.

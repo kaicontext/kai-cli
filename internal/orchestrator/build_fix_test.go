@@ -119,7 +119,7 @@ internal/graph/graph_test.go:361:13: undefined: NewGraph
 internal/agent/tools/bash.go:1085:24: method WriteByte...
 FAIL	kai/internal/other [build failed]`
 	pkgs := goFailingPackages(out)
-	for _, want := range []string{"kai/internal/graph", "kai/internal/agent/tools", "kai/internal/other"} {
+	for _, want := range []string{"github.com/kaicontext/kai-engine/graph", "kai/internal/agent/tools", "kai/internal/other"} {
 		if !pkgs[want] {
 			t.Errorf("expected %q in failing set, got %v", want, pkgs)
 		}

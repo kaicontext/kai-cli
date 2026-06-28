@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // TestCheckRepoDBAlignment_SameDirOK is the happy path: when the

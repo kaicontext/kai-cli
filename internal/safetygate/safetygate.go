@@ -13,7 +13,7 @@ import (
 	"path"
 	"sort"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // Grapher is the subset of *graph.DB the gate needs. Defined as an

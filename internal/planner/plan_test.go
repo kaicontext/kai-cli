@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"kai/internal/ai"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/safetygate"
 )
 

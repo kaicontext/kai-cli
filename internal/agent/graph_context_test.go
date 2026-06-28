@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // TestExtractFilePaths covers the regex-based path extraction.

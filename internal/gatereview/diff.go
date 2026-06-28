@@ -14,7 +14,7 @@ import (
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/snapshot"
 	"kai/internal/util"
 )

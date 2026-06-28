@@ -3,7 +3,7 @@ package authorship
 import (
 	"fmt"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // ProjectStats computes project-wide AI vs human authorship statistics.

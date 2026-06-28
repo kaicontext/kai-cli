@@ -16,7 +16,7 @@ import (
 	"kai/internal/agent/session"
 	"kai/internal/config"
 	"kai/internal/gatereview"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 	"kai/internal/remote"
 	"kai/internal/safetygate"

@@ -13,7 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/kaipath"
 	"kai/internal/ref"
 	"kai/internal/remote"

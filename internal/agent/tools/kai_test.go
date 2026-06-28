@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"kai/internal/authorship"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 )
 
 // newCheckpointWriterAt builds an authorship.CheckpointWriter

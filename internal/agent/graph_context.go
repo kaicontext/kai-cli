@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 )
 
