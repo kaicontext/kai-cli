@@ -21,7 +21,7 @@ import (
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/memstat"
 	"github.com/kaicontext/kai-engine/projects"
-	"kai/internal/runlog"
+	"github.com/kaicontext/kai-engine/runlog"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/tasksmd"
 )
