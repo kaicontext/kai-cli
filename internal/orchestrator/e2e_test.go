@@ -14,7 +14,7 @@ import (
 	"kai/internal/agentprompt"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/planner"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // TestExecuteE2E_SpawnAndInProcessAgent runs the orchestrator against a

@@ -19,8 +19,8 @@ import (
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 	"github.com/kaicontext/kai-engine/promptenv"
-	"kai/internal/safetygate"
-	"kai/internal/tasksmd"
+	"github.com/kaicontext/kai-engine/safetygate"
+	"github.com/kaicontext/kai-engine/tasksmd"
 )
 
 // plannerMaxTotalTokens caps total tokens (in+out, including cache)

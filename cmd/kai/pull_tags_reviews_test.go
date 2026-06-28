@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/ref"
+	"github.com/kaicontext/kai-engine/ref"
 	"kai/internal/remote"
 )
 

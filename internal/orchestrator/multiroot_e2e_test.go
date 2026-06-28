@@ -22,7 +22,7 @@ import (
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/planner"
 	"kai/internal/projects"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 func TestExecuteE2E_MultiRootSpawnAndAbsorb(t *testing.T) {

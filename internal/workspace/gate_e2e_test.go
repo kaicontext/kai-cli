@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/ref"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/ref"
+	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/util"
 )
 

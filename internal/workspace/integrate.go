@@ -8,7 +8,7 @@ import (
 	"github.com/kaicontext/kai-core/merge"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/util"
 )
 

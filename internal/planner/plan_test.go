@@ -8,7 +8,7 @@ import (
 
 	"kai/internal/ai"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // fakeLLM returns a canned response. record captures the system + user

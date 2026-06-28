@@ -17,7 +17,7 @@ import (
 	"kai/internal/planner"
 	"kai/internal/projects"
 	"kai/internal/remote"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // agentServices bundles everything the headless paths need to plan and

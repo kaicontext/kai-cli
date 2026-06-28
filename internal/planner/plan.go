@@ -10,7 +10,7 @@ import (
 
 	"kai/internal/ai"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // Completer is the LLM interface the planner needs. Defined here as

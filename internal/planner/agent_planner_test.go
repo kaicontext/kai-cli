@@ -12,7 +12,7 @@ import (
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
 	"kai/internal/projects"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // fakeProvider mirrors the runner-side fake: returns canned Responses

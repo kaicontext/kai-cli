@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"kai/internal/remote"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // TestPlan_FixtureDemo is the canonical example of how to write a

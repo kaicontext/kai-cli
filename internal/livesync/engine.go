@@ -31,7 +31,7 @@ import (
 	"github.com/kaicontext/kai-core/merge"
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/ref"
+	"github.com/kaicontext/kai-engine/ref"
 	"kai/internal/remote"
 	"kai/pkg/synclog"
 )

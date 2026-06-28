@@ -25,7 +25,7 @@ import (
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // Hooks lets the orchestrator observe agent activity without coupling

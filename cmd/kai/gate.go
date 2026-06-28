@@ -19,7 +19,7 @@ import (
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 	"kai/internal/remote"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/util"
 	"kai/internal/workspace"
 )

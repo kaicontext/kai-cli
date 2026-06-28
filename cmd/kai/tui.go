@@ -22,7 +22,7 @@ import (
 	"kai/internal/planner"
 	"kai/internal/projects"
 	"kai/internal/remote"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 	"kai/internal/tui"
 	"kai/internal/tui/fixxy"
 	"kai/internal/tui/views"

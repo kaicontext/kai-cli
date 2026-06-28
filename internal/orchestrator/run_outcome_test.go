@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // TestRunOutcome covers the result-tally classification, with the

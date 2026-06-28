@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 func TestFilterChangedForProject(t *testing.T) {

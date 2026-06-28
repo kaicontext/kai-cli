@@ -3,8 +3,8 @@ package workspace
 import (
 	"testing"
 
-	"kai/internal/ref"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/ref"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // TestPublishHonorsAutoVerdict verifies that an Auto verdict (the default

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // Open populates DB and GateConfig on every initialized project in

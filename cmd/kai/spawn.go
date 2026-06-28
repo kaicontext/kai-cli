@@ -15,7 +15,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/kaipath"
-	"kai/internal/ref"
+	"github.com/kaicontext/kai-engine/ref"
 	"kai/internal/remote"
 	"kai/internal/spawnclone"
 	"github.com/kaicontext/kai-engine/util"

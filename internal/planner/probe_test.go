@@ -21,7 +21,7 @@ import (
 
 	"kai/internal/planner"
 	"kai/internal/remote"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // TestProbe_MultiComponentPlan asks the planner to decompose a

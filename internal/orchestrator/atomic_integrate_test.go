@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"kai/internal/planner"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 	"kai/internal/workspace"
 )
 

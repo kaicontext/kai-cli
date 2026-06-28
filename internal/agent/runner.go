@@ -22,8 +22,8 @@ import (
 	"github.com/kaicontext/kai-engine/memstat"
 	"kai/internal/projects"
 	"kai/internal/runlog"
-	"kai/internal/safetygate"
-	"kai/internal/tasksmd"
+	"github.com/kaicontext/kai-engine/safetygate"
+	"github.com/kaicontext/kai-engine/tasksmd"
 )
 
 // sendOneTurn dispatches one provider call. When the provider

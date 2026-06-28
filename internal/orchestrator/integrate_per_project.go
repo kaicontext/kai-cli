@@ -8,7 +8,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // integrate_per_project.go: per-project gate fanout for multi-root

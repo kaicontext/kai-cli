@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/ref"
+	"github.com/kaicontext/kai-engine/ref"
 )
 
 // RebaseResult contains the result of rebasing changesets onto a new base.

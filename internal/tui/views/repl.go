@@ -35,7 +35,7 @@ import (
 	"kai/api/memstat"
 	"kai/api/planner"
 	"kai/api/telemetry"
-	"kai/internal/tasksmd"
+	"github.com/kaicontext/kai-engine/tasksmd"
 	errpkg "kai/internal/tui/errors"
 	"kai/internal/tui/fixxy"
 	"kai/internal/vision"

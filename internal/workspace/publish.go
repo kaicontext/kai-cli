@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kai/internal/ref"
+	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/util"
 )
 

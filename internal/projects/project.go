@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/safetygate"
 )
 
 // Project is one initialized kai project. The fields are populated

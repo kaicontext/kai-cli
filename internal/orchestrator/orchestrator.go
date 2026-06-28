@@ -49,8 +49,8 @@ import (
 	"github.com/kaicontext/kai-engine/kaipath"
 	"kai/internal/planner"
 	"kai/internal/projects"
-	"kai/internal/ref"
-	"kai/internal/safetygate"
+	"github.com/kaicontext/kai-engine/ref"
+	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/util"
 	"kai/internal/workspace"
 )
