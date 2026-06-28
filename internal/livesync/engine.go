@@ -32,7 +32,7 @@ import (
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/ref"
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/remote"
 	"kai/pkg/synclog"
 )
 

@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/remote"
 )
 
 // Auto-sync daemon management. `kai ws checkout <ws>` spawns a detached

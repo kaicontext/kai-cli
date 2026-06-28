@@ -16,7 +16,7 @@ import (
 	"kai/internal/orchestrator"
 	"kai/internal/planner"
 	"kai/internal/projects"
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/safetygate"
 )
 

@@ -18,7 +18,7 @@ import (
 	"kai/internal/gatereview"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/util"
 	"kai/internal/workspace"

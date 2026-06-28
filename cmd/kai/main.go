@@ -54,7 +54,7 @@ import (
 	"kai/internal/parse"
 	"kai/internal/projects"
 	"github.com/kaicontext/kai-engine/ref"
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/remote"
 	"kai/internal/review"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"kai/internal/snapshot"

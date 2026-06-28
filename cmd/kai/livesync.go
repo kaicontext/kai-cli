@@ -17,7 +17,7 @@ import (
 	"github.com/kaicontext/kai-engine/authorship"
 	"kai/internal/livesync"
 	"github.com/kaicontext/kai-engine/ref"
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/remote"
 	"kai/internal/watcher"
 )
 

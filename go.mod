@@ -15,7 +15,6 @@ require (
 	github.com/go-git/go-git/v5 v5.16.4
 	github.com/google/uuid v1.6.0
 	github.com/kaicontext/kai-core v0.1.0
-	github.com/klauspost/compress v1.18.2
 	github.com/mattn/go-isatty v0.0.20
 	github.com/posthog/posthog-go v1.12.0
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3
@@ -26,6 +25,8 @@ require (
 	lukechampine.com/blake3 v1.4.1
 	modernc.org/sqlite v1.53.0
 )
+
+require github.com/klauspost/compress v1.18.6 // indirect
 
 require (
 	dario.cat/mergo v1.0.0 // indirect

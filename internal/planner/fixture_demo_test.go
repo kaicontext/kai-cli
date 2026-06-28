@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/safetygate"
 )
 
