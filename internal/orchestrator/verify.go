@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kai/internal/agent"
+	"github.com/kaicontext/kai-engine/agent"
 )
 
 // shouldVerify decides whether a finished agent run is a candidate

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/agent"
+	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/message"
 )
 

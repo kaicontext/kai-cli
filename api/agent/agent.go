@@ -1,7 +1,7 @@
 // Package agent is the TUI's re-export of kai-cli/internal/agent.
 package agent
 
-import engine "kai/internal/agent"
+import engine "github.com/kaicontext/kai-engine/agent"
 
 type Mode = engine.Mode
 type Hooks = engine.Hooks

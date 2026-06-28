@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"kai/internal/agent"
+	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/kaipath"
 )

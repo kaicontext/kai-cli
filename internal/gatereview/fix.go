@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"kai/internal/agent"
+	"github.com/kaicontext/kai-engine/agent"
 	"kai/internal/dirio"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/ref"
