@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -24,9 +25,11 @@ var (
 	autofixToken  string
 	autofixBase   string
 	autofixRemote string
-	autofixReady  bool
-	autofixPush   bool
-	autofixLabel  string
+	autofixReady    bool
+	autofixPush     bool
+	autofixLabel    string
+	autofixModel    string
+	autofixMaxTurns int
 )
 
 var autofixCmd = &cobra.Command{
@@ -59,6 +62,8 @@ func init() {
 	autofixCmd.Flags().StringVar(&autofixRemote, "remote", "origin", "git remote to push to")
 	autofixCmd.Flags().BoolVar(&autofixReady, "ready", false, "open as ready-for-review when the gate is fully green (default: always draft)")
 	autofixCmd.Flags().BoolVar(&autofixPush, "push", true, "push the branch and open the PR (set false for a local dry run)")
+	autofixCmd.Flags().StringVar(&autofixModel, "model", "", "model for the planner+executor (default: config/$KAI_AGENT_MODEL); a capable model lands fixes the GLM default often can't")
+	autofixCmd.Flags().IntVar(&autofixMaxTurns, "max-turns", 0, "executor turn cap (0 = orchestrator default of 20); raise for a slower model on a large fix")
 
 	autofixPollCmd.Flags().StringVar(&autofixLabel, "label", "kai-autofix", "issue label to act on")
 	autofixPollCmd.Flags().StringVar(&autofixRepo, "repo", "", "owner/name (default $GITHUB_REPOSITORY or git remote)")
@@ -67,6 +72,8 @@ func init() {
 	autofixPollCmd.Flags().StringVar(&autofixRemote, "remote", "origin", "git remote to push to")
 	autofixPollCmd.Flags().BoolVar(&autofixReady, "ready", false, "open as ready-for-review when the gate is fully green")
 	autofixPollCmd.Flags().BoolVar(&autofixPush, "push", true, "push branches and open PRs")
+	autofixPollCmd.Flags().StringVar(&autofixModel, "model", "", "model for the planner+executor (default: config/$KAI_AGENT_MODEL)")
+	autofixPollCmd.Flags().IntVar(&autofixMaxTurns, "max-turns", 0, "executor turn cap (0 = orchestrator default of 20)")
 
 	autofixCmd.AddCommand(autofixPollCmd)
 	rootCmd.AddCommand(autofixCmd)
@@ -132,8 +139,9 @@ func resolveGitHubClient() (*autofix.Client, error) {
 	return autofix.NewClient(autofixToken, repo)
 }
 
-// runAutofixOne executes the full loop for a single issue.
-func runAutofixOne(ctx context.Context, gh *autofix.Client, issueNum int) error {
+// runAutofixOne executes the full loop for a single issue. The named return
+// lets the cleanup defer (below) distinguish success from failure.
+func runAutofixOne(ctx context.Context, gh *autofix.Client, issueNum int) (err error) {
 	cwd, _ := os.Getwd()
 	branch := autofix.BranchName(issueNum)
 
@@ -165,13 +173,40 @@ func runAutofixOne(ctx context.Context, gh *autofix.Client, issueNum int) error 
 			base = "main"
 		}
 	}
-	if dirty, _ := gitio.WorkingTreeDirty(cwd); dirty {
-		return fmt.Errorf("working tree is dirty; commit or stash before autofix")
+	// Block only on REAL uncommitted work — ignore kai's own artifacts
+	// (.codex/.claude/.kai), which a prior run may have left untracked and
+	// which would otherwise wedge every subsequent run (notably `poll`).
+	if dp, derr := gitio.DirtyPaths(cwd); derr == nil {
+		if real := autofix.FilterArtifacts(dp); len(real) > 0 {
+			return fmt.Errorf("working tree is dirty; commit or stash before autofix: %s",
+				strings.Join(real, ", "))
+		}
 	}
 	if err := gitio.CreateBranch(cwd, branch); err != nil {
 		return fmt.Errorf("create branch: %w", err)
 	}
 	fmt.Printf("→ branched %s off %s\n", branch, base)
+
+	// Always return the repo to base when this issue is done; on failure also
+	// delete the issue branch so it isn't stranded (which would block retry,
+	// and — under `poll` — make the next issue branch off this one and target
+	// the wrong PR base). Runs only now that the branch exists.
+	defer func() {
+		if err != nil {
+			if dErr := gitio.DiscardChanges(cwd); dErr != nil {
+				fmt.Fprintf(os.Stderr, "  warning: discard changes failed: %v\n", dErr)
+			}
+		}
+		if coErr := gitio.CheckoutBranch(cwd, base); coErr != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not return to %s: %v\n", base, coErr)
+			return
+		}
+		if err != nil {
+			if dbErr := gitio.DeleteBranch(cwd, branch); dbErr != nil {
+				fmt.Fprintf(os.Stderr, "  warning: could not delete %s: %v\n", branch, dbErr)
+			}
+		}
+	}()
 
 	// 4. Build agent services and run the fix.
 	svc, err := buildAgentServices(ctx, cwd, false)
@@ -179,6 +214,31 @@ func runAutofixOne(ctx context.Context, gh *autofix.Client, issueNum int) error 
 		return err
 	}
 	defer svc.Close()
+
+	// Apply autofix overrides: --model gives the headless run the same model
+	// lever the interactive picker gives a human (autofix has no picker, so
+	// it would otherwise inherit the GLM config default); --max-turns lifts
+	// the executor cap for a slower model on a large fix.
+	if autofixModel != "" {
+		svc.plannerModel = autofixModel
+		svc.agentModel = autofixModel
+	}
+	svc.executorMaxTurns = autofixMaxTurns
+	fmt.Printf("→ model: %s", svc.agentModel)
+	if autofixMaxTurns > 0 {
+		fmt.Printf(", executor turn cap: %d", autofixMaxTurns)
+	}
+	fmt.Println()
+
+	// Deterministic baseline BEFORE any edits (tree == base): the set of
+	// tests already red, so the post-fix gate can ignore pre-existing
+	// failures and block only on breakage the change introduces.
+	timeout := time.Duration(maxInt(svc.cfg.Agent.TimeoutSeconds, 300)) * time.Second
+	baseline := verify.Continuous(ctx, cwd, timeout)
+	if baseline.TestsPass != nil && !*baseline.TestsPass {
+		fmt.Printf("→ baseline: %d test(s) already failing before the fix\n",
+			len(autofix.ExtractFailures(strings.Join(baseline.Failures, "\n"))))
+	}
 
 	fmt.Println("→ fixing…")
 	res, pres, err := svc.runAgentTask(ctx, autofix.BuildFixPrompt(iss))
@@ -189,22 +249,52 @@ func runAutofixOne(ctx context.Context, gh *autofix.Client, issueNum int) error 
 		return fmt.Errorf("planner produced no plan for the issue (it may need clarification)")
 	}
 
-	changed := aggregateChangedPaths(res)
-	if len(changed) == 0 {
-		return fmt.Errorf("agent made no changes — nothing to submit")
-	}
-	fmt.Printf("→ %d file(s) changed\n", len(changed))
+	// Surface what the agent loop actually did. The orchestrator computes
+	// rich per-run diagnostics (touched-vs-landed paths, integrate verdict,
+	// the "wrote then reverted" note, turn/verify outcome) that autofix
+	// otherwise throws away — without them a headless run is a black box.
+	dumpAgentDiagnostics(res, pres)
 
-	// 5. Verification — three independent signals.
-	diff, err := gitio.DiffAgainst(cwd, base)
+	// Judge success by what the agent actually changed, EXCLUDING kai's own
+	// artifacts (.codex/.claude/.kai). kai's hook installer writes those into
+	// the tree during a run; counting them as the fix is how a zero-edit run
+	// once shipped a PR whose entire diff was `.codex/hooks.json`.
+	rawChanged := aggregateChangedPaths(res)
+	changed := autofix.FilterArtifacts(rawChanged)
+	if len(changed) == 0 {
+		// No real change landed. Disambiguate why, so the failure points at
+		// the right fix instead of a flat "no changes".
+		switch {
+		case len(autofix.FilterArtifacts(aggregateTouchedPaths(res))) > 0:
+			touched := autofix.FilterArtifacts(aggregateTouchedPaths(res))
+			return fmt.Errorf("agent touched %d file(s) but none landed (wrote-then-reverted; "+
+				"often the executor turn cap or a cache loop) — nothing to submit: %s",
+				len(touched), strings.Join(touched, ", "))
+		case len(rawChanged) > 0:
+			return fmt.Errorf("agent made no real changes — only kai's own tooling files "+
+				"appeared (%s); nothing to submit", strings.Join(rawChanged, ", "))
+		default:
+			return fmt.Errorf("agent made no changes — nothing to submit")
+		}
+	}
+	fmt.Printf("→ %d file(s) changed: %s\n", len(changed), strings.Join(changed, ", "))
+
+	// 5. Verification — three independent signals. Stage and diff ONLY the
+	// real changed paths, so the diff the judges read (and the commit below)
+	// can never include kai's own artifacts.
+	diff, err := gitio.StageAndDiffPaths(cwd, base, changed)
 	if err != nil {
 		return fmt.Errorf("computing diff: %w", err)
 	}
 
-	timeout := time.Duration(maxInt(svc.cfg.Agent.TimeoutSeconds, 300)) * time.Second
-	det := verify.Continuous(ctx, cwd, timeout)
+	head := verify.Continuous(ctx, cwd, timeout)
+	det, preexisting, introduced := autofix.AdjustForBaseline(baseline, head)
 	detVerdict := verify.Verdict(det, true)
-	fmt.Printf("→ deterministic: %s\n", detVerdict)
+	fmt.Printf("→ deterministic: %s", detVerdict)
+	if len(preexisting) > 0 {
+		fmt.Printf(" (%d pre-existing failure(s) ignored; %d introduced)", len(preexisting), len(introduced))
+	}
+	fmt.Println()
 
 	intent := iss.Title + "\n\n" + iss.Body
 	semText, _, _, serr := svc.judge(ctx, verify.SemanticSystem,
@@ -226,9 +316,10 @@ func runAutofixOne(ctx context.Context, gh *autofix.Client, issueNum int) error 
 	decision := autofix.Decide(detVerdict, sem, review)
 	ready := decision.Ready && autofixReady
 
-	// 6. Commit.
+	// 6. Commit only the real changed paths staged above — never `git add -A`,
+	// which would re-absorb kai's own artifacts that StageAndDiffPaths kept out.
 	commitMsg := fmt.Sprintf("Fix #%d: %s\n\nCloses #%d.", issueNum, iss.Title, issueNum)
-	if err := gitio.CommitAll(cwd, commitMsg); err != nil {
+	if err := gitio.CommitStaged(cwd, commitMsg); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
 
@@ -242,11 +333,13 @@ func runAutofixOne(ctx context.Context, gh *autofix.Client, issueNum int) error 
 		FilesChanged: changed,
 		TestSummary:  detSummary(det),
 		DetVerdict:   detVerdict,
+		Preexisting:  preexisting,
 		Semantic:     sem,
 		Residue:      residue,
 		Review:       review,
 		AgentSummary: agentSummary(res),
 		Decision:     decision,
+		OpenedReady:  ready,
 		TokensIn:     tokIn,
 		TokensOut:    tokOut,
 	}
@@ -325,6 +418,95 @@ func aggregateChangedPaths(res *orchestrator.Result) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// aggregateTouchedPaths unions TouchedPaths (files the agent wrote/edited,
+// regardless of whether the change survived integrate) across all runs.
+// When this is non-empty but aggregateChangedPaths is empty, the agent
+// wrote and then reverted — the case the plain "no changes" error hides.
+func aggregateTouchedPaths(res *orchestrator.Result) []string {
+	seen := map[string]bool{}
+	for _, r := range res.Runs {
+		for _, p := range r.TouchedPaths {
+			seen[p] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// dumpAgentDiagnostics prints the per-run detail the orchestrator already
+// computes but autofix used to discard: the plan shape, each agent's
+// touched-vs-landed paths, integrate verdict/note, exit error, and the
+// verify/test headlines — plus where the per-turn run logs live. This is
+// the difference between "the agent did nothing" (a guess) and seeing that
+// it edited a file which then failed to integrate (a fact). Always on:
+// a headless run with no human watching should leave a legible trace.
+func dumpAgentDiagnostics(res *orchestrator.Result, pres *planner.PlannerResult) {
+	if pres != nil && pres.Plan != nil {
+		fmt.Fprintf(os.Stderr, "  plan: %d agent task(s)\n", len(pres.Plan.Agents))
+	}
+	for i, r := range res.Runs {
+		fmt.Fprintf(os.Stderr, "  ── run %d/%d: %s ──\n", i+1, len(res.Runs), strings.TrimSpace(r.Task.Name))
+		// The executor acts on this planner-authored prompt, not the raw issue
+		// text — surfacing it shows whether a no-op was a vague task vs the
+		// model ignoring a clear one. (Was previously invisible: only hashes
+		// land in the per-turn runlogs.)
+		if p := strings.TrimSpace(r.Task.Prompt); p != "" {
+			fmt.Fprintf(os.Stderr, "     task prompt:    %s\n", truncForLog(p, 400))
+		}
+		if len(r.Task.Files) > 0 {
+			fmt.Fprintf(os.Stderr, "     task files:     %s\n", strings.Join(r.Task.Files, ", "))
+		}
+		fmt.Fprintf(os.Stderr, "     touched:        %s\n", joinOrNone(r.TouchedPaths))
+		fmt.Fprintf(os.Stderr, "     changed (landed): %s\n", joinOrNone(r.ChangedPaths))
+		if len(r.TouchedPaths) > 0 && len(r.ChangedPaths) == 0 {
+			fmt.Fprintf(os.Stderr, "     ⚠ wrote then reverted — edits did not land (turn cap / cache loop?)\n")
+		}
+		if r.IntegrateNote != "" {
+			fmt.Fprintf(os.Stderr, "     integrate note: %s\n", r.IntegrateNote)
+		}
+		if r.Verdict != nil {
+			fmt.Fprintf(os.Stderr, "     integrate verdict: %v\n", *r.Verdict)
+		}
+		if r.ExitErr != nil {
+			fmt.Fprintf(os.Stderr, "     exit error:     %v\n", r.ExitErr)
+		}
+		if r.IntegrateErr != nil {
+			fmt.Fprintf(os.Stderr, "     integrate error: %v\n", r.IntegrateErr)
+		}
+		if r.VerifySummary != "" {
+			fmt.Fprintf(os.Stderr, "     verify:         %s\n", r.VerifySummary)
+		}
+		if r.TestSummary != "" {
+			fmt.Fprintf(os.Stderr, "     test:           %s\n", r.TestSummary)
+		}
+	}
+	if kaiDir != "" {
+		fmt.Fprintf(os.Stderr, "  per-turn run logs: %s\n", filepath.Join(kaiDir, "runs"))
+	}
+}
+
+// joinOrNone renders a path slice for the diagnostics dump.
+func joinOrNone(p []string) string {
+	if len(p) == 0 {
+		return "(none)"
+	}
+	return strings.Join(p, ", ")
+}
+
+// truncForLog collapses whitespace and rune-truncates s for a one-line
+// diagnostic. Rune-safe so a multibyte char isn't split.
+func truncForLog(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		return string(r[:max-1]) + "…"
+	}
+	return s
 }
 
 // agentSummary lists the plan's task names as the "what changed" headline.

@@ -632,8 +632,47 @@ func liParseTime(s string) time.Time {
 // Merge-not-clobber and idempotent. Best-effort — never fails init.
 func writeAgentHooks(repoRoot string) {
 	command := fmt.Sprintf(`"%s" log ingest`, kaiExe())
+	// These files embed kaiExe()'s absolute, machine-specific path — they are
+	// purely local tooling and must never be committed. gitignore them first
+	// so they can't be swept into a commit (e.g. the headless autofix loop
+	// once shipped a PR whose entire diff was .codex/hooks.json).
+	ensureGitignored(repoRoot, ".claude/settings.local.json", ".codex/hooks.json")
 	mergeHookEvents(filepath.Join(repoRoot, ".claude", "settings.local.json"), []string{"Stop", "SessionEnd"}, command)
 	mergeHookEvents(filepath.Join(repoRoot, ".codex", "hooks.json"), []string{"Stop"}, command) // Codex has no SessionEnd
+}
+
+// ensureGitignored appends any of entries not already present to the repo's
+// .gitignore, under a labeled section. Idempotent (exact-line match) and
+// best-effort: skips non-git repos and never fails the caller.
+func ensureGitignored(repoRoot string, entries ...string) {
+	if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err != nil {
+		return // not a git repo — nothing to ignore against
+	}
+	path := filepath.Join(repoRoot, ".gitignore")
+	existing := map[string]bool{}
+	if data, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			existing[strings.TrimSpace(line)] = true
+		}
+	}
+	var missing []string
+	for _, e := range entries {
+		if !existing[e] {
+			missing = append(missing, e)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "\n# kai agent-session hooks (machine-local; do not commit)\n")
+	for _, e := range missing {
+		fmt.Fprintln(f, e)
+	}
 }
 
 func mergeHookEvents(path string, events []string, command string) {

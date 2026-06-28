@@ -37,6 +37,11 @@ type agentServices struct {
 
 	plannerModel string
 	agentModel   string
+
+	// executorMaxTurns, when > 0, overrides the orchestrator's per-executor
+	// turn cap. Headless callers set it so a slower model isn't cut off
+	// mid-fix; 0 keeps the default.
+	executorMaxTurns int
 }
 
 // buildAgentServices discovers and opens the project at cwd, resolves the
@@ -190,6 +195,7 @@ func (s *agentServices) runAgentTask(ctx context.Context, prompt string) (*orche
 		Despawn:           true,
 		PromptContext:     s.promptCtx,
 		RunLogDir:         kaiDir,
+		ExecutorMaxTurns:  s.executorMaxTurns,
 	}
 	res, err := orchestrator.Execute(ctx, pres.Plan, orchCfg, s.gdb, s.primary.Path, kaiDir)
 	if err != nil {

@@ -116,3 +116,71 @@ func TestBranchNameStable(t *testing.T) {
 		t.Fatalf("unexpected branch name %q", BranchName(42))
 	}
 }
+
+// TestFilterArtifacts locks down the guard that stopped a zero-edit run from
+// shipping kai's own .codex/hooks.json as the fix: kai's tooling paths are
+// dropped, real source paths survive, and order is preserved.
+func TestFilterArtifacts(t *testing.T) {
+	in := []string{
+		".codex/hooks.json",
+		"internal/tui/views/repl.go",
+		".claude/settings.local.json",
+		"parser.go",
+		".kai/loops/x.json",
+		"./.codex/hooks.json",
+	}
+	got := FilterArtifacts(in)
+	want := []string{"internal/tui/views/repl.go", "parser.go"}
+	if len(got) != len(want) {
+		t.Fatalf("FilterArtifacts = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("FilterArtifacts[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+
+	// A run that touched only kai's own files must filter to empty — the
+	// signal the no-op guard relies on to abort instead of committing noise.
+	if rem := FilterArtifacts([]string{".codex/hooks.json", ".claude/settings.local.json"}); len(rem) != 0 {
+		t.Fatalf("expected only-artifacts to filter to empty, got %v", rem)
+	}
+}
+
+// TestAdjustForBaseline locks down the rule that a pre-existing red suite
+// doesn't sink a good fix — only NEW failures block — while a real
+// regression the change introduces still does.
+func TestAdjustForBaseline(t *testing.T) {
+	mk := func(pass bool, output string) contract.CheckResult {
+		cr := contract.CheckResult{TestsPass: &pass}
+		if !pass {
+			cr.Failures = []string{output}
+		}
+		return cr
+	}
+	preexistingOut := "--- FAIL: TestNormalizeKind_AcceptsAliases (0.00s)\nFAIL\tgithub.com/x/y/internal/agent/provider\t0.4s"
+
+	// Same failure before and after → pre-existing only → softened to passing.
+	adj, pre, intro := AdjustForBaseline(mk(false, preexistingOut), mk(false, preexistingOut))
+	if adj.TestsPass == nil || !*adj.TestsPass {
+		t.Fatalf("pre-existing-only failure should soften to passing, got %+v", adj)
+	}
+	if len(pre) == 0 || len(intro) != 0 {
+		t.Fatalf("want pre-existing>0 and introduced=0, got pre=%v intro=%v", pre, intro)
+	}
+
+	// A new failure on top of the baseline → still broken, new one reported.
+	headNew := preexistingOut + "\n--- FAIL: TestStreamFlush (0.01s)"
+	adj2, _, intro2 := AdjustForBaseline(mk(false, preexistingOut), mk(false, headNew))
+	if adj2.TestsPass == nil || *adj2.TestsPass {
+		t.Fatalf("a newly introduced failure must stay broken, got %+v", adj2)
+	}
+	if len(intro2) != 1 || intro2[0] != "TestStreamFlush" {
+		t.Fatalf("want introduced=[TestStreamFlush], got %v", intro2)
+	}
+
+	// Clean baseline, clean head → untouched pass.
+	if adj3, _, _ := AdjustForBaseline(mk(true, ""), mk(true, "")); adj3.TestsPass == nil || !*adj3.TestsPass {
+		t.Fatalf("clean→clean should stay passing")
+	}
+}

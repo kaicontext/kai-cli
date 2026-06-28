@@ -10,25 +10,27 @@ import (
 	"strings"
 )
 
-// BuildFixPrompt frames the issue as a concrete task for the agent loop.
-// The runner splits a leading "System: ..." block off as the system
-// role (see agent.Options.Prompt), so we follow that convention.
+// BuildFixPrompt frames the issue as plain user intent for the planner —
+// the same slot a human's typed request fills in interactive mode
+// (pa.Run(ctx, request, …)). It deliberately does NOT prepend a "System:"
+// block: the planner builds its own system prompt (buildPlannerPrompt), so
+// a "System:" prefix here does not become a system role — it just lands as
+// inert text inside the user-request slot, layered on top of and muddying
+// the planner's framing. The fix-quality constraints ride along as natural
+// request text; the planner propagates the relevant ones into the executor
+// task prompts it authors.
 func BuildFixPrompt(iss *Issue) string {
 	var b strings.Builder
-	b.WriteString("System: You are kai operating fully headlessly — no human will review your ")
-	b.WriteString("intermediate steps. Implement a correct, minimal, well-scoped fix for the ")
-	b.WriteString("GitHub issue below. Make the smallest change that fully resolves it. Match ")
-	b.WriteString("the surrounding code's style. Add or update a test that would have caught ")
-	b.WriteString("the bug when it is reasonable to do so. Do NOT touch unrelated code, bump ")
-	b.WriteString("versions, or reformat files. When done, end with a 2-4 sentence summary of ")
-	b.WriteString("what you changed and why.\n\n")
-	fmt.Fprintf(&b, "User: Fix this issue.\n\n#%d: %s\n\n", iss.Number, iss.Title)
+	fmt.Fprintf(&b, "Fix this GitHub issue.\n\n#%d: %s\n\n", iss.Number, iss.Title)
 	if body := strings.TrimSpace(iss.Body); body != "" {
 		b.WriteString(body)
 		b.WriteString("\n")
 	} else {
 		b.WriteString("(no description provided)\n")
 	}
+	b.WriteString("\nMake the smallest change that fully resolves it and matches the " +
+		"surrounding code's style. Add or update a test that would have caught the bug " +
+		"when that's reasonable. Don't touch unrelated code, bump versions, or reformat files.\n")
 	return b.String()
 }
 

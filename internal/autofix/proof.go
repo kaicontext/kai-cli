@@ -113,12 +113,18 @@ type Evidence struct {
 	FilesChanged []string
 	TestSummary  string // VerifyResult.Summary (deterministic run)
 	DetVerdict   contract.Verdict
+	Preexisting  []string // test failures already red before the fix (not held against it)
 	Semantic     contract.SemanticResult
 	Residue      []string
 	Review       ReviewResult
 	AgentSummary string // the fixer agent's own final text
 
 	Decision PublishDecision
+	// OpenedReady is the EFFECTIVE state the PR opens in: the gate passed
+	// (Decision.Ready) AND the caller opted in with --ready. The body header
+	// reflects this — not Decision.Ready alone — so it never claims "ready"
+	// for a PR that actually opened as a draft.
+	OpenedReady bool
 
 	TokensIn  int
 	TokensOut int
@@ -137,10 +143,15 @@ func RenderPRBody(e Evidence) string {
 	fmt.Fprintf(&b, "Closes #%d.\n\n", e.IssueNumber)
 
 	readyEmoji := "🟡 opened as **draft**"
-	if e.Decision.Ready {
+	if e.OpenedReady {
 		readyEmoji = "🟢 **ready for review**"
 	}
 	fmt.Fprintf(&b, "## Auto-fix result: %s\n\n", readyEmoji)
+	// Gate passed but held as draft because --ready wasn't set: say so, so a
+	// green gate on a draft PR doesn't read as a contradiction.
+	if e.Decision.Ready && !e.OpenedReady {
+		b.WriteString("_All checks passed — held as a draft because `--ready` was not set; flip it to ready when you're satisfied._\n\n")
+	}
 	b.WriteString("**Why:**\n")
 	for _, r := range e.Decision.Reasons {
 		mark := "✓"
@@ -168,6 +179,10 @@ func RenderPRBody(e Evidence) string {
 	b.WriteString("## Verification\n\n")
 	fmt.Fprintf(&b, "- **Tests / typecheck:** %s — %s\n",
 		verdictLabel(e.DetVerdict), oneLine(e.TestSummary))
+	if len(e.Preexisting) > 0 {
+		fmt.Fprintf(&b, "  - _%d test(s) were already failing on the base branch, unrelated to this change (not held against the fix): %s_\n",
+			len(e.Preexisting), strings.Join(e.Preexisting, ", "))
+	}
 	fmt.Fprintf(&b, "- **Semantic judge:** %s", semLabel(e.Semantic))
 	if e.Semantic.Note != "" {
 		fmt.Fprintf(&b, " — %s", e.Semantic.Note)
@@ -215,11 +230,13 @@ func semLabel(s contract.SemanticResult) string {
 
 func oneLine(s string) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
-	if len(s) > 200 {
-		return s[:197] + "…"
-	}
 	if s == "" {
 		return "(none)"
+	}
+	// Truncate on runes, not bytes, so a multibyte char (e.g. an em dash or
+	// non-ASCII identifier in an issue title) is never split mid-rune.
+	if r := []rune(s); len(r) > 200 {
+		return string(r[:197]) + "…"
 	}
 	return s
 }
