@@ -57,6 +57,12 @@ install_kit() {
     fi
     place_binary "${kdir}/kit-${os}-${arch}" "kit"
     rm -rf "$kdir"
+    # Ad-hoc codesign on macOS so Gatekeeper doesn't block the unsigned binary
+    # — mirrors what the kai launcher does for a kit it downloads itself
+    # (internal/kitlauncher adhocCodesign). Best-effort; never aborts.
+    if [ "$os" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign --force --sign - "${INSTALL_DIR}/kit" 2>/dev/null || true
+    fi
     echo "  kit installed to ${INSTALL_DIR}/kit"
 }
 

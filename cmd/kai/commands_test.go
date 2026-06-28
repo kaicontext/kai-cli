@@ -76,8 +76,8 @@ func TestIntentCommand(t *testing.T) {
 	if intentCmd == nil {
 		t.Fatal("intentCmd should not be nil")
 	}
-	if intentCmd.Use != "intent" {
-		t.Errorf("expected Use 'intent', got %q", intentCmd.Use)
+	if intentCmd.Use != "intent [statement]" {
+		t.Errorf("expected Use 'intent [statement]', got %q", intentCmd.Use)
 	}
 }
 
@@ -466,7 +466,7 @@ func TestRunInit_Idempotent(t *testing.T) {
 // TestCommandHelp tests that commands have help text
 func TestCommandHelp(t *testing.T) {
 	commands := []*cobra.Command{
-		rootCmd, initCmd, snapshotCmd, analyzeCmd, changesetCmd,
+		rootCmd, initCmd, codeCmd, snapshotCmd, analyzeCmd, changesetCmd,
 		intentCmd, dumpCmd, listCmd, logCmd, statusCmd, diffCmd,
 		wsCmd, integrateCmd, resolveCmd, checkoutCmd, refCmd, pickCmd,
 		completionCmd, remoteCmd, pushCmd, fetchCmd, cloneCmd,
@@ -569,7 +569,7 @@ func TestRunCompletion(t *testing.T) {
 // TestAllCommandsRegistered tests that all expected commands are registered
 func TestAllCommandsRegistered(t *testing.T) {
 	expectedCommands := []string{
-		"init", "snapshot", "analyze", "changeset", "intent",
+		"init", "code", "snapshot", "analyze", "changeset", "intent",
 		"dump", "list", "log", "status", "diff", "ws",
 		"integrate", "checkout", "ref", "pick", "completion",
 		"remote", "push", "fetch", "clone", "remote-log", "auth",
@@ -584,6 +584,50 @@ func TestAllCommandsRegistered(t *testing.T) {
 		if !registeredCommands[expected] {
 			t.Errorf("command %q should be registered", expected)
 		}
+	}
+}
+
+// TestCodeCommandRegisteredExactlyOnce is the orphan guard. Before
+// kit-in-kai Phase 1, `var codeCmd` existed in tui.go but was never added
+// to rootCmd, so `kai code` returned `unknown command "code"` while the
+// build stayed green (Go does not flag unused package-level vars). This
+// test asserts the wiring directly: `code` resolves to exactly one
+// registered, non-root command, and it is the kit passthrough (it forwards
+// flags verbatim via DisableFlagParsing). It would have failed loudly on
+// the old drift.
+func TestCodeCommandRegisteredExactlyOnce(t *testing.T) {
+	// Exactly one registered command is named "code".
+	count := 0
+	var found *cobra.Command
+	for _, cmd := range rootCmd.Commands() {
+		if cmd.Name() == "code" {
+			count++
+			found = cmd
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one registered `code` command, found %d", count)
+	}
+
+	// rootCmd.Find resolves it to a non-root command (not just falling back
+	// to rootCmd itself for an unknown name).
+	resolved, _, err := rootCmd.Find([]string{"code"})
+	if err != nil {
+		t.Fatalf("`code` should be findable: %v", err)
+	}
+	if resolved == rootCmd {
+		t.Fatal("`code` resolved to rootCmd — it is not actually registered")
+	}
+	if resolved != found {
+		t.Error("rootCmd.Find returned a different command than the registered `code`")
+	}
+
+	// It is the kit passthrough: flags after `code` are forwarded verbatim.
+	if !resolved.DisableFlagParsing {
+		t.Error("`code` must set DisableFlagParsing so kit flags pass through unparsed")
+	}
+	if resolved.RunE == nil {
+		t.Error("`code` must have a RunE (the kit passthrough handler)")
 	}
 }
 

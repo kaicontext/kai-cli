@@ -6,6 +6,7 @@ Kai is a semantic version control CLI. It creates snapshots of your code, comput
 
 ```bash
 kai init                    # Initialize Kai in your project
+kai code                    # Launch the interactive coding experience
 kai capture                 # Snapshot + analyze your code
 # ... make changes ...
 kai diff                    # See what changed semantically
@@ -37,6 +38,23 @@ kai init --explain    # Show what this command does
 ```
 
 Safe to run multiple times (idempotent).
+
+### `kai code`
+
+Launch Kai's interactive coding experience — the single front door to the
+agent/TUI.
+
+```bash
+kai code                       # Launch the experience
+kai code --some-flag value     # Flags after `code` are forwarded verbatim
+```
+
+On first use, `kai code` downloads its backing component to `~/.kai/bin`
+automatically, so it works on every install path (curl `install.sh`,
+Homebrew, or manual) with no extra setup. If the download fails it prints a
+clear error and exits non-zero (it never silently does nothing). `kai code`
+returns the experience's own exit code, and Ctrl+C / terminal resize behave
+exactly as they do when running the backing binary directly.
 
 ### `kai capture`
 
