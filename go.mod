@@ -12,11 +12,8 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/exp/teatest v0.0.0-20260511125431-fe5d686e0c99
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/go-git/go-git/v5 v5.16.4
-	github.com/google/uuid v1.6.0
 	github.com/kaicontext/kai-core v0.1.0
 	github.com/mattn/go-isatty v0.0.20
-	github.com/posthog/posthog-go v1.12.0
 	github.com/sergi/go-diff v1.4.0
 	github.com/spf13/cobra v1.10.1
 	golang.org/x/sys v0.46.0
@@ -26,7 +23,10 @@ require (
 )
 
 require (
+	github.com/go-git/go-git/v5 v5.16.4 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/posthog/posthog-go v1.12.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 )
 
