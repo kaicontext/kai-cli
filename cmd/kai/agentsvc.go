@@ -13,7 +13,7 @@ import (
 	"github.com/kaicontext/kai-engine/agentprompt"
 	"kai/internal/config"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/orchestrator"
+	"github.com/kaicontext/kai-engine/orchestrator"
 	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/remote"

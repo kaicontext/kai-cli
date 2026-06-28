@@ -6,7 +6,7 @@ import (
 
 	"kai/api/message"
 	"kai/api/session"
-	"kai/internal/orchestrator"
+	"github.com/kaicontext/kai-engine/orchestrator"
 )
 
 // TestRecentTurnsForTriage_PicksLastUserAssistantOnly verifies the

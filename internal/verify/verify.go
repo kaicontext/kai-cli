@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/contract"
-	"kai/internal/orchestrator"
+	"github.com/kaicontext/kai-engine/orchestrator"
 )
 
 // Continuous runs the deterministic checks over the working tree at dir and
