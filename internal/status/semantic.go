@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"kai/internal/classify"
+	"github.com/kaicontext/kai-engine/classify"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/snapshot"
 )

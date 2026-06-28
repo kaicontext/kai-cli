@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/diff"
+	"github.com/kaicontext/kai-engine/diff"
 )
 
 func TestBuildReviewSummary_Basic(t *testing.T) {

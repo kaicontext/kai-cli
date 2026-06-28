@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kai/internal/diff"
+	"github.com/kaicontext/kai-engine/diff"
 	"kai/internal/review"
 )
 

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"kai/internal/classify"
+	"github.com/kaicontext/kai-engine/classify"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/util"
 

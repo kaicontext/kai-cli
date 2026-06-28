@@ -12,7 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"kai/internal/filesource"
+	"github.com/kaicontext/kai-engine/filesource"
 )
 
 // Repository wraps a go-git repository.

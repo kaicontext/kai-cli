@@ -13,7 +13,7 @@ import (
 
 	"lukechampine.com/blake3"
 
-	"kai/internal/filesource"
+	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/ignore"
 )
 

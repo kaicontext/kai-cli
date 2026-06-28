@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"kai/internal/diff"
+	"github.com/kaicontext/kai-engine/diff"
 )
 
 // SemanticChange represents a high-level description of what changed.

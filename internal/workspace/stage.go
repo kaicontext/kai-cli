@@ -4,11 +4,11 @@ package workspace
 import (
 	"fmt"
 
-	"kai/internal/classify"
-	"kai/internal/filesource"
+	"github.com/kaicontext/kai-engine/classify"
+	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/module"
-	"kai/internal/signing"
+	"github.com/kaicontext/kai-engine/module"
+	"github.com/kaicontext/kai-engine/signing"
 	"kai/internal/snapshot"
 	"github.com/kaicontext/kai-engine/util"
 )

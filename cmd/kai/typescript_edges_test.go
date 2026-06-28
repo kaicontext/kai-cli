@@ -7,7 +7,7 @@ import (
 
 	"kai/internal/dirio"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/module"
+	"github.com/kaicontext/kai-engine/module"
 	"github.com/kaicontext/kai-engine/ref"
 	"kai/internal/snapshot"
 )

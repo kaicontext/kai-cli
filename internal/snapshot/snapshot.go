@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-core/cas"
-	"kai/internal/filesource"
+	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/module"
+	"github.com/kaicontext/kai-engine/module"
 	"kai/internal/parse"
 	"github.com/kaicontext/kai-engine/util"
 )
