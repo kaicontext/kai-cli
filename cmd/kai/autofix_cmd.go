@@ -13,7 +13,7 @@ import (
 
 	"kai/internal/autofix"
 	"github.com/kaicontext/kai-engine/contract"
-	"kai/internal/gitio"
+	"github.com/kaicontext/kai-engine/gitio"
 	"github.com/kaicontext/kai-engine/orchestrator"
 	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/verify"

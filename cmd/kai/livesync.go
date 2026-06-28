@@ -18,7 +18,7 @@ import (
 	"kai/internal/livesync"
 	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/remote"
-	"kai/internal/watcher"
+	"github.com/kaicontext/kai-engine/watcher"
 )
 
 // liveRunCmd runs a foreground bidirectional peer-sync session for the
