@@ -20,7 +20,7 @@ import (
 	"kai/internal/agent/tools"
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/memstat"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 	"kai/internal/runlog"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/tasksmd"

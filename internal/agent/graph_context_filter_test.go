@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // TestFilterExistingPaths pins the phantom-file filter. Drove the

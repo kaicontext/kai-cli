@@ -10,7 +10,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // KaiTools wraps semantic-graph queries as agent tools so the model

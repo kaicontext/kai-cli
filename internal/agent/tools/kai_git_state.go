@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // kaiGitStateTool answers "is the file I just read what's actually

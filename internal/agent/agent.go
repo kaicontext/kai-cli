@@ -24,7 +24,7 @@ import (
 	"kai/internal/agent/tools"
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/safetygate"
 )
 

@@ -11,7 +11,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/safetygate"
 )
 

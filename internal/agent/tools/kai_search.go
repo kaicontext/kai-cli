@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // kaiSearchTool exposes kai's semantic-graph FTS5 index as a tool.

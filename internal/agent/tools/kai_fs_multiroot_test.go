@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // helper: build a multi-root projects.Set with two project dirs

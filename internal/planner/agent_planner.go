@@ -17,7 +17,7 @@ import (
 	"kai/internal/agent/provider"
 	"github.com/kaicontext/kai-engine/session"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/promptenv"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/tasksmd"

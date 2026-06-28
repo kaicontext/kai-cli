@@ -3,7 +3,7 @@
 // docs/architecture/tui-api-extraction.md).
 package projects
 
-import engine "kai/internal/projects"
+import engine "github.com/kaicontext/kai-engine/projects"
 
 type Set = engine.Set
 type Project = engine.Project

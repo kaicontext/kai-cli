@@ -21,7 +21,7 @@ import (
 	"kai/internal/agentprompt"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/planner"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/safetygate"
 )
 

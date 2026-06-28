@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // kaiImpactTool exposes "what's the blast radius of changing this file"

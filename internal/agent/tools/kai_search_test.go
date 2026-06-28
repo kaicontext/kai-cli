@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // fakeSearcher is an in-memory stand-in for the FTS5 layer. Lets

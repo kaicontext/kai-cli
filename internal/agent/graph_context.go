@@ -11,7 +11,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // graphContextInjector tracks which files have already had their

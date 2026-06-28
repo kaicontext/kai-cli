@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // TestCanonicalToolInputForCache_NormalizesProjectPrefixedPaths

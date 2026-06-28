@@ -17,7 +17,7 @@ import (
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // diffContext is the number of unchanged lines emitted around each

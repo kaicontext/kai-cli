@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/ignore"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // Multi-root spawn materialization.

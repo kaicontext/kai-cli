@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // fileToolsForWS is a tiny test helper that adapts existing

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // kai_graph_inverse.go: the inbound/outbound complements of the

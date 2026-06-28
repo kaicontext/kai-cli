@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // kai_files and kai_grep are filesystem-backed tools that replace

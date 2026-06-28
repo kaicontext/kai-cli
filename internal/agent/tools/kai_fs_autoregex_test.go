@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // TestKaiGrep_AutoPromotesAlternationOnZeroHits pins the 2026-05-20

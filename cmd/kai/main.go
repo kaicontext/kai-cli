@@ -52,7 +52,7 @@ import (
 	"github.com/kaicontext/kai-engine/memstat"
 	"kai/internal/module"
 	"kai/internal/parse"
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/remote"
 	"kai/internal/review"

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/projects"
+	"github.com/kaicontext/kai-engine/projects"
 )
 
 // TestScopeDirInSet_AcceptsProjectNamePrefix pins the 2026-05-11
