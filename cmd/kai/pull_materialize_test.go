@@ -7,7 +7,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/snapshot"
 	"github.com/kaicontext/kai-engine/util"
 )
 

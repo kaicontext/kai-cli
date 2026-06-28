@@ -17,11 +17,11 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"lukechampine.com/blake3"
 
-	"kai/internal/dirio"
+	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/ignore"
 	"github.com/kaicontext/kai-engine/kaipath"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/snapshot"
 	"github.com/kaicontext/kai-core/parse"
 )
 

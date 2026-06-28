@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kaicontext/kai-engine/contract"
-	"kai/internal/dirio"
+	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/ignore"
 	"kai/internal/verify"
 )

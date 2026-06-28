@@ -7,7 +7,7 @@ import (
 
 	"github.com/kaicontext/kai-core/merge"
 
-	"kai/internal/dirio"
+	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/util"
 )

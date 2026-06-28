@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"kai/internal/ai"
+	"github.com/kaicontext/kai-engine/ai"
 )
 
 // RecorderMode controls how Recorder behaves on each Complete call.

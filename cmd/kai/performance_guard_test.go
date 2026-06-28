@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"kai/internal/dirio"
+	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/module"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/snapshot"
 )
 
 func TestPerf_GraphBuild(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/provider"
-	"kai/internal/ai"
+	"github.com/kaicontext/kai-engine/ai"
 )
 
 // TestServerCompleter_Success verifies the happy path: client sends

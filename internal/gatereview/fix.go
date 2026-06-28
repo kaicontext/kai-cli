@@ -9,11 +9,11 @@ import (
 	"strings"
 
 	"github.com/kaicontext/kai-engine/agent"
-	"kai/internal/dirio"
+	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/safetygate"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/snapshot"
 	"github.com/kaicontext/kai-engine/util"
 	"kai/internal/workspace"
 )

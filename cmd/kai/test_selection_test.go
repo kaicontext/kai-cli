@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/dirio"
+	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/module"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/snapshot"
 	"github.com/kaicontext/kai-engine/util"
 )
 

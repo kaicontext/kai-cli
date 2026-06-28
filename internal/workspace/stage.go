@@ -9,7 +9,7 @@ import (
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/module"
 	"github.com/kaicontext/kai-engine/signing"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/snapshot"
 	"github.com/kaicontext/kai-engine/util"
 )
 

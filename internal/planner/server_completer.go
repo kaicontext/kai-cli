@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/provider"
-	"kai/internal/ai"
+	"github.com/kaicontext/kai-engine/ai"
 )
 
 // ServerCompleter calls the kailab-control LLM proxy at

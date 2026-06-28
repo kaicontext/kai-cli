@@ -7,7 +7,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/classify"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/snapshot"
 )
 
 // SemanticResult contains semantic analysis of changes.

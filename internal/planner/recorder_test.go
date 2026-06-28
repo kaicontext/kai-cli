@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/ai"
+	"github.com/kaicontext/kai-engine/ai"
 )
 
 // recordingCompleter is a minimal Completer test fixture. Captures

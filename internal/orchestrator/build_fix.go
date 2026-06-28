@@ -12,7 +12,7 @@ import (
 	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/kaipath"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/snapshot"
 )
 
 // build_fix.go: recovery layer for build-check failures.
