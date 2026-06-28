@@ -21,7 +21,7 @@ import (
 	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/util"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/workspace"
 )
 
 // `kai gate` is the human-facing surface for the safety gate's hold

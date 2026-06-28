@@ -15,7 +15,7 @@ import (
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/snapshot"
 	"github.com/kaicontext/kai-engine/util"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/workspace"
 )
 
 // FixInputs carries everything the fix flow needs from the REPL.

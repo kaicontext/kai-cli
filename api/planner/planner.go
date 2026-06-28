@@ -6,7 +6,7 @@
 // engine automatically.
 package planner
 
-import engine "kai/internal/planner"
+import engine "github.com/kaicontext/kai-engine/planner"
 
 type WorkPlan = engine.WorkPlan
 type AgentTask = engine.AgentTask

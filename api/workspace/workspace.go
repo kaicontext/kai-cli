@@ -1,7 +1,7 @@
 // Package workspace is the TUI's re-export of kai-cli/internal/workspace.
 package workspace
 
-import engine "kai/internal/workspace"
+import engine "github.com/kaicontext/kai-engine/workspace"
 
 type Manager = engine.Manager
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 )
 
 func TestExtractSymbols(t *testing.T) {

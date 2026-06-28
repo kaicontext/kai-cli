@@ -15,7 +15,7 @@ import (
 	"github.com/kaicontext/kai-engine/contract"
 	"kai/internal/gitio"
 	"kai/internal/orchestrator"
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 	"kai/internal/verify"
 )
 

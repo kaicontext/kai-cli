@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/safetygate"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/workspace"
 )
 
 func mkRun(name string, verdict string, exitErr, integrateErr error) AgentRun {

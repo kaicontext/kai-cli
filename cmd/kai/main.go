@@ -62,7 +62,7 @@ import (
 	"kai/internal/telemetry"
 	tuierrors "kai/internal/tui/errors"
 	"github.com/kaicontext/kai-engine/util"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/workspace"
 	spawnpkg "kai/pkg/spawn"
 )
 

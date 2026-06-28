@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 )
 
 // TestExecute_RejectsEmptyPlan: the orchestrator must not silently

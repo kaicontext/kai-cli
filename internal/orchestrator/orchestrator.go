@@ -43,16 +43,16 @@ import (
 	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/session"
 	"github.com/kaicontext/kai-engine/tools"
-	"kai/internal/agentprompt"
+	"github.com/kaicontext/kai-engine/agentprompt"
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/kaipath"
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/util"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/workspace"
 )
 
 // AgentRun captures everything that happened to one agent: its task,

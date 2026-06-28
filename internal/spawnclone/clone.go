@@ -7,7 +7,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/ref"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/workspace"
 )
 
 // RewriteClonedWorkspace opens the graph DB inside `clonedKaiDir` (the

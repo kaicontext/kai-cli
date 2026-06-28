@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-core/cas"
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 )
 
 // TestRenderEvidencePreamble_BasicShape pins the load-bearing format:

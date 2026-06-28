@@ -19,7 +19,7 @@ import (
 	"github.com/kaicontext/kai-engine/remote"
 	"kai/internal/spawnclone"
 	"github.com/kaicontext/kai-engine/util"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/workspace"
 	spawnpkg "kai/pkg/spawn"
 )
 

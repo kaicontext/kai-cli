@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 )
 
 // plan_coverage.go: a defensive layer that catches "worker stopped after

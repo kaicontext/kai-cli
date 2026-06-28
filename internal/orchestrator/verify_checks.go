@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 )
 
 // verifyCheckTimeout bounds a single machine check so a hung command

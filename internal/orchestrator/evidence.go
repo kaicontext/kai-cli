@@ -19,7 +19,7 @@ import (
 	"strings"
 
 	"github.com/kaicontext/kai-core/cas"
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 )
 
 // renderEvidencePreamble formats Evidence[] into the EVIDENCE FROM

@@ -11,9 +11,9 @@ import (
 
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/provider"
-	"kai/internal/agentprompt"
+	"github.com/kaicontext/kai-engine/agentprompt"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/safetygate"
 )
 

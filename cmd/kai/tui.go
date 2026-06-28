@@ -15,11 +15,11 @@ import (
 
 	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/session"
-	"kai/internal/agentprompt"
+	"github.com/kaicontext/kai-engine/agentprompt"
 	"kai/internal/config"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/orchestrator"
-	"kai/internal/planner"
+	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/safetygate"
