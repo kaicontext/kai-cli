@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kai/internal/runlog"
+	"github.com/kaicontext/kai-engine/runlog"
 )
 
 // `kai run` is the developer-facing surface for the per-turn run-log

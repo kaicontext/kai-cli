@@ -16,8 +16,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kai/internal/authorship"
-	"kai/internal/kaipath"
+	"github.com/kaicontext/kai-engine/authorship"
+	"github.com/kaicontext/kai-engine/kaipath"
 	spawnpkg "kai/pkg/spawn"
 	"kai/pkg/synclog"
 )

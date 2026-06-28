@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 )
 
 var verifyCmd = &cobra.Command{

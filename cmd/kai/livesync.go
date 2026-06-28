@@ -14,11 +14,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kai/internal/authorship"
+	"github.com/kaicontext/kai-engine/authorship"
 	"kai/internal/livesync"
-	"kai/internal/ref"
-	"kai/internal/remote"
-	"kai/internal/watcher"
+	"github.com/kaicontext/kai-engine/ref"
+	"github.com/kaicontext/kai-engine/remote"
+	"github.com/kaicontext/kai-engine/watcher"
 )
 
 // liveRunCmd runs a foreground bidirectional peer-sync session for the

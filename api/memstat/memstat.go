@@ -1,7 +1,7 @@
 // Package memstat is the TUI's re-export of kai-cli/internal/memstat.
 package memstat
 
-import engine "kai/internal/memstat"
+import engine "github.com/kaicontext/kai-engine/memstat"
 
 var (
 	Log               = engine.Log

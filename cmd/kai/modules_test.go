@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/module"
+	"github.com/kaicontext/kai-engine/module"
 )
 
 // TestWalkDirectoryIncludesRootFiles verifies that walking from "." includes

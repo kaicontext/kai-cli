@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/remote"
 )
 
 func TestPersonalSlug(t *testing.T) {

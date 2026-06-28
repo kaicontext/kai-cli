@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"kai/internal/kitlauncher"
-	"kai/internal/telemetry"
+	"github.com/kaicontext/kai-engine/telemetry"
 )
 
 // codeLauncher builds the launcher used by `kai code`. A package var so

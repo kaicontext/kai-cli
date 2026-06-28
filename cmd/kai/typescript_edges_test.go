@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kai/internal/dirio"
-	"kai/internal/graph"
-	"kai/internal/module"
-	"kai/internal/ref"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/dirio"
+	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/module"
+	"github.com/kaicontext/kai-engine/ref"
+	"github.com/kaicontext/kai-engine/snapshot"
 )
 
 // TestTypeScriptGraphEdges pins that a TypeScript fixture with relative imports

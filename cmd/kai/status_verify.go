@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"kai/internal/contract"
-	"kai/internal/verify"
+	"github.com/kaicontext/kai-engine/contract"
+	"github.com/kaicontext/kai-engine/verify"
 )
 
 // renderVerificationStatus prints the verification surface at the top of

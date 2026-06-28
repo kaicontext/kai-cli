@@ -1,7 +1,7 @@
 // Package gatereview is the TUI's re-export of kai-cli/internal/gatereview.
 package gatereview
 
-import engine "kai/internal/gatereview"
+import engine "github.com/kaicontext/kai-engine/gatereview"
 
 type Result = engine.Result
 type Issue = engine.Issue

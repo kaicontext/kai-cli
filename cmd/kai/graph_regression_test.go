@@ -7,10 +7,10 @@ import (
 	"sort"
 	"testing"
 
-	"kai/internal/dirio"
-	"kai/internal/graph"
-	"kai/internal/module"
-	"kai/internal/snapshot"
+	"github.com/kaicontext/kai-engine/dirio"
+	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/module"
+	"github.com/kaicontext/kai-engine/snapshot"
 )
 
 // setupGraphFixture creates a temp dir with a synthetic TS project, initializes

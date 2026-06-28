@@ -11,17 +11,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kai/internal/agent"
-	"kai/internal/agent/provider"
-	"kai/internal/agent/session"
+	"github.com/kaicontext/kai-engine/agent"
+	"github.com/kaicontext/kai-engine/provider"
+	"github.com/kaicontext/kai-engine/session"
 	"kai/internal/config"
-	"kai/internal/gatereview"
-	"kai/internal/graph"
-	"kai/internal/projects"
-	"kai/internal/remote"
-	"kai/internal/safetygate"
-	"kai/internal/util"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/gatereview"
+	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/projects"
+	"github.com/kaicontext/kai-engine/remote"
+	"github.com/kaicontext/kai-engine/safetygate"
+	"github.com/kaicontext/kai-engine/util"
+	"github.com/kaicontext/kai-engine/workspace"
 )
 
 // `kai gate` is the human-facing surface for the safety gate's hold

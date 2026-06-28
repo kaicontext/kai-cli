@@ -14,10 +14,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 
-	"kai/internal/contract"
-	"kai/internal/dirio"
-	"kai/internal/ignore"
-	"kai/internal/verify"
+	"github.com/kaicontext/kai-engine/contract"
+	"github.com/kaicontext/kai-engine/dirio"
+	"github.com/kaicontext/kai-engine/ignore"
+	"github.com/kaicontext/kai-engine/verify"
 )
 
 const (

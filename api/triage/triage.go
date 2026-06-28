@@ -1,7 +1,7 @@
 // Package triage is the TUI's re-export of kai-cli/internal/triage.
 package triage
 
-import engine "kai/internal/triage"
+import engine "github.com/kaicontext/kai-engine/triage"
 
 type Request = engine.Request
 type Result = engine.Result

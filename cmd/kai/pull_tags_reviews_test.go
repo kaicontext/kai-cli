@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/graph"
-	"kai/internal/ref"
-	"kai/internal/remote"
+	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/ref"
+	"github.com/kaicontext/kai-engine/remote"
 )
 
 // newRemoteSyncTestDB opens a throwaway graph DB under t.TempDir().

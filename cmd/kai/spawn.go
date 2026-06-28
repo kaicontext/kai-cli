@@ -13,13 +13,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kai/internal/graph"
-	"kai/internal/kaipath"
-	"kai/internal/ref"
-	"kai/internal/remote"
-	"kai/internal/spawnclone"
-	"kai/internal/util"
-	"kai/internal/workspace"
+	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/kaipath"
+	"github.com/kaicontext/kai-engine/ref"
+	"github.com/kaicontext/kai-engine/remote"
+	"github.com/kaicontext/kai-engine/spawnclone"
+	"github.com/kaicontext/kai-engine/util"
+	"github.com/kaicontext/kai-engine/workspace"
 	spawnpkg "kai/pkg/spawn"
 )
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // TestHeldByGateHint pins the F-17 fix: when the safety gate holds an

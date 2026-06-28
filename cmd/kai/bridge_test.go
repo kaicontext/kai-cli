@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/graph"
-	"kai/internal/ref"
+	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/ref"
 )
 
 // ─── Unit tests ────────────────────────────────────────────────────────────

@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"kai/internal/filesource"
-	"kai/internal/graph"
+	"github.com/kaicontext/kai-engine/filesource"
+	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/livesync"
 )
 

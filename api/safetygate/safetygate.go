@@ -1,7 +1,7 @@
 // Package safetygate is the TUI's re-export of kai-cli/internal/safetygate.
 package safetygate
 
-import engine "kai/internal/safetygate"
+import engine "github.com/kaicontext/kai-engine/safetygate"
 
 type Config = engine.Config
 

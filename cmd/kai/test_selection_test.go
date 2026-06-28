@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/dirio"
-	"kai/internal/graph"
-	"kai/internal/module"
-	"kai/internal/snapshot"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/dirio"
+	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/module"
+	"github.com/kaicontext/kai-engine/snapshot"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // setupSelectionFixture creates two directory snapshots (base and head),

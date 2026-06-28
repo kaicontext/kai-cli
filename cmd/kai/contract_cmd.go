@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 
 	"github.com/spf13/cobra"
 )

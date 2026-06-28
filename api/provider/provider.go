@@ -16,7 +16,7 @@ package provider
 // with the engine. Adding a symbol is a deliberate API decision;
 // the check-tui-imports gate forces this conversation explicitly.
 
-import engineprovider "kai/internal/agent/provider"
+import engineprovider "github.com/kaicontext/kai-engine/provider"
 
 // ─── Core types ──────────────────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"kai/internal/ref"
+	"github.com/kaicontext/kai-engine/ref"
 )
 
 // TestWorkspaceRefSet pins the ref contract that lets a workspace cross the

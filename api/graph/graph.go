@@ -16,7 +16,7 @@ package graph
 // backend, this file is where the interface would land — bounded
 // to exactly what the TUI calls, not the full *enginegraph.DB surface.
 
-import enginegraph "kai/internal/graph"
+import enginegraph "github.com/kaicontext/kai-engine/graph"
 
 // DB is the kai semantic-graph database handle. The TUI receives
 // one from the kai command's startup wiring (constructed via
