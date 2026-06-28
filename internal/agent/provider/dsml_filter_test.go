@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // feedAll drives a dsmlFilter with the given chunks, returning the

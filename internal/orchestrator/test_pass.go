@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"kai/internal/agent"
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // testConvention captures everything the test-pass agent needs about

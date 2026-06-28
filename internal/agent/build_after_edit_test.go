@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // setupGoWorkspace creates a tiny Go module with one file and returns

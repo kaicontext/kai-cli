@@ -26,7 +26,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // Store is the minimal SQLite handle the session layer needs. The

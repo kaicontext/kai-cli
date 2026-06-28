@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 func TestRejectPrematureCheckpoints_RewritesOnFail(t *testing.T) {

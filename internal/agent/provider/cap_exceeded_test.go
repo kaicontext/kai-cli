@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // TestKailab_CapExceededIsNotRetried pins the most important

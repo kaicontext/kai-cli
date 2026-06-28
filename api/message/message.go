@@ -1,7 +1,7 @@
 // Package message is the TUI's re-export of kai-cli/internal/agent/message.
 package message
 
-import engine "kai/internal/agent/message"
+import engine "github.com/kaicontext/kai-engine/message"
 
 type Message = engine.Message
 type ContentPart = engine.ContentPart

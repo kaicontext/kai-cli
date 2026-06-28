@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
 	"kai/internal/projects"
 	"kai/internal/safetygate"

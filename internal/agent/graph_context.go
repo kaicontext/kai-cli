@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/graph"
 	"kai/internal/projects"
 )

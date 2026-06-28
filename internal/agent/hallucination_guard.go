@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // formatHallucinationNudge plugs the offending filename(s) into the

@@ -9,7 +9,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // dbAdapter wraps *sql.DB to satisfy the Store interface (which is

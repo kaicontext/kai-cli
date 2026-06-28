@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
 )
 

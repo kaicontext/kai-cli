@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // The dangle guard prevents a coding-mode agent from "explaining the

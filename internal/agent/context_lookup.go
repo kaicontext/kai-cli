@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/session"
 	"kai/internal/agent/tools"
 )

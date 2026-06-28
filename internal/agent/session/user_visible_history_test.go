@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // TestUserVisibleHistory_DropsSystemAndSummarizesToolClusters pins

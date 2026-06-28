@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // build_after_edit.go: per-edit semantic correctness check. After

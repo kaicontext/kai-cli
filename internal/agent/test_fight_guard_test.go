@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 func bashCall(id, cmd string) message.ToolCall {

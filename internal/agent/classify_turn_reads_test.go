@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // viewCall constructs a view tool call with the JSON input shape

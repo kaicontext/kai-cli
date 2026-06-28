@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // absenceGuardNudge is the user-role message injected into the

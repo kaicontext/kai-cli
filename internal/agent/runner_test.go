@@ -14,7 +14,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
 	"kai/internal/agent/session"
 	"kai/internal/agent/tools"

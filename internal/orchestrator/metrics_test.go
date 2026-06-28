@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"kai/internal/agent"
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // TestRecordInjectionMetric_WritesJSONL covers the happy path: a

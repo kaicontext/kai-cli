@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // TestAnthropic_SendHappyPath confirms the direct provider sets the

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 func TestPerTurnReadCap_FirstNDispatch_RestBlocked(t *testing.T) {

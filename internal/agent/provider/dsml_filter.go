@@ -3,7 +3,7 @@ package provider
 import (
 	"strings"
 
-	"kai/internal/agent/message"
+	"github.com/kaicontext/kai-engine/message"
 )
 
 // DeepSeek-V4-Pro routes some tool-call attempts through the *content*
