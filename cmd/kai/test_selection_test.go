@@ -12,7 +12,7 @@ import (
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/module"
 	"kai/internal/snapshot"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // setupSelectionFixture creates two directory snapshots (base and head),

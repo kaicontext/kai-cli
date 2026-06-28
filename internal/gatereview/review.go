@@ -8,7 +8,7 @@ import (
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // Recommendation is the gate reviewer's terminal verdict. APPROVE and

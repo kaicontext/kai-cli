@@ -1,7 +1,7 @@
 // Package session is the TUI's re-export of kai-cli/internal/agent/session.
 package session
 
-import engine "kai/internal/agent/session"
+import engine "github.com/kaicontext/kai-engine/session"
 
 type Store = engine.Store
 

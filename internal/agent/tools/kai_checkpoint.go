@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"kai/internal/authorship"
+	"github.com/kaicontext/kai-engine/authorship"
 )
 
 // kaiCheckpointTool records per-edit authorship so `kai blame` can

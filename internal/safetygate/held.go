@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // HeldStore is the subset of *graph.DB needed to enumerate held

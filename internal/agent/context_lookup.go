@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/session"
+	"github.com/kaicontext/kai-engine/session"
 	"kai/internal/agent/tools"
 )
 

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kai/internal/authorship"
+	"github.com/kaicontext/kai-engine/authorship"
 	"kai/pkg/synclog"
 )
 

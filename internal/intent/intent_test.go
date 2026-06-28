@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 func setupTestDB(t *testing.T) (*graph.DB, func()) {

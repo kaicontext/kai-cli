@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"kai/internal/safetygate"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 	"kai/internal/workspace"
 )
 

@@ -18,7 +18,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/kaicontext/kai-core/cas"
-	"kai/internal/kaipath"
+	"github.com/kaicontext/kai-engine/kaipath"
 )
 
 // DefaultServer is the production Kailab server URL.

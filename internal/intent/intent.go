@@ -7,7 +7,7 @@ import (
 
 	"kai/internal/classify"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 
 	coreintent "github.com/kaicontext/kai-core/intent"
 )

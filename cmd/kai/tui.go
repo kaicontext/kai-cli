@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"kai/internal/agent/provider"
-	"kai/internal/agent/session"
+	"github.com/kaicontext/kai-engine/session"
 	"kai/internal/agentprompt"
 	"kai/internal/config"
 	"github.com/kaicontext/kai-engine/graph"

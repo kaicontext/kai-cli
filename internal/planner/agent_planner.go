@@ -15,10 +15,10 @@ import (
 	"kai/internal/agent"
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
-	"kai/internal/agent/session"
+	"github.com/kaicontext/kai-engine/session"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
-	"kai/internal/promptenv"
+	"github.com/kaicontext/kai-engine/promptenv"
 	"kai/internal/safetygate"
 	"kai/internal/tasksmd"
 )

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/authorship"
+	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
 )
 

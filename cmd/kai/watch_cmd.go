@@ -14,9 +14,9 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 	"kai/internal/dirio"
-	"kai/internal/ignore"
+	"github.com/kaicontext/kai-engine/ignore"
 	"kai/internal/verify"
 )
 

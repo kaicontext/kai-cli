@@ -16,7 +16,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/snapshot"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // HeldSnapshotDiff returns the unified line-level diff between a held

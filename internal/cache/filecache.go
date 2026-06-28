@@ -8,8 +8,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"kai/internal/kaipath"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/kaipath"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // FileCache caches file digests keyed by (path, size, mtime).

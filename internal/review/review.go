@@ -8,7 +8,7 @@ import (
 	"sort"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // State represents the state of a review.

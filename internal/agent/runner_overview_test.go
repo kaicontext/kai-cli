@@ -9,7 +9,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
-	"kai/internal/agent/session"
+	"github.com/kaicontext/kai-engine/session"
 )
 
 // findOverview scans every TextContent across the request's

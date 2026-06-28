@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"golang.org/x/crypto/ssh"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // SignChangeSetPayloadSSH signs a ChangeSet payload (excluding signature fields).

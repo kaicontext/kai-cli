@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"kai/internal/ref"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // PublishOptions controls how an integrated result becomes team-visible.

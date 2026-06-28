@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 )
 
 // SemanticSystem is the system prompt for the intent-match judge. The bias is

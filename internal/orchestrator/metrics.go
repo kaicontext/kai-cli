@@ -9,7 +9,7 @@ import (
 
 	"kai/internal/agent"
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/kaipath"
+	"github.com/kaicontext/kai-engine/kaipath"
 )
 
 // Graph-context-injection measurement. One JSON line per agent run

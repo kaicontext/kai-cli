@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // Kind represents the type of a resolvable entity.

@@ -16,10 +16,10 @@ import (
 
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
-	"kai/internal/agent/session"
+	"github.com/kaicontext/kai-engine/session"
 	"kai/internal/agent/tools"
-	"kai/internal/authorship"
-	"kai/internal/memstat"
+	"github.com/kaicontext/kai-engine/authorship"
+	"github.com/kaicontext/kai-engine/memstat"
 	"kai/internal/projects"
 	"kai/internal/runlog"
 	"kai/internal/safetygate"

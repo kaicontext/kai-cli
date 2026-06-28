@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 )
 
 // ReviewResult is the second agent's adversarial read of the diff. It is

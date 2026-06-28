@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // OutputFormat specifies how to format status output.

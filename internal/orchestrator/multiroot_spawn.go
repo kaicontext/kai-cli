@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"kai/internal/ignore"
+	"github.com/kaicontext/kai-engine/ignore"
 	"kai/internal/projects"
 )
 

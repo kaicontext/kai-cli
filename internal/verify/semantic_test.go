@@ -3,7 +3,7 @@ package verify
 import (
 	"testing"
 
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 )
 
 func TestParseSemantic(t *testing.T) {

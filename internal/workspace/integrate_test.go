@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // --- Integrate: fast-forward ---

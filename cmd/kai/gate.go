@@ -13,14 +13,14 @@ import (
 
 	"kai/internal/agent"
 	"kai/internal/agent/provider"
-	"kai/internal/agent/session"
+	"github.com/kaicontext/kai-engine/session"
 	"kai/internal/config"
 	"kai/internal/gatereview"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 	"kai/internal/remote"
 	"kai/internal/safetygate"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 	"kai/internal/workspace"
 )
 

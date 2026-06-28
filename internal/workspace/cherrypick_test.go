@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 func TestCherryPickAppliesChangeSet(t *testing.T) {

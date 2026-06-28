@@ -14,7 +14,7 @@ import (
 	"lukechampine.com/blake3"
 
 	"kai/internal/filesource"
-	"kai/internal/ignore"
+	"github.com/kaicontext/kai-engine/ignore"
 )
 
 // DirectorySource reads files from a filesystem directory.

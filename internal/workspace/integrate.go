@@ -9,7 +9,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/safetygate"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // IntegrateOptions controls how a workspace is integrated. The zero

@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"kai/internal/autofix"
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 	"kai/internal/gitio"
 	"kai/internal/orchestrator"
 	"kai/internal/planner"

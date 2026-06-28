@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"kai/internal/kaipath"
+	"github.com/kaicontext/kai-engine/kaipath"
 )
 
 // CheckContainerInvariant verifies that root doesn't claim to be both

@@ -8,7 +8,7 @@ import (
 	"kai/internal/filesource"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/snapshot"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // memSource is a tiny in-memory FileSource for tests — a fixed set of files

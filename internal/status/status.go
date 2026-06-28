@@ -11,7 +11,7 @@ import (
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/ref"
 	"kai/internal/snapshot"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // Result contains the results of comparing working directory to a baseline.

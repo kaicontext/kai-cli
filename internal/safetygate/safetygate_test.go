@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // fakeGraph is an in-memory Grapher: a path → callers map for inbound

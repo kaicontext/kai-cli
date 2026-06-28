@@ -3,7 +3,7 @@ package diff
 
 import (
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // FromChangeSet extracts a SemanticDiff from changeset graph data.

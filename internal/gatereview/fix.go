@@ -14,7 +14,7 @@ import (
 	"kai/internal/ref"
 	"kai/internal/safetygate"
 	"kai/internal/snapshot"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 	"kai/internal/workspace"
 )
 

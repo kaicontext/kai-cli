@@ -38,7 +38,7 @@ import (
 
 	"kai/internal/agent/provider"
 	"kai/internal/ai"
-	"kai/internal/authorship"
+	"github.com/kaicontext/kai-engine/authorship"
 	"kai/internal/classify"
 	"kai/internal/config"
 	semanticdiff "kai/internal/diff"
@@ -48,8 +48,8 @@ import (
 	"kai/internal/gitio"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/intent"
-	"kai/internal/kaipath"
-	"kai/internal/memstat"
+	"github.com/kaicontext/kai-engine/kaipath"
+	"github.com/kaicontext/kai-engine/memstat"
 	"kai/internal/module"
 	"kai/internal/parse"
 	"kai/internal/projects"
@@ -61,7 +61,7 @@ import (
 	"kai/internal/status"
 	"kai/internal/telemetry"
 	tuierrors "kai/internal/tui/errors"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 	"kai/internal/workspace"
 	spawnpkg "kai/pkg/spawn"
 )

@@ -11,7 +11,7 @@ import (
 
 	"kai/internal/agent"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/kaipath"
+	"github.com/kaicontext/kai-engine/kaipath"
 	"kai/internal/snapshot"
 )
 

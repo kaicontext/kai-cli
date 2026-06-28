@@ -16,7 +16,7 @@ import (
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/module"
 	"kai/internal/parse"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // captureTimingEnabled gates per-phase timing prints inside

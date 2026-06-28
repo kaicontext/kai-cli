@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"kai/internal/authorship"
+	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/projects"
 )

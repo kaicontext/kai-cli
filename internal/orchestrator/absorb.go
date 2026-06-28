@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"kai/internal/ignore"
+	"github.com/kaicontext/kai-engine/ignore"
 )
 
 // absorbSpawnIntoMain copies the agent's edits from a spawn dir into

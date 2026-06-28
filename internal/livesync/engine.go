@@ -29,7 +29,7 @@ import (
 
 	"github.com/kaicontext/kai-core/crdt"
 	"github.com/kaicontext/kai-core/merge"
-	"kai/internal/authorship"
+	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/ref"
 	"kai/internal/remote"

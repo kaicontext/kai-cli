@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 	"kai/internal/verify"
 )
 

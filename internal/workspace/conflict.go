@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // ConflictState represents pending conflicts for a workspace integration.

@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"kai/internal/ref"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // ApproveHeld advances every non-ws.* ref currently pointing at the

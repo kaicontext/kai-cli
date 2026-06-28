@@ -10,7 +10,7 @@ import (
 	"kai/internal/module"
 	"kai/internal/signing"
 	"kai/internal/snapshot"
-	"kai/internal/util"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 // StageResult contains the result of staging changes.

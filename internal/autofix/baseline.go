@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"kai/internal/contract"
+	"github.com/kaicontext/kai-engine/contract"
 )
 
 // failRe matches Go's two failure shapes in test output:

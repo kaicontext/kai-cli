@@ -14,7 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kai/internal/authorship"
+	"github.com/kaicontext/kai-engine/authorship"
 	"kai/internal/livesync"
 	"kai/internal/ref"
 	"kai/internal/remote"

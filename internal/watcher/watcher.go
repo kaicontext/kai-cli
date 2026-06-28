@@ -19,8 +19,8 @@ import (
 
 	"kai/internal/dirio"
 	"github.com/kaicontext/kai-engine/graph"
-	"kai/internal/ignore"
-	"kai/internal/kaipath"
+	"github.com/kaicontext/kai-engine/ignore"
+	"github.com/kaicontext/kai-engine/kaipath"
 	"kai/internal/snapshot"
 	"github.com/kaicontext/kai-core/parse"
 )
