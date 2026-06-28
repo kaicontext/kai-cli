@@ -17,7 +17,7 @@ import (
 	"github.com/kaicontext/kai-engine/contract"
 	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/ignore"
-	"kai/internal/verify"
+	"github.com/kaicontext/kai-engine/verify"
 )
 
 const (

@@ -15,7 +15,7 @@ import (
 	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/session"
 	"kai/internal/config"
-	"kai/internal/gatereview"
+	"github.com/kaicontext/kai-engine/gatereview"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/remote"

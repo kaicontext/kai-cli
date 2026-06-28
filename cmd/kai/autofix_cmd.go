@@ -16,7 +16,7 @@ import (
 	"kai/internal/gitio"
 	"github.com/kaicontext/kai-engine/orchestrator"
 	"github.com/kaicontext/kai-engine/planner"
-	"kai/internal/verify"
+	"github.com/kaicontext/kai-engine/verify"
 )
 
 var (

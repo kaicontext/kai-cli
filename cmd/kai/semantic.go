@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/contract"
-	"kai/internal/verify"
+	"github.com/kaicontext/kai-engine/verify"
 )
 
 const maxSemanticDiffBytes = 60 * 1024
