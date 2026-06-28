@@ -17,7 +17,7 @@ import (
 	"github.com/kaicontext/kai-engine/message"
 	"kai/internal/agent/provider"
 	"github.com/kaicontext/kai-engine/session"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/memstat"
 	"github.com/kaicontext/kai-engine/projects"

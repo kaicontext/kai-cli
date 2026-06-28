@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // TestKailab_StreamingRoundTrip drives a fake kailab server that

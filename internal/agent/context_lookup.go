@@ -6,7 +6,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/session"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // Graph-powered context injection — runner-side wiring. When

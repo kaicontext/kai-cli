@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // TestOpenAI_SendHappyPath verifies the request body is in

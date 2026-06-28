@@ -17,7 +17,7 @@ require (
 	github.com/kaicontext/kai-core v0.1.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/posthog/posthog-go v1.12.0
-	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3
+	github.com/sergi/go-diff v1.4.0
 	github.com/spf13/cobra v1.10.1
 	golang.org/x/crypto v0.37.0
 	golang.org/x/sys v0.44.0
@@ -55,7 +55,7 @@ require (
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect

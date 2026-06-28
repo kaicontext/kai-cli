@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // TestMessageVocabulary is a sanity check that the message package

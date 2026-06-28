@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // Kailab routes Anthropic Messages API calls through the kai-server

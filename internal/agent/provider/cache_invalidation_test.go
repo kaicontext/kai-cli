@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // TestCacheStability_SystemPromptIsByteStable is the regression

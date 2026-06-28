@@ -3,7 +3,7 @@ package agent
 import (
 	"fmt"
 
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // convergence.go: mode-aware convergence policy for the runner. The

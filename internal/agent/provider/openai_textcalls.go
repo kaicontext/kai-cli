@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // Local-model tool-call text fallback.

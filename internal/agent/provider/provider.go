@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // RequestPhase is a discrete state in the lifecycle of a single

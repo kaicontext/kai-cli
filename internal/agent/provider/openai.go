@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 // OpenAI talks to any OpenAI-compatible chat.completions endpoint.

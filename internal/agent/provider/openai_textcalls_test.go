@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/tools"
+	"github.com/kaicontext/kai-engine/tools"
 )
 
 func toolset(names ...string) []tools.ToolInfo {
