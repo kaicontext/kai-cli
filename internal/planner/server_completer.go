@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 	"kai/internal/ai"
 )
 

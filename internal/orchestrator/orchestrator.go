@@ -40,7 +40,7 @@ import (
 
 	"kai/internal/agent"
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/session"
 	"github.com/kaicontext/kai-engine/tools"
 	"kai/internal/agentprompt"

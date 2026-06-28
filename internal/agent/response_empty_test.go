@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 )
 
 // TestResponseIsEmpty_NoParts confirms the canonical empty case:

@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"kai/internal/agent"
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/session"
 	"kai/internal/config"
 	"kai/internal/gatereview"

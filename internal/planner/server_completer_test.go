@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 	"kai/internal/ai"
 )
 

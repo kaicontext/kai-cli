@@ -36,7 +36,7 @@ import (
 	"github.com/kaicontext/kai-core/diff"
 	"github.com/kaicontext/kai-core/merge"
 
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 	"kai/internal/ai"
 	"github.com/kaicontext/kai-engine/authorship"
 	"kai/internal/classify"

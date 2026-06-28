@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 )
 
 // compactThreshold is the share of the model's context window after

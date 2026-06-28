@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 	"kai/internal/agentprompt"
 	"github.com/kaicontext/kai-engine/graph"
 	"kai/internal/planner"

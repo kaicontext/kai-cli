@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/session"
 )
 

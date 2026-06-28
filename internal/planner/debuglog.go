@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/message"
-	"kai/internal/agent/provider"
+	"github.com/kaicontext/kai-engine/provider"
 )
 
 // DebugLog writes structured per-event entries about a planner run
