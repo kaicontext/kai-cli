@@ -17784,8 +17784,8 @@ func printDailyCapHint(serverURL string) {
 	if err != nil {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "  Daily kailab usage cap: $%.2f (resets midnight UTC)\n",
-		float64(u.DailyCapCents)/100)
+	fmt.Fprintf(os.Stderr, "  kailab usage caps: $%.2f/day · $%.2f/month\n",
+		float64(u.DailyCapCents)/100, float64(u.MonthlyCapCents)/100)
 	fmt.Fprintf(os.Stderr, "  Run `kai auth status` to see current usage.\n")
 }
 
@@ -17867,6 +17867,8 @@ func printLLMProviderStatus() {
 				if u, uerr := ac.GetDailyUsage(tok); uerr == nil {
 					fmt.Printf("  Daily:   $%.2f / $%.2f used today (resets midnight UTC)\n",
 						float64(u.DailyCostCents)/100, float64(u.DailyCapCents)/100)
+					fmt.Printf("  Month:   $%.2f / $%.2f used (resets 1st UTC)\n",
+						float64(u.MonthlyCostCents)/100, float64(u.MonthlyCapCents)/100)
 				}
 			}
 		}
@@ -17922,26 +17924,36 @@ func runUsage(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Printf("  Org:     %s\n", client.Tenant)
 	fmt.Printf("  Plan:    %s\n", usage.Tier)
-	fmt.Printf("  Period:  %s\n", usage.Period)
+	if usage.Tier == "pro" {
+		fmt.Printf("  Seats:   %d / %d assigned\n", usage.SeatsAssigned, usage.SeatsPurchased)
+	}
 	fmt.Println()
 
-	pct := 0
-	if usage.CommitsLimit > 0 {
-		pct = usage.CommitsUsed * 100 / usage.CommitsLimit
+	// The metered resource is the per-user LLM spend cap — both a daily
+	// and a monthly limit; a request is blocked when either is reached.
+	dPct := 0
+	if usage.DailyCapCents > 0 {
+		dPct = usage.DailyCostCents * 100 / usage.DailyCapCents
 	}
+	seatNote := "free limit"
+	if usage.HasSeat {
+		seatNote = "Pro seat"
+	}
+	fmt.Printf("  Today:   $%.2f / $%.2f  %s  %d%%  (%s, resets midnight UTC)\n",
+		float64(usage.DailyCostCents)/100, float64(usage.DailyCapCents)/100,
+		renderUsageBar(dPct, 30), dPct, seatNote)
 
-	if usage.CommitsLimit < 0 {
-		// Pro = unlimited commits. Render the count, omit the
-		// progress bar (no denominator to compare against).
-		fmt.Printf("  Commits: %d (unlimited on Pro)\n", usage.CommitsUsed)
-	} else {
-		bar := renderUsageBar(pct, 30)
-		fmt.Printf("  Commits: %d / %d  %s  %d%%\n", usage.CommitsUsed, usage.CommitsLimit, bar, pct)
+	mPct := 0
+	if usage.MonthlyCapCents > 0 {
+		mPct = usage.MonthlyCostCents * 100 / usage.MonthlyCapCents
 	}
+	fmt.Printf("  Month:   $%.2f / $%.2f  %s  %d%%  (resets 1st UTC)\n",
+		float64(usage.MonthlyCostCents)/100, float64(usage.MonthlyCapCents)/100,
+		renderUsageBar(mPct, 30), mPct)
 
 	if usage.UpgradeURL != nil {
 		fmt.Println()
-		fmt.Printf("  Upgrade to Pro: %s\n", *usage.UpgradeURL)
+		fmt.Printf("  Manage billing & seats: %s\n", *usage.UpgradeURL)
 	}
 
 	fmt.Println()
