@@ -476,6 +476,19 @@ func materializeFirst(srcRepo, dst, snapHex, wsName, agentName string, rem *remo
 	if err := runIn(dst, "init", "--force"); err != nil {
 		return fmt.Errorf("kai init: %w", err)
 	}
+	// Disconnect --sync none spawns from live sync. Otherwise step 6
+	// (`kai ws checkout`) starts an autosync daemon that subscribes the spawn
+	// workspace to the repo's shared sync channel and pulls in edits from OTHER
+	// sessions (peers) — silently injecting unrelated changes into the spawn's
+	// files (e.g. a concurrent/prior run's fix to a different file landing in
+	// this spawn). That is the exact contamination that leaked one issue's fix
+	// into another's autofix PR. The marker is the same opt-out `kai live off`
+	// writes; startAutoSync honors it (see livesync_daemon.go).
+	if spawnSync == "none" {
+		if err := os.WriteFile(autoSyncOffPath(kaipath.Resolve(dst)), nil, 0644); err != nil {
+			return fmt.Errorf("disabling autosync for --sync none spawn: %w", err)
+		}
+	}
 	// 3. Copy remote config from source if available.
 	//
 	// Two reasons the source file may not exist even when `rem`
