@@ -13,53 +13,75 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
-	"github.com/kaicontext/kai-engine/provider"
-	"github.com/kaicontext/kai-engine/session"
 	"github.com/kaicontext/kai-engine/agentprompt"
-	"kai/internal/config"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/orchestrator"
 	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/projects"
+	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/safetygate"
+	"github.com/kaicontext/kai-engine/session"
+	"kai/internal/config"
 	"kai/internal/tui"
 	"kai/internal/tui/fixxy"
 	"kai/internal/tui/views"
 )
 
-// codeCmd is `kai code` — the unified entrypoint to the kai coding
-// experience (kit-in-kai Phase 1). It is a thin passthrough: it resolves
-// (and, on first use, self-installs) the managed `kit` binary and hands
-// off to it, forwarding every trailing arg/flag verbatim. DisableFlagParsing
-// keeps cobra from intercepting flags meant for kit. The command name
-// `kai code` is permanent; only the implementation changes later (Phase 4
-// runs the experience in-process instead of shelling out). RunE lives in
-// code.go; the installer/exec logic lives in internal/kitlauncher.
+// codeCmd is `kai code` — the in-process entrypoint to the kai coding
+// experience. It runs the Bubble Tea TUI (and the headless `-p`
+// planner+execute cycle) natively in this process: the agent loop, TUI,
+// drive slice-gating, and gate review all run here, importing the private
+// kai-engine the same way the rest of kai does.
 //
-// NOTE: runCodeTUI / runCodeHeadless / buildPlannerServices below (and the
-// whole of headless.go) are the *previous* native Bubble Tea TUI that
-// `kai code` used to point at. As of Phase 1 they are dead, vestigial code:
-// no longer wired to any command, kept intact only so Phase 4/5 can revive
-// the experience in-process or delete it. Do not mistake them for live
-// behavior — `kai code` now goes through code.go → kitlauncher → kit.
+// DisableFlagParsing stays on so unknown/kit-style flags don't abort the
+// launch; runCode parses the registered `kai code` flags itself before
+// calling runCodeTUI. Flags are registered in init() so they appear in
+// `kai code --help`.
 var codeCmd = &cobra.Command{
-	Use:   "code [-- kit args…]",
-	Short: "Launch the kai coding experience (installs kit on first use)",
-	Long: `Launch the interactive kai coding experience.
+	Use:   "code [flags]",
+	Short: "Launch the kai coding experience (in-process TUI + agent)",
+	Long: `Launch the interactive kai coding experience in-process.
 
-kai code resolves the managed kit binary — downloading it to
-~/.kai/bin on first use — then hands off to it. Every argument and
-flag after "code" is forwarded to kit unchanged, so:
+Opens the Bubble Tea front-end — REPL, live-sync pane, and safety-gate
+pane — and runs the agent, planner, drive slice-gating, and gate review
+natively in this process. If stdin or stdout isn't a terminal (piped or
+redirected), prints this help instead of launching the TUI.
 
-    kai code --some-kit-flag value
+  -p, --prompt string    Headless: run one planner+execute cycle, then exit
+      --session string   Resume a prior agent session by id
+      --auto             Hands-off: auto-confirm the plan and file/bash actions
+      --planner-model    Override the planner model for this run
+      --agent-model      Override the agent (executor) model for this run
 
-behaves exactly like running kit directly. Ctrl+C, terminal resize,
-and exit codes all behave as they do under kit.`,
-	// Forward everything after `code` to kit verbatim; do not let cobra
-	// parse flags meant for the child.
+Run 'kai --help' to see all available kai commands.`,
+	// DisableFlagParsing: the passthrough fallback forwards args to kit
+	// verbatim; the in-process path parses the registered flags manually.
 	DisableFlagParsing: true,
 	RunE:               runCode,
+}
+
+// init registers `kai code`'s flags. They bind to the package vars the
+// in-process entry (runCodeTUI / buildPlannerServices) reads. Because
+// codeCmd sets DisableFlagParsing, cobra won't auto-parse them — runCode
+// parses the raw args itself on the in-process path — but registering them
+// here makes them show up in `kai code --help`.
+func init() {
+	f := codeCmd.Flags()
+	f.StringVarP(&headlessPrompt, "prompt", "p", "", "Headless: run one planner+execute cycle for this task, then exit")
+	f.StringVar(&resumeSessionID, "session", "", "Resume a prior agent session by id")
+	f.StringVar(&PlannerModelFlag, "planner-model", "", "Override the planner model for this run")
+	f.StringVar(&AgentModelFlag, "agent-model", "", "Override the agent (executor) model for this run")
+	f.BoolVar(&autoFlag, "auto", false, "Hands-off: auto-confirm the plan and file/bash actions")
+	f.IntVar(&fixxyUpper, "fixxy-upper", 0, "secret dev-loop intervention level (0=off)")
+	_ = f.MarkHidden("fixxy-upper")
+
+	// `kai code -h` reproduces the retired `kit -h`: the full grouped menu of
+	// every kai subcommand, not just code's own flags. printCodeHelp renders it
+	// from the root command; setting it here routes every help path (the -h
+	// shortcut in runCode, `kai help code`, and runCodeTUI's non-TTY fallback)
+	// through the same output.
+	codeCmd.SetHelpFunc(printCodeHelp)
 }
 
 // fixxyUpper is the activation level for the secret fixxy-upper
@@ -88,8 +110,8 @@ var autoFlag bool
 // KAI_AUTO win when set; otherwise the project's autonomy config
 // applies.
 func handsOffEnabled(cfg config.Config) bool {
-	if autoFlag {
-		return true
+	if autoFlag || yoloEnabled(cfg) {
+		return true // yolo is a hands_off superset
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("KAI_AUTO"))) {
 	case "1", "true", "yes", "on":
@@ -98,6 +120,20 @@ func handsOffEnabled(cfg config.Config) bool {
 		return false
 	}
 	return cfg.HandsOff()
+}
+
+// yoloEnabled resolves whether the run is fully autonomous (yolo) —
+// hands_off PLUS auto-resolving the gate. KAI_YOLO env overrides the
+// config's autonomy: yolo. yolo implies hands_off (handsOffEnabled is
+// also true), so the auto-plan / auto-edit behavior comes for free.
+func yoloEnabled(cfg config.Config) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("KAI_YOLO"))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return cfg.Yolo()
 }
 
 // consultModelFromEnv returns the model id kai_consult uses when an
@@ -140,6 +176,23 @@ func modelFromEnv(envVar, fallback string) string {
 	return fallback
 }
 
+// resolveDeployedModels returns the model ids the reviewed workspace
+// serves, for the gate review's config cross-reference. Sourced from
+// review.deployed_models in config.yaml and extended by the
+// KAI_DEPLOYED_MODELS env var (comma-separated). Empty when neither is
+// set — the cross-reference then only checks models the code references.
+func resolveDeployedModels(cfg config.Config) []string {
+	models := append([]string(nil), cfg.Review.DeployedModels...)
+	if env := strings.TrimSpace(os.Getenv("KAI_DEPLOYED_MODELS")); env != "" {
+		for _, m := range strings.Split(env, ",") {
+			if m = strings.TrimSpace(m); m != "" {
+				models = append(models, m)
+			}
+		}
+	}
+	return models
+}
+
 // resumeSessionID, when non-empty, tells the TUI to resume a prior
 // session by id (set via `kai code --session <id>`). The agent
 // runner already supports session resume via Options.SessionID;
@@ -148,11 +201,10 @@ func modelFromEnv(envVar, fallback string) string {
 // transcript on the first turn after resume.
 var resumeSessionID string
 
-// runCodeTUI was codeCmd.RunE before kit-in-kai Phase 1 — it is the
-// native Bubble Tea TUI `kai code` used to enter. It is now dead code:
-// codeCmd.RunE points at runCode (the kit passthrough, in code.go). Kept
-// per the note at the top of this file so Phase 4/5 can revive or delete
-// it. See codeCmd for the live behavior.
+// runCodeTUI is the in-process entry for `kai code` (kit-in-kai Phase 4):
+// it enters the native Bubble Tea TUI. runCode (code.go) calls it by
+// default — after parsing the code flags — unless KAI_CODE_PASSTHROUGH
+// selected the legacy kit-binary fallback.
 //
 // Refuses in the following cases:
 //   - stdin or stdout is not a terminal (piped or redirected)
@@ -514,18 +566,19 @@ func buildPlannerServices(db *graph.DB, kaiDir, workDir string, liveSync *liveSy
 		reviewModel = modelFromEnv("KAI_REVIEW_MODEL", cfg.Review.Model)
 		agentModel = modelFromEnv("KAI_AGENT_MODEL", cfg.Agent.Model)
 		plannerFinalizeModel = modelFromEnv("KAI_PLANNER_FINALIZE_MODEL", "")
-	}
-
-	// Smart default: when the planner model is reasoning-class
-	// (DeepSeek-V4-Pro, Qwen3, …) and the user hasn't overridden the
-	// finalize model, route the single-shot JSON finalize turn to a
-	// fast non-reasoning writer (GLM-5.1). A reasoning model spends its
-	// token budget on the hidden <think> step and returns an EMPTY
-	// completion on that schema-constrained turn, triggering
-	// MaxTokens-bumped retries. Mirrors the runner's empty-completion
-	// fallback chain.
-	if plannerFinalizeModel == "" && provider.IsReasoningModel(plannerModel) {
-		plannerFinalizeModel = "z-ai/glm-5.1"
+		// Smart default: when the planner model is reasoning-class
+		// (DeepSeek-V4-Pro, Qwen3, …) and the user hasn't overridden the
+		// finalize model, route the single-shot JSON finalize turn to a
+		// fast non-reasoning writer (GLM-5.1). A reasoning model spends its
+		// token budget on the hidden <think> step and returns an EMPTY
+		// completion on that schema-constrained turn, triggering
+		// MaxTokens-bumped retries. Mirrors the runner's empty-completion
+		// fallback chain. Scoped to kailab: BYOM providers (anthropic/
+		// openai) can't serve the glm finalize id, so they keep their
+		// single resolved model.
+		if plannerFinalizeModel == "" && provider.IsReasoningModel(plannerModel) {
+			plannerFinalizeModel = "z-ai/glm-5.1"
+		}
 	}
 
 	// The planner's own LLM completer (single-shot JSON) currently
@@ -551,7 +604,9 @@ func buildPlannerServices(db *graph.DB, kaiDir, workDir string, liveSync *liveSy
 		PlannerFinalizeModel: plannerFinalizeModel,
 		ChatModel:            chatModel,
 		ReviewModel:          reviewModel,
+		DeployedModels:       resolveDeployedModels(cfg),
 		HandsOff:             handsOffEnabled(cfg),
+		Yolo:                 yoloEnabled(cfg),
 		PlannerCfg: planner.Config{
 			Model:     cfg.Planner.Model,
 			MaxAgents: cfg.Planner.MaxAgents,

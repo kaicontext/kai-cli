@@ -56,30 +56,39 @@ func refreshCount(t *testing.T, g Gate) int {
 	return len(msg.items)
 }
 
-// TestRefresh_ScopesToPrimaryProject is the regression test for the
-// multi-root gate-count bug: Refresh() must report only the PRIMARY
-// project's held integrations, not aggregate across the whole set. A
-// held item in a sibling project the user isn't in must not inflate
-// the count (it made the status bar say "1 held" while `/gate list`,
-// primary-scoped, showed nothing).
-func TestRefresh_ScopesToPrimaryProject(t *testing.T) {
+// TestRefresh_AggregatesAcrossWorkspace pins the 2026-06-11 fix: the
+// gate is workspace-wide, so Refresh() reports held integrations from
+// EVERY project, not just the primary. The old primary-only scope
+// silently hid sibling held work (`/gate` in kai/ showed "nothing held"
+// while kai-tui had 4). Each item also carries its project tag + a
+// manager bound to that project's DB so approve/reject hit the right
+// store.
+func TestRefresh_AggregatesAcrossWorkspace(t *testing.T) {
 	heldDB := gateTestDB(t, true)   // 1 held integration
 	emptyDB := gateTestDB(t, false) // 0 held
 
-	// Primary has nothing held; a sibling project does. The count
-	// must follow the primary — i.e. 0, not 1.
+	// Primary empty, sibling held → the sibling's held item now COUNTS
+	// (workspace-wide), and it's tagged with its project name.
 	primaryEmpty := &projects.Project{Path: "/ws/a", Name: "a", DB: emptyDB}
 	siblingHeld := &projects.Project{Path: "/ws/b", Name: "b", DB: heldDB}
 	g := Gate{set: projects.New("/ws", []*projects.Project{primaryEmpty, siblingHeld})}
-	if n := refreshCount(t, g); n != 0 {
-		t.Errorf("held count = %d, want 0 — Refresh aggregated a sibling project instead of scoping to primary", n)
+	cmd := g.Refresh()
+	msg := cmd().(GateRefreshedMsg)
+	if len(msg.items) != 1 {
+		t.Fatalf("held count = %d, want 1 — Refresh must aggregate sibling projects", len(msg.items))
+	}
+	if msg.items[0].project != "b" {
+		t.Errorf("held item project tag = %q, want %q (multi-root rows are tagged)", msg.items[0].project, "b")
+	}
+	if msg.items[0].mgr == nil {
+		t.Errorf("held item must carry a manager bound to its own project DB for approve/reject")
 	}
 
-	// Flip it: when the PRIMARY itself has the held item, it counts.
+	// Both projects holding → both count.
 	primaryHeld := &projects.Project{Path: "/ws/a", Name: "a", DB: heldDB}
-	siblingEmpty := &projects.Project{Path: "/ws/b", Name: "b", DB: emptyDB}
-	g = Gate{set: projects.New("/ws", []*projects.Project{primaryHeld, siblingEmpty})}
-	if n := refreshCount(t, g); n != 1 {
-		t.Errorf("held count = %d, want 1 — the primary project's held item should count", n)
+	siblingHeld2 := &projects.Project{Path: "/ws/b", Name: "b", DB: gateTestDB(t, true)}
+	g = Gate{set: projects.New("/ws", []*projects.Project{primaryHeld, siblingHeld2})}
+	if n := refreshCount(t, g); n != 2 {
+		t.Errorf("held count = %d, want 2 — both projects' held items should count", n)
 	}
 }

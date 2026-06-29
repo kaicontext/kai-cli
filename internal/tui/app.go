@@ -230,6 +230,18 @@ func Run(ctx context.Context, opts Options) error {
 					}
 				}
 			default:
+				// Only REAL file paths belong on syncCh (the Sync status
+				// segment / sync pane). A parenthesized pseudo-marker like
+				// "(thinking)" / "(connected)" is provider-STATE, not a
+				// file — and the switch above only special-cases
+				// "(assistant)" / "(tool)", so any OTHER "(…)" marker fell
+				// through to here and leaked in as "Sync: review-model-glm:
+				// (thinking)" (2026-06-11). Drop those; provider state has
+				// its own ChatActivity path. File paths never start with
+				// "(", so this never suppresses a real sync event.
+				if strings.HasPrefix(relPath, "(") {
+					return
+				}
 				select {
 				case syncCh <- views.SyncEvent{
 					Path: spawnName + ": " + relPath,
@@ -293,6 +305,19 @@ func Run(ctx context.Context, opts Options) error {
 	// agent is currently working. Tagged with spawn name when we have
 	// multiple agents in flight so it's clear which call the state
 	// refers to.
+	if opts.Planner != nil && opts.Planner.OrchestratorCfg.OnAgentTokenUsage == nil && chatCh != nil {
+		opts.Planner.OrchestratorCfg.OnAgentTokenUsage = func(spawnName string, tokensIn, tokensOut, tokensCached int, costUSD float64) {
+			select {
+			case chatCh <- views.ChatActivityEvent{
+				Kind:      "token_usage",
+				SpawnName: spawnName,
+				CostUSD:   costUSD,
+				When:       time.Now(),
+			}:
+			default:
+			}
+		}
+	}
 	if opts.Planner != nil && opts.Planner.OrchestratorCfg.OnAgentProviderState == nil && chatCh != nil {
 		opts.Planner.OrchestratorCfg.OnAgentProviderState = func(spawnName string, state provider.RequestState) {
 			select {
@@ -420,10 +445,17 @@ func Run(ctx context.Context, opts Options) error {
 	// a fixed canvas that repaints atomically. Committed
 	// turns now live in an in-program viewport (REPL.history)
 	// instead of native scrollback, scrollable via PgUp/PgDn
-	// or the mouse wheel. Tradeoff: native click-and-drag
-	// copy stops working under mouse capture; users can hold
-	// Option/Alt while dragging to bypass the capture in most
-	// terminals.
+	// or Shift+Up/Down.
+	//
+	// Mouse capture is intentionally NOT enabled. Turning on
+	// mouse tracking (WithMouseCellMotion) lets us route the
+	// scroll wheel to the history viewport, but it also makes
+	// the terminal swallow click-and-drag, so native text
+	// selection / copy stops working — the exact complaint
+	// reported 2026-06-25. We favor native selection (like
+	// Claude Code) over wheel-scroll here; the history
+	// viewport is still navigable with PgUp/PgDn and
+	// Shift+Up/Down.
 	// Redirect the standard logger off stderr for the lifetime of the
 	// alt-screen TUI. Bubble Tea owns the terminal; any stray
 	// log.Printf (e.g. the orchestrator's [ci-plan-preview] diagnostic,
@@ -444,7 +476,6 @@ func Run(ctx context.Context, opts Options) error {
 	p := tea.NewProgram(m,
 		tea.WithContext(ctx),
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	)
 	// Terminal-restore safety net. Bubble Tea normally restores the
 	// terminal on clean exit (alt-screen, raw mode, mouse tracking
@@ -655,6 +686,10 @@ func (m model) Init() tea.Cmd {
 		// Completed turns will accumulate above it as the session
 		// grows.
 		m.repl.Banner(),
+		// Once-per-second liveness re-render that keeps the elapsed
+		// timer advancing even if the bubbles spinner tick chain
+		// stalls mid-run. Self-perpetuating for the whole session.
+		views.Heartbeat(),
 	}
 	if m.syncCh != nil {
 		cmds = append(cmds, views.PumpEvents(m.syncCh))
@@ -732,6 +767,14 @@ func (m model) updateImpl(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// viewport. Routed before any view-specific
 		// dispatch so wheel-scrolling works regardless of
 		// which pane has keyboard focus.
+		//
+		// NOTE: mouse tracking is currently disabled at
+		// program start (no WithMouseCellMotion) so the
+		// terminal keeps native click-drag selection, so this
+		// case does not fire today. It is retained so re-
+		// enabling capture restores wheel-scroll with no other
+		// changes. History stays navigable via PgUp/PgDn and
+		// Shift+Up/Down below.
 		var c tea.Cmd
 		m.repl, c = m.repl.HandleScroll(msg)
 		return m, c

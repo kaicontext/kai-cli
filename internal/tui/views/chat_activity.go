@@ -70,7 +70,10 @@ type ChatActivityEvent struct {
 	Warning   string
 	Reply     chan bool
 
-	When time.Time
+	// CostUSD is the computed dollar cost for this turn's token usage,
+	// derived from the provider's pricing model.
+	CostUSD      float64   `json:"costUSD,omitempty"`
+	When         time.Time `json:"when"`
 }
 
 // ChatActivityMsg wraps a ChatActivityEvent for delivery via tea.Cmd.

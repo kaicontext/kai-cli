@@ -16,19 +16,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kai/api/agent"
-	"kai/api/message"
-	"kai/api/session"
 	"kai/api/agentprompt"
 	"kai/api/authorship"
 	"kai/api/graph"
-	"kai/api/provider"
+	"kai/api/message"
 	"kai/api/orchestrator"
 	"kai/api/planner"
+	"kai/api/projects"
 	"kai/api/promptenv"
+	"kai/api/provider"
+	"kai/api/safetygate"
+	"kai/api/session"
 	"kai/api/triage"
 	"kai/internal/tui/fixxy"
-	"kai/api/projects"
-	"kai/api/safetygate"
 )
 
 // HostCommandDoneMsg carries the result of a host-shell command kai
@@ -514,27 +514,8 @@ func trivialActionFastPath(prompt, workspace string) (cmd, label string) {
 	}
 	// Try the package.json scripts first — best signal because the
 	// project author has named the verb explicitly.
-	if data, err := os.ReadFile(filepath.Join(workspace, "package.json")); err == nil {
-		var pkg struct {
-			Scripts map[string]string `json:"scripts"`
-		}
-		if err := json.Unmarshal(data, &pkg); err == nil && len(pkg.Scripts) > 0 {
-			// Verb-to-script-name preference order.
-			preferences := map[string][]string{
-				"run":    {"dev", "start", "serve"},
-				"start":  {"start", "dev", "serve"},
-				"dev":    {"dev"},
-				"launch": {"dev", "start"},
-				"build":  {"build"},
-				"test":   {"test"},
-			}
-			candidates := preferences[verb]
-			for _, name := range candidates {
-				if _, ok := pkg.Scripts[name]; ok {
-					return "npm run " + name, "package.json: " + name
-				}
-			}
-		}
+	if cmd, label := npmScriptFor(workspace, "", verb); cmd != "" {
+		return cmd, label
 	}
 	// Cargo.toml — cargo run / cargo build / cargo test.
 	if _, err := os.Stat(filepath.Join(workspace, "Cargo.toml")); err == nil {
@@ -575,6 +556,62 @@ func trivialActionFastPath(prompt, workspace string) (cmd, label string) {
 					return "make " + verb, "Makefile: " + verb
 				}
 			}
+		}
+	}
+	// Monorepo: the root often holds only a workspace manifest (empty or
+	// no scripts) while the runnable package lives in a conventional
+	// sub-package — loom's root package.json is `"scripts": {}` and the
+	// electron app's dev/start scripts live in client/. For run-like
+	// verbs, search those sub-packages in order and fire on the first
+	// match. Far better than bouncing "which app?" when the project on
+	// disk plainly has one. (2026-06-07 loom dogfood: "run it" / "run the
+	// desktop app" both bounced because only the root was checked.)
+	if verb == "run" || verb == "start" || verb == "launch" || verb == "dev" {
+		for _, sub := range []string{"client", "app", "desktop", "frontend", "web", "renderer", "ui"} {
+			if cmd, label := npmScriptFor(workspace, sub, verb); cmd != "" {
+				return cmd, label
+			}
+		}
+	}
+	return "", ""
+}
+
+// npmScriptFor resolves an action verb to an `npm run <script>` command
+// for the package.json at workspace/sub (sub="" = the root). It returns
+// ("","") when there's no package.json, no scripts, or no script
+// matching the verb's preference order. For a sub-package the command is
+// `cd <sub> && npm run <script>` so it executes in that package (managed
+// processes run via bash -c, so the cd is honored).
+func npmScriptFor(workspace, sub, verb string) (cmd, label string) {
+	dir := workspace
+	if sub != "" {
+		dir = filepath.Join(workspace, sub)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return "", ""
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil || len(pkg.Scripts) == 0 {
+		return "", ""
+	}
+	// Verb-to-script-name preference order.
+	preferences := map[string][]string{
+		"run":    {"dev", "start", "serve"},
+		"start":  {"start", "dev", "serve"},
+		"dev":    {"dev"},
+		"launch": {"dev", "start"},
+		"build":  {"build"},
+		"test":   {"test"},
+	}
+	for _, name := range preferences[verb] {
+		if _, ok := pkg.Scripts[name]; ok {
+			if sub == "" {
+				return "npm run " + name, "package.json: " + name
+			}
+			return "cd " + sub + " && npm run " + name, sub + "/package.json: " + name
 		}
 	}
 	return "", ""
@@ -765,9 +802,9 @@ func formatTokens(in, out, cached int) string {
 // formatTokensSplit is the cache-aware variant. The cache
 // segment is adaptive:
 //
-//   ≥70% reused → quiet:  "cache: 87% reused"
-//   30-70%      → quiet:  "cache: 52% reused"
-//   <30%        → loud:   "⚠ cache: only 9% reused — mostly writing fresh ($0.61 above cached baseline)"
+//	≥70% reused → quiet:  "cache: 87% reused"
+//	30-70%      → quiet:  "cache: 52% reused"
+//	<30%        → loud:   "⚠ cache: only 9% reused — mostly writing fresh ($0.61 above cached baseline)"
 //
 // Rationale: when the cache is healthy, a one-line headline is
 // what users want — they don't need to stare at "162k new, 16k
@@ -822,7 +859,7 @@ func formatCacheBand(fresh, create, read int) string {
 
 	// Suppress the loud warning when caching simply isn't being
 	// reported. 2026-05-24 trace: a kai-desktop run on
-	// deepseek-ai/DeepSeek-V4-Pro showed "cache: 19% reused" in
+	// deepseek/deepseek-v4-pro showed "cache: 19% reused" in
 	// the trailer despite the model's underlying provider not
 	// emitting cache_read_input_tokens at all on the first turns
 	// of a fresh session. The warning was real (low number) but
@@ -866,10 +903,10 @@ func formatCacheBand(fresh, create, read int) string {
 // useful resolution for "is this run expensive?"
 func estimateCost(in, out, create, read int) float64 {
 	const (
-		inputPerM    = 3.0  // $/M tokens
-		outputPerM   = 15.0
-		createPerM   = 3.75
-		readPerM     = 0.30
+		inputPerM  = 3.0 // $/M tokens
+		outputPerM = 15.0
+		createPerM = 3.75
+		readPerM   = 0.30
 	)
 	cost := float64(in)*inputPerM/1_000_000 +
 		float64(out)*outputPerM/1_000_000 +
@@ -918,11 +955,12 @@ func formatCost(cost float64) string {
 // appearing). Surface as a third segment so the user can read
 // "how long until I saw something" vs "total turn time" at a
 // glance.
-func formatRunSummary(start, firstResponseAt time.Time, outputTokens int) string {
+// elapsed is the WORK time (wall-clock minus time blocked on the user);
+// start is kept only for the time-to-first-byte calc, which isn't paused.
+func formatRunSummary(elapsed time.Duration, start, firstResponseAt time.Time, outputTokens int) string {
 	if outputTokens <= 0 {
 		return ""
 	}
-	elapsed := time.Since(start)
 	if start.IsZero() {
 		elapsed = 0
 	}
@@ -1159,14 +1197,14 @@ func summarizeToolCall(name, inputJSON string) string {
 // the REPL in shell-out-only mode (every input goes to a cobra
 // subprocess), which is what tests want.
 type PlannerServices struct {
-	DB             *graph.DB
-	LLM            planner.Completer
-	GateConfig     safetygate.Config
-	PlannerCfg     planner.Config
+	DB              *graph.DB
+	LLM             planner.Completer
+	GateConfig      safetygate.Config
+	PlannerCfg      planner.Config
 	OrchestratorCfg orchestrator.Config
-	PromptCtx      agentprompt.Context
-	MainRepo       string
-	KaiDir         string
+	PromptCtx       agentprompt.Context
+	MainRepo        string
+	KaiDir          string
 
 	// Projects, when set, advertises a multi-root workspace to the
 	// chat agent: file tools route per-path, prompts mention every
@@ -1220,27 +1258,39 @@ type PlannerServices struct {
 	// Resolved once at startup by buildPlannerServices from config
 	// + KAI_*_MODEL env overrides. Empty falls back to the relevant
 	// config default at the call site.
-	ClassifierModel        string
-	PlannerModel           string
-	PlannerFinalizeModel   string // optional fast writer for the single-turn JSON emission; empty falls back to PlannerModel
-	ChatModel              string
-	ReviewModel            string
+	ClassifierModel      string
+	PlannerModel         string
+	PlannerFinalizeModel string // optional fast writer for the single-turn JSON emission; empty falls back to PlannerModel
+	ChatModel            string
+	ReviewModel          string
+	// DeployedModels are the model ids the workspace serves, forwarded
+	// to the gate review's config cross-reference so it can flag an
+	// unpriced deployed model that never appears in the diff. Resolved
+	// at startup from review.deployed_models + KAI_DEPLOYED_MODELS.
+	DeployedModels []string
 	// CriticModel runs the satisfaction-gate critic. Default is a
 	// DIFFERENT model from ChatModel so the critic's training prior
 	// doesn't share the chat agent's biases — same-model self-critique
 	// rationalizes its own patterns. Falls back to ChatModel if empty.
 	// Resolution: KAI_CRITIC_MODEL env > config.Critic.Model >
-	// hardcoded default (moonshotai/Kimi-K2.6). 2026-05-28 dogfood
+	// hardcoded default (moonshotai/kimi-k2.6). 2026-05-28 dogfood
 	// pinned this: same-model critic PASS'd a generic-patterns answer
 	// because the model defended its own pattern in the critique step.
-	CriticModel            string
+	CriticModel string
 
 	// HandsOff selects the hands-off autonomy level: the REPL
 	// auto-confirms the plan menu, auto-accepts file/bash actions,
 	// and lets the review→fix loop run unattended. The final gate
 	// approve still requires the user. Resolved by cmd/kai from the
-	// --auto flag, KAI_AUTO env, and config.autonomy.
+	// --auto flag, KAI_AUTO env, and config.autonomy. True for yolo too
+	// (yolo is a hands_off superset).
 	HandsOff bool
+
+	// Yolo is the fully-autonomous level: everything HandsOff does PLUS
+	// auto-resolving the gate (auto-approve, or auto-reject when the
+	// reviewer recommends REJECT) — no human at any step. Ships changes
+	// the gate held. Resolved from KAI_YOLO env + config.autonomy=yolo.
+	Yolo bool
 
 	// SharedPaths is the session-scoped allowlist of paths OUTSIDE
 	// the workspace that the user has explicitly shared via the
@@ -1779,6 +1829,12 @@ func runPlan(s *PlannerServices, request, sessionID string, forced agent.Mode, p
 			out := PlanReadyMsg{Request: request, Err: err}
 			if res != nil {
 				out.Plan = res.Plan
+				// Fold the request's intent into the contract store: inline
+				// intent_delta if a schema-capable model emitted it, else a
+				// focused dedicated classify call (reliable on any model).
+				if planner.FoldFromPlan(s.KaiDir, res.Plan) == "" {
+					planner.FoldRequest(ctx, s.KaiDir, request, pa.Provider, pa.Model)
+				}
 				// Reply is set when the model produced prose
 				// instead of a JSON plan (typically because its
 				// exploration concluded the work was already
@@ -1847,9 +1903,9 @@ func buildPlannerAgent(s *PlannerServices) *planner.PlannerAgent {
 		Model:         s.PlannerModel,
 		FinalizeModel: s.PlannerFinalizeModel, // empty falls back to Model inside PlannerAgent
 		Set:           s.Projects,
-		GateConfig:   s.GateConfig,
-		Cfg:          s.PlannerCfg,
-		SessionStore: s.OrchestratorCfg.AgentSessionStore,
+		GateConfig:    s.GateConfig,
+		Cfg:           s.PlannerCfg,
+		SessionStore:  s.OrchestratorCfg.AgentSessionStore,
 		// OnThinking pipes the planner's per-turn assistant
 		// narration into the chat-activity channel as a
 		// "thinking" event. The REPL renders the latest
@@ -1865,6 +1921,22 @@ func buildPlannerAgent(s *PlannerServices) *planner.PlannerAgent {
 			case s.ChatActivityCh <- ChatActivityEvent{
 				Kind:    "thinking",
 				Summary: text,
+				When:    time.Now(),
+			}:
+			default:
+			}
+		},
+		// OnReasoning streams the planner model's hidden chain-of-thought
+		// (deepseek-v4-pro thinks for minutes) so the long silent plan
+		// phase shows a live "💭 thinking…" line, same as chat/execution.
+		OnReasoning: func(delta string) {
+			if s.ChatActivityCh == nil {
+				return
+			}
+			select {
+			case s.ChatActivityCh <- ChatActivityEvent{
+				Kind:    "reasoning",
+				Summary: delta,
 				When:    time.Now(),
 			}:
 			default:
@@ -2045,14 +2117,24 @@ func chatWallClockBudgetFor(model string) time.Duration {
 	return chatWallClockBudget
 }
 
-// chatMaxTurns caps the agent loop's turn count for chat mode.
-// 50 (the default) is appropriate for coding agents that explore-
-// then-edit-then-verify across many turns; for chat, the model
-// either answers in 1-3 turns or it's stuck in a narration loop.
-// Cap at 8 so even a worst-case "had to grep + view a few files
-// before answering" run completes; anything beyond is the
-// pathology, not the workflow.
-const chatMaxTurns = 8
+// chatMaxTurns caps the agent loop's turn count for a chat-path run.
+//
+// History: 8 was right when chat was a read-only Q&A lane — the model
+// answered in 1-3 turns or was stuck narrating. But the 2026-05-29
+// "chat mode is code mode" merge gave this same path the full
+// write/edit toolset, so a chat-classified turn now does real CODING
+// (explore → edit → build → verify), which legitimately runs many
+// turns. With the cap still at 8, a coding-via-chat run — notably a
+// drive-mode slice resumed by a short "continue" that classifies as
+// conversation — stopped mid-edit with "reached the turn limit"
+// (2026-06-07 realtime-transcription dogfood). Raise to 30: the
+// executor's tuned coding budget is 20 WITH a separate verify pass;
+// chat-as-code folds explore+edit+build+verify into one loop, so it
+// needs more headroom. Genuine chitchat is unaffected — it still ends
+// at end_turn in 1-3 turns; the cap is a ceiling, not a target, and
+// the search/dangle/test-fight guards catch a real narration loop well
+// before 30.
+const chatMaxTurns = 30
 
 func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID string, forced agent.Mode) (text, newSessionID string, tokensIn, tokensOut, tokensCached int, err error) {
 	if s.OrchestratorCfg.AgentProvider == nil {
@@ -2100,6 +2182,13 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 	// two-call refactor is the next slice.
 	if classifyWorkspaceTurn(request) {
 		systemPrompt += "\n\n" + workspaceGroundingGuidance
+	}
+	// Generation-time grounding for structural questions (callers,
+	// blast radius, impact, dead code). Forcing the graph query HERE
+	// means the answer is correct by construction — the post-hoc
+	// validator is then redundant for these (see the skip in repl.go).
+	if isStructuralQuestion(request) {
+		systemPrompt += "\n\n" + structuralGroundingGuidance
 	}
 	runPrompt := "System: " + systemPrompt + "\n\n" + systemContextSuffix(s.ChatModel) + "\n\n" + request
 
@@ -2205,9 +2294,9 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 	readOnlyForMode := false
 
 	res, err := agent.Run(ctx, agent.Options{
-		Projects:  s.Projects,
-		Workspace: s.MainRepo,
-		ReadOnly:  readOnlyForMode,
+		Projects:    s.Projects,
+		Workspace:   s.MainRepo,
+		ReadOnly:    readOnlyForMode,
 		SharedPaths: s.SharedPaths,
 		// Turn cap for chat mode — see chatMaxTurns comment.
 		// 0 (zero-value default) for non-conversation chat-path
@@ -2231,19 +2320,19 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 		Provider: s.OrchestratorCfg.AgentProvider,
 		// kai_consult escalation. Same transport, different model.
 		// Empty ConsultModel → tool not registered (graceful skip).
-		ConsultProvider:  s.OrchestratorCfg.AgentProvider,
-		ConsultModel:     s.OrchestratorCfg.ConsultModel,
-		KailabBaseURL:    s.OrchestratorCfg.KailabBaseURL,
-		KailabToken:      s.OrchestratorCfg.KailabToken,
+		ConsultProvider: s.OrchestratorCfg.AgentProvider,
+		ConsultModel:    s.OrchestratorCfg.ConsultModel,
+		KailabBaseURL:   s.OrchestratorCfg.KailabBaseURL,
+		KailabToken:     s.OrchestratorCfg.KailabToken,
 		// kai_logs lets the chat agent read the managed process's
 		// recent output on demand — answering "do you see the
 		// error?" by reading the buffer instead of waiting for
 		// the background scanner's auto-followup.
-		ManagedProcLogger: NewManagedProcLogger(s),
-		Graph:             s.OrchestratorCfg.MainGraph,
-		EnableBash:       true,
-		BashAllow:        s.OrchestratorCfg.AgentBashAllow,
-		MaxTotalTokens:   s.OrchestratorCfg.MaxAgentTokens,
+		ManagedProcLogger:      NewManagedProcLogger(s),
+		Graph:                  s.OrchestratorCfg.MainGraph,
+		EnableBash:             true,
+		BashAllow:              s.OrchestratorCfg.AgentBashAllow,
+		MaxTotalTokens:         s.OrchestratorCfg.MaxAgentTokens,
 		SessionStore:           s.OrchestratorCfg.AgentSessionStore,
 		SessionID:              sessionID,
 		TaskName:               "chat",
@@ -2252,10 +2341,15 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 		// real tool call (the search guard). Spawned workers leave this
 		// off — their deliverable is edits, covered by the dangle guard.
 		GroundAnswers: true,
-		GateConfig:       s.GateConfig,
-		Mode:             resolvedMode,
-		KaiBinary:        kaiBin,
-		CheckpointWriter: ckpt,
+		// Structural question → hard-force a graph query before the
+		// answer finalizes. This is what makes skipping the post-hoc
+		// validator safe (repl.go): the grounding the prompt asks for is
+		// now enforced by the runner, not merely requested.
+		RequireGraphGrounding: isStructuralQuestion(request),
+		GateConfig:            s.GateConfig,
+		Mode:                  resolvedMode,
+		KaiBinary:             kaiBin,
+		CheckpointWriter:      ckpt,
 		// Per-turn run-log artifacts under <KaiDir>/runs/<sessionID>/
 		// — drives `kai run last` / `kai run diff`. Cheap (one JSON
 		// write per turn), no opt-in: cost-attribution debuggability
@@ -2277,6 +2371,12 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 					bashLineCount = 0
 				}
 				emit("tool", summarizeToolCall(name, inputJSON))
+			},
+			OnToolProgress: func(name string, elapsed time.Duration) {
+				emit("tool_progress", fmt.Sprintf("%s — %ds", name, int(elapsed.Seconds())))
+			},
+			OnReasoningDelta: func(delta string) {
+				emit("reasoning", delta)
 			},
 			OnBashOutput: func(line string) {
 				// Show only the first 2 lines of bash output per call
@@ -2344,12 +2444,12 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 				}
 				select {
 				case s.ChatActivityCh <- ChatActivityEvent{
-					Kind:       "gate",
-					GatePaths:  paths,
+					Kind:        "gate",
+					GatePaths:   paths,
 					GateVerdict: verdict,
-					GateRadius: blastRadius,
+					GateRadius:  blastRadius,
 					GateReasons: reasons,
-					When:       time.Now(),
+					When:        time.Now(),
 				}:
 				default:
 				}
@@ -2456,29 +2556,29 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 		emit("info", "model returned no text — retrying with higher token budget (likely reasoning ate the limit)")
 		nudgedPrompt := runPrompt + "\n\nReminder: respond with visible text. Do not spend your entire output budget on internal reasoning."
 		retryOpts := agent.Options{
-			Projects:         s.Projects,
-			Workspace:        s.MainRepo,
-			ReadOnly:         readOnlyForMode,
-			SharedPaths:      s.SharedPaths,
-			Prompt:           nudgedPrompt,
-			Model:            s.ChatModel,
-			Provider:         s.OrchestratorCfg.AgentProvider,
-			ConsultProvider:  s.OrchestratorCfg.AgentProvider,
-			ConsultModel:     s.OrchestratorCfg.ConsultModel,
-			Graph:            s.OrchestratorCfg.MainGraph,
-			EnableBash:       true,
-			BashAllow:        s.OrchestratorCfg.AgentBashAllow,
-			MaxTotalTokens:   s.OrchestratorCfg.MaxAgentTokens,
-			MaxTokens:        retryMaxTokens(res),
+			Projects:               s.Projects,
+			Workspace:              s.MainRepo,
+			ReadOnly:               readOnlyForMode,
+			SharedPaths:            s.SharedPaths,
+			Prompt:                 nudgedPrompt,
+			Model:                  s.ChatModel,
+			Provider:               s.OrchestratorCfg.AgentProvider,
+			ConsultProvider:        s.OrchestratorCfg.AgentProvider,
+			ConsultModel:           s.OrchestratorCfg.ConsultModel,
+			Graph:                  s.OrchestratorCfg.MainGraph,
+			EnableBash:             true,
+			BashAllow:              s.OrchestratorCfg.AgentBashAllow,
+			MaxTotalTokens:         s.OrchestratorCfg.MaxAgentTokens,
+			MaxTokens:              retryMaxTokens(res),
 			SessionStore:           s.OrchestratorCfg.AgentSessionStore,
 			SessionID:              sessionID,
 			TaskName:               "chat-retry",
 			UserVisibleHistoryOnly: true,
-			GateConfig:       s.GateConfig,
-			Mode:             resolvedMode,
-			KaiBinary:        kaiBin,
-			CheckpointWriter: ckpt,
-			RunLogDir:        s.KaiDir,
+			GateConfig:             s.GateConfig,
+			Mode:                   resolvedMode,
+			KaiBinary:              kaiBin,
+			CheckpointWriter:       ckpt,
+			RunLogDir:              s.KaiDir,
 		}
 		res2, err2 := agent.Run(ctx, retryOpts)
 		if err2 == nil && res2 != nil {
@@ -2494,13 +2594,103 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 		}
 	}
 
-	// Both attempts empty (or retry not applicable). Surface the
+	// The run already did real work via tools (edits, builds, captures)
+	// but the model added no closing text. For a reasoning model this is
+	// the COMMON wrap-up shape: it spent the turn's budget on the silent
+	// <think> step and had nothing left to say — the work is already
+	// done and (for edits) auto-promoted. That is NOT a failure, yet the
+	// old code fell through to the error below, surfacing "Model returned
+	// no text" on a run that actually succeeded (2026-06-01 dogfood: a
+	// route-fix run edited two files, built clean, then died on the empty
+	// wrap-up turn). shouldRetryEmpty already recognizes this case (it
+	// returns false so we don't re-run); honor that recognition by
+	// ending the turn cleanly with a synthesized summary instead of an
+	// error. Only a run that did NO work AND produced no text is a real
+	// empty-completion failure worth surfacing.
+	if ranToolCalls(res) {
+		return synthesizeChatDoneSummary(capturedEdits, capturedTotal, res.FinishReason),
+			res.SessionID, res.TokensIn, res.TokensOut, res.TokensCached, nil
+	}
+
+	// No work AND no text — a genuine empty completion. Surface the
 	// original error with finish_reason + tokens so the user can see
 	// what happened (max_tokens, end_turn-empty, etc.).
 	return "", res.SessionID, res.TokensIn, res.TokensOut, res.TokensCached, fmt.Errorf(
 		"chat: assistant returned no text (finish=%s, in=%d out=%d cached=%d, turns=%d)",
 		res.FinishReason, res.TokensIn, res.TokensOut, res.TokensCached, len(res.Transcript),
 	)
+}
+
+// ranToolCalls reports whether the run dispatched at least one tool
+// call — i.e. it did real work (read, edited, ran commands) rather
+// than producing nothing. Used to distinguish a legitimate "work done,
+// no closing prose" finish from a genuine empty completion.
+func ranToolCalls(res *agent.Result) bool {
+	if res == nil {
+		return false
+	}
+	for _, t := range res.Transcript {
+		for _, p := range t.Parts {
+			if _, ok := p.(message.ToolCall); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// synthesizeChatDoneSummary builds an honest closing line for a turn
+// that did its work via tools but returned no model prose. It does NOT
+// invent claims about behavior — it states only what the harness
+// observed: which files were edited (from the OnFileDiff capture), or a
+// neutral completion note when the work was non-edit (bash only).
+//
+// The wording honors the finish reason. end_turn / tool_use means the
+// model finished cleanly and simply had nothing left to say ("Done").
+// turn_cap / max_tokens / length means the run was CUT OFF mid-work — so
+// it must NOT claim "Done"; the change may be incomplete and the user
+// needs to know to continue.
+func synthesizeChatDoneSummary(edits []editSummary, total int, finish message.FinishReason) string {
+	cutoff := false
+	switch strings.ToLower(string(finish)) {
+	case "turn_cap", "max_tokens", "length":
+		cutoff = true
+	}
+
+	var files []string
+	seen := map[string]bool{}
+	for _, e := range edits {
+		if seen[e.Path] {
+			continue
+		}
+		seen[e.Path] = true
+		files = append(files, e.Path)
+		if len(files) >= 5 {
+			break
+		}
+	}
+	tail := ""
+	if total > len(files) {
+		tail = fmt.Sprintf(" (+%d more)", total-len(files))
+	}
+	where := ""
+	if len(files) > 0 {
+		where = " to " + strings.Join(files, ", ") + tail
+	}
+
+	if cutoff {
+		// Ran out of turns/tokens before finishing. Be explicit so the
+		// user knows to ask it to continue.
+		if len(files) > 0 {
+			return "Stopped at the turn/token limit after applying changes" + where +
+				" — the change may be incomplete. Ask me to continue if it's not done."
+		}
+		return "Stopped at the turn/token limit before finishing — the work may be incomplete. Ask me to continue if it's not done."
+	}
+	if len(files) == 0 {
+		return "Done — the requested actions completed (via tools above). The model returned no written summary."
+	}
+	return "Done — applied changes" + where + ". The model finished via tools and returned no written summary."
 }
 
 // shouldRetryEmpty returns true when an empty FinalText looks like
@@ -2850,6 +3040,11 @@ Then a blank line, then your user-facing answer. The answer must reference ONLY 
 VERIFY CONTRACTS YOU ASSERT, DON'T JUST READ THE CALLER. If your answer claims how an external command, flag, API, or output format BEHAVES — not merely that the code calls it — you must have RUN it this turn and put the real result in OBSERVED. Reading the spawn()/exec()/fetch() that invokes it is NOT observing it: the code can call a command or flag that does not exist. Before you assert how a command behaves — say, that some code "pulls records via reportgen --json" — ask yourself: am I doing this correctly, i.e. have I actually run that exact command and seen its output, or am I trusting the code that calls it? If you only read the caller, run the command and confirm before claiming it works; if it errors or emits a different shape, that IS the answer (the feature is broken even though the code compiles).
 
 TRACE A CONNECTION TO BOTH ENDS BEFORE CONCLUDING. For "does X use Y / is A wired to B / where do these events come from" questions, a channel, event, or symbol has a PRODUCER and a CONSUMER. Following one import chain from where you started shows only ONE end. Before you conclude, grep the connecting NAME for ALL its sites. Seeing a component subscribe to a "record-updated" event tells you the consumer; you must also grep "record-updated" to find who EMITS it before you claim the source — and the emitter may be the very thing you're about to say is unused. Concluding "X does not use Y" or "zero presence" without having searched for the other end is a guess; one grep of the connecting name usually settles it.
+
+WHEN AUDITING OR REVIEWING CODE (the user asks you to find bugs, gaps, risks, or "confusions" rather than explain or change something), apply these lenses — each catches a defect a surface read misses:
+  - READ THE OPERANDS of state-mutating calls; do not stop at "a write happens." For a call that writes persistent / billing / auth state (a DB UPDATE, a Set*/Save*/Write* method), look at EACH argument: an empty string, nil, or zero written over an existing id, token, or status ERASES it. A downgrade that passes "" for a subscription id corrupts billing state — far worse than "needs a grace period." The severity usually lives in one argument, not in the call itself.
+  - TRACE A MUTATION FORWARD to its derived values. When code creates or changes an entity that feeds a cached / materialized value (a cap, quota, denormalized column), check whether the recompute that keeps that value correct runs on THIS path. A member added without recomputing its plan cap silently keeps the wrong cap — the bug is the recompute that ISN'T there.
+  - For "is this model / plan / flag actually priced or configured" — DO NOT eyeball the config and assert. For model pricing specifically, run ` + "`kit analyze pricing`" + `: it deterministically reports any deployed model missing from prices.yaml. Prefer that tool's verdict to your own scan — a "missing from config" claim is exactly the kind you must verify, not infer.
 
 Do NOT skip the OBSERVED block. Do NOT write the answer first and then list observations after. OBSERVED comes first, every workspace turn, no exceptions.`
 
@@ -3294,6 +3489,10 @@ func formatPlan(p *planner.WorkPlan) string {
 			fmt.Fprintf(&b, "      %s\n", styleDim.Render("files: "+strings.Join(a.Files, ", ")))
 		}
 	}
+	if oq := formatOpenQuestions(p); oq != "" {
+		b.WriteByte('\n')
+		b.WriteString(oq)
+	}
 	// Footer hint — only when there's actually more to show.
 	hidden := planHiddenLines(p)
 	if hidden > 0 {
@@ -3396,6 +3595,10 @@ func formatPlanDetails(p *planner.WorkPlan) string {
 			}
 		}
 	}
+	if oq := formatOpenQuestions(p); oq != "" {
+		b.WriteByte('\n')
+		b.WriteString(oq)
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -3474,6 +3677,15 @@ func formatEmptyPlan(p *planner.WorkPlan) string {
 	subline := summary
 	doubt := riskNotesHaveDoubt(p.RiskNotes)
 	switch {
+	case p.Unverified:
+		// The planner flagged this "already done" for end-to-end
+		// verification and that verification could not be completed
+		// (stalled / canceled / re-asserted without clearing the
+		// audit). It must NEVER read as a confident "✓ Already done" —
+		// that's the exact false positive the verify guard exists to
+		// stop. Degrade to explicit uncertainty so the user knows the
+		// claim is unconfirmed and scans the open questions / notes.
+		headline = "⚠ Couldn't verify — treat as UNCONFIRMED, not done"
 	case isAlreadyDoneHeadline(low) && doubt:
 		// Round-18 dogfood: the planner returned "already
 		// implemented" while ALSO emitting a risk_note saying
@@ -3526,9 +3738,41 @@ func formatEmptyPlan(p *planner.WorkPlan) string {
 			}
 		}
 	}
+	if oq := formatOpenQuestions(p); oq != "" {
+		b.WriteByte('\n')
+		b.WriteString(oq)
+	}
 	// No "[go / cancel]" line — there's no plan to act on.
 	// The user can re-ask the planner with new framing if they
 	// disagree with the conclusion.
+	return b.String()
+}
+
+// formatOpenQuestions renders the planner's open_questions block — the
+// gaps, ambiguities, and scope decisions it surfaced instead of
+// silently dropping. Rendered prominently (banner, not dimmed) because
+// the user needs to see what the plan SET ASIDE before approving it.
+// Returns "" when there are none.
+func formatOpenQuestions(p *planner.WorkPlan) string {
+	if p == nil || len(p.OpenQuestions) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(stylePlannerBanner.Render("❓ Open questions — review before approving"))
+	b.WriteByte('\n')
+	for _, q := range p.OpenQuestions {
+		f := strings.TrimSpace(q.Finding)
+		if f == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "  %s\n", styleBody.Render("• "+f))
+		if w := strings.TrimSpace(q.WhyUnresolved); w != "" {
+			fmt.Fprintf(&b, "      %s\n", styleDim.Render("why: "+w))
+		}
+		if r := strings.TrimSpace(q.Recommendation); r != "" {
+			fmt.Fprintf(&b, "      %s\n", styleDim.Render("→ "+r))
+		}
+	}
 	return b.String()
 }
 
@@ -3632,21 +3876,25 @@ func formatExecuteResult(res *orchestrator.Result, err error) string {
 				"⚠ %d agent(s) ran but produced no edits — see per-agent runlog for what happened",
 				len(res.Runs))))
 	}
-	// Derive counts from each run's FINAL verdict: the verify pass can apply
-	// remaining edits and auto-promote a previously-held change AFTER
-	// res.AutoPromoted/Held/Failed were tallied, leaving res.Held stale (it
-	// showed "1 held + kai gate approve" while the verdict said "applied" and
-	// /gate showed nothing). Recomputing keeps summary, per-run lines, and the
-	// gate in agreement.
+	// Derive the counts from each run's FINAL verdict rather than trusting
+	// res.AutoPromoted/Held/Failed: the verify pass can apply the remaining
+	// edits and auto-promote a previously-held change AFTER those aggregates
+	// were tallied, leaving res.Held stale. That produced "1 held + `kai gate
+	// approve`" while the verdict said "applied (snap.latest advanced)" and
+	// `/gate` showed nothing held. Recomputing here keeps the summary, the
+	// per-run lines, and the actual gate in agreement.
 	autoPromoted, held, failed := 0, 0, 0
 	for _, r := range res.Runs {
 		switch {
 		case r.ExitErr != nil || r.IntegrateErr != nil:
 			failed++
 		case r.Verdict == nil:
+			// no observable changes — counts toward nothing
 		case r.Verdict.Verdict == string(safetygate.Auto):
 			autoPromoted++
 		default:
+			// Block (kept in working tree) and HELD-for-review both await a
+			// gate action, so both count as held for the guidance below.
 			held++
 		}
 	}
@@ -3712,6 +3960,18 @@ func formatExecuteResult(res *orchestrator.Result, err error) string {
 			fmt.Fprintf(&b, "    %s\n",
 				styleError.Render("verify error: "+r.VerifyErr.Error()))
 		}
+		// Completeness audit (Part A). Non-blocking, but surfaced
+		// prominently — these are likely-missing pieces the executor may
+		// have run out of turns before wiring.
+		if strings.TrimSpace(r.CompletenessSummary) != "" {
+			fmt.Fprintf(&b, "    %s\n", styleWarn.Render("⚠ completeness — gaps / UNVERIFIED criteria (review before relying on this):"))
+			for _, line := range strings.Split(strings.TrimRight(r.CompletenessSummary, "\n"), "\n") {
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				fmt.Fprintf(&b, "      %s\n", styleDim.Render(line))
+			}
+		}
 	}
 	if held > 0 {
 		b.WriteString(styleDim.Render("Held changes are in your working tree. `kai gate list` to inspect, `kai gate approve <id>` to publish."))
@@ -3757,7 +4017,6 @@ func wrapText(s string, width int) string {
 	}
 	return out.String()
 }
-
 
 // riskNotesHaveDoubt reports whether any risk note contains a phrase
 // signaling the planner is uncertain about its own "already done"

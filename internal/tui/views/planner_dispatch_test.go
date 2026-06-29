@@ -3,6 +3,8 @@ package views
 import (
 	"strings"
 	"testing"
+
+	"github.com/kaicontext/kai-engine/planner"
 )
 
 func TestCaptureHeadline(t *testing.T) {
@@ -202,5 +204,28 @@ func TestComposeCaptureMessage_EmptyOpDefaultsToM(t *testing.T) {
 	}, 1)
 	if !strings.Contains(got, "  M x.go") {
 		t.Errorf("expected empty op to default to M, got:\n%s", got)
+	}
+}
+
+// TestUnverifiedNeverRendersConfidentDone pins the 2026-06-10 fix: when
+// an "already done" verdict's end-to-end verification could not complete
+// (stall/cancel), the planner loop sets WorkPlan.Unverified, and the
+// renderer must degrade to explicit uncertainty — never the confident
+// "✓ Already done" that the verify guard exists to prevent.
+func TestUnverifiedNeverRendersConfidentDone(t *testing.T) {
+	p := &planner.WorkPlan{
+		Summary:    "Already implemented — the three tiers exist across config and billing.",
+		Unverified: true,
+	}
+	out := formatEmptyPlan(p)
+	if strings.Contains(out, "✓ Already done") {
+		t.Errorf("unverified plan must NOT render confident done:\n%s", out)
+	}
+	if !strings.Contains(out, "Couldn't verify") {
+		t.Errorf("expected 'Couldn't verify' headline, got:\n%s", out)
+	}
+	// Sanity: without the taint, the same summary still reads as done.
+	if ok := formatEmptyPlan(&planner.WorkPlan{Summary: p.Summary}); !strings.Contains(ok, "Already done") {
+		t.Errorf("baseline (untainted) should still say 'Already done', got:\n%s", ok)
 	}
 }

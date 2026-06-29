@@ -69,16 +69,24 @@ func TestSlash_ModeOverrideThenStatus(t *testing.T) {
 	h.WaitForText("forced via slash override")
 }
 
-
-// TestSlash_Copy runs `/copy`, which ships the most recent transcript
-// block(s) to the clipboard. Even on a fresh REPL the transcript is
-// non-empty (the boot banner lines count), so the command reports a
-// successful copy rather than the empty-transcript refusal.
+// TestSlash_Copy exercises the /copy command's block-selection logic.
+// Bare /copy ships the entire transcript; /copy 1 ships only the last block.
 func TestSlash_Copy(t *testing.T) {
-	h := newTUI(t)
-	h.WaitForText("Sync: idle")
-	h.submit("/copy")
-	h.WaitForText("to clipboard")
+	t.Run("bare copies all", func(t *testing.T) {
+		h := newTUI(t)
+		h.WaitForText("Sync: idle")
+		h.submit("/copy")
+		// Bare /copy copies ALL transcript blocks, not just one.
+		// The confirmation reads "copied N block(s)"; N must be > 1
+		// on a fresh REPL (the boot banner produces multiple blocks).
+		h.WaitForText("block(s)")
+	})
+	t.Run("explicit 1", func(t *testing.T) {
+		h := newTUI(t)
+		h.WaitForText("Sync: idle")
+		h.submit("/copy 1")
+		h.WaitForText("copied 1 block(s)")
+	})
 }
 
 // TestSlash_Clear runs `/clear` and confirms the REPL survives it —

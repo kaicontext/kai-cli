@@ -34,10 +34,13 @@ kai push                      # Push to atlas.kaicontext.com
 kai diff                      # Semantic change impact
 ```
 
-`kai code` is the single front door to Kai's interactive coding agent. On
-first use it downloads its backing component to `~/.kai/bin` automatically,
-then launches it — no extra setup, on any install path (curl, Homebrew, or
-manual). Every flag after `code` is forwarded to the experience unchanged.
+`kai code` is the single front door to Kai's interactive coding agent. It
+runs the experience — the Bubble Tea TUI, the in-process agent loop, drive
+slice-gating, and gate review — natively inside `kai`, with no separate
+binary to install. Useful flags: `-p/--prompt` runs one planner+execute
+cycle headlessly and exits; `--session` resumes a prior session; `--auto`
+runs hands-off; `--planner-model`/`--agent-model` override models for the
+run.
 
 `kai init` runs a single, low-friction setup flow:
 

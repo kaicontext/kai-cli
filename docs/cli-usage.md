@@ -45,16 +45,21 @@ Launch Kai's interactive coding experience — the single front door to the
 agent/TUI.
 
 ```bash
-kai code                       # Launch the experience
-kai code --some-flag value     # Flags after `code` are forwarded verbatim
+kai code                       # Launch the interactive TUI
+kai code -p "fix the bug"      # Headless: one planner+execute cycle, then exit
+kai code --session <id>        # Resume a prior agent session
+kai code --auto                # Hands-off: auto-confirm plan and file/bash actions
 ```
 
-On first use, `kai code` downloads its backing component to `~/.kai/bin`
-automatically, so it works on every install path (curl `install.sh`,
-Homebrew, or manual) with no extra setup. If the download fails it prints a
-clear error and exits non-zero (it never silently does nothing). `kai code`
-returns the experience's own exit code, and Ctrl+C / terminal resize behave
-exactly as they do when running the backing binary directly.
+`kai code` runs the experience natively in-process — the Bubble Tea TUI, the
+agent loop, drive slice-gating, and gate review all execute inside `kai`,
+with no separate binary to download. If stdin/stdout isn't a terminal it
+prints help instead of launching. Ctrl+C and terminal resize are handled by
+the in-process TUI.
+
+Flags: `-p/--prompt <task>` (headless single cycle), `--session <id>`
+(resume), `--auto` (hands-off), `--planner-model` / `--agent-model`
+(per-run model overrides).
 
 ### `kai capture`
 

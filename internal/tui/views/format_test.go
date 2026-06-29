@@ -87,7 +87,7 @@ func TestFormatCacheBand_BrokenShowsTokenVolume(t *testing.T) {
 // "(elapsed · ↓ Xk tokens)" shape.
 func TestFormatRunSummary_ClaudeCodeShape(t *testing.T) {
 	start := time.Now().Add(-(14*time.Minute + 15*time.Second))
-	got := formatRunSummary(start, time.Time{}, 46_000)
+	got := formatRunSummary(14*time.Minute+15*time.Second, start, time.Time{}, 46_000)
 	for _, want := range []string{"14m", "15s", "↓", "46.0k", "tokens"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("expected %q in run summary, got: %q", want, got)
@@ -102,7 +102,7 @@ func TestFormatRunSummary_ClaudeCodeShape(t *testing.T) {
 // quiet on tool-only turns where no output tokens have arrived
 // yet. "(0s · ↓ 0 tokens)" would just be visual noise.
 func TestFormatRunSummary_EmptyOnZeroOutput(t *testing.T) {
-	if got := formatRunSummary(time.Now(), time.Time{}, 0); got != "" {
+	if got := formatRunSummary(0, time.Now(), time.Time{}, 0); got != "" {
 		t.Errorf("expected empty summary on 0 tokens, got: %q", got)
 	}
 }
@@ -114,13 +114,13 @@ func TestFormatRunSummary_EmptyOnZeroOutput(t *testing.T) {
 func TestFormatRunSummary_FirstByteSegment(t *testing.T) {
 	start := time.Now().Add(-30 * time.Second)
 	firstByte := start.Add(4 * time.Second)
-	out := formatRunSummary(start, firstByte, 100)
+	out := formatRunSummary(30*time.Second, start, firstByte, 100)
 	if !strings.Contains(out, "first-byte 4s") {
 		t.Errorf("expected first-byte segment, got: %q", out)
 	}
 	// Zero firstResponseAt should omit the segment (e.g. host-task
 	// turn that doesn't stream).
-	out = formatRunSummary(start, time.Time{}, 100)
+	out = formatRunSummary(30*time.Second, start, time.Time{}, 100)
 	if strings.Contains(out, "first-byte") {
 		t.Errorf("expected NO first-byte segment with zero timestamp, got: %q", out)
 	}
@@ -360,5 +360,29 @@ func TestFormatEmptyPlan_DoubtDowngradesHeadline(t *testing.T) {
 	}
 	if strings.Contains(out, "✓ Already done — nothing to do") {
 		t.Errorf("doubt-laden plan should NOT render the confident headline:\n%s", out)
+	}
+}
+
+// TestWorkElapsed_PausesWhileAwaitingHuman pins the 2026-06-13 fix:
+// time spent blocked on the user (here a pending plan) does NOT count
+// toward the run timer — leaving mid-prompt can't inflate it.
+func TestWorkElapsed_PausesWhileAwaitingHuman(t *testing.T) {
+	r := &REPL{runStart: time.Now().Add(-10 * time.Second)}
+	// Not waiting: elapsed ~= 10s.
+	if e := r.workElapsed(); e < 9*time.Second || e > 11*time.Second {
+		t.Fatalf("baseline workElapsed = %v, want ~10s", e)
+	}
+	// Enter a wait 8s ago; reconcile stamps the pause.
+	r.pendingPlan = &planner.WorkPlan{}
+	r.pauseStart = time.Now().Add(-8 * time.Second)
+	// While paused, the 8s gap is excluded → ~2s of work.
+	if e := r.workElapsed(); e > 3*time.Second {
+		t.Errorf("workElapsed while paused = %v, want ~2s (8s of waiting excluded)", e)
+	}
+	// Leaving the wait banks the gap; elapsed stays ~work-only.
+	r.pendingPlan = nil
+	r.reconcilePause()
+	if e := r.workElapsed(); e > 3*time.Second {
+		t.Errorf("workElapsed after resume = %v, want ~2s", e)
 	}
 }

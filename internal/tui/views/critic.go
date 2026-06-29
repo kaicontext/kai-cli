@@ -348,6 +348,8 @@ Standards for FAIL: be precise about the gap. Vague self-critique ("could be bet
 
 ALSO FAIL when kai bounced an answerable question. If the AGENT WORK SUMMARY is a clarifying question ("what specifically...", "which one...", "could you provide more detail..."), check RECENT CONVERSATION first: was the referent resolvable from the prior turn? A continuation request like "fix it in the sidebar" after a prior turn about "fix the TitleBar to show current directory" — "it" is the same operation, the location is the new variable. RETRY_HINT: "I'm reading the prior turn — 'it' refers to the same operation; acting on the continuation now instead of asking for restatement."
 
+ALSO FAIL when the bounce is answerable from the WORKSPACE, not just the conversation. "run it" / "run the app" / "run the desktop app" → the project on disk names the command (a package.json with a dev/start script — including in an obvious sub-package like client/ or app/ when the root is just a workspace manifest; a Cargo.toml, go.mod, or Makefile target). "kill the port" / "restart it" → the port and process are determinable from the dev script's config and the process kai already launched as a managed process. Asking "which project / app / command / port / directory?" when kai has kai_tree / kai_files / view and the running-process list is treating answerable context as ambiguity. The agent must LOOK (read package.json scripts, list the tree, check the managed process) and ACT, not ask. RETRY_HINT: "I'm reading the project — the run command / port is determinable from package.json and the process I launched; doing it now instead of asking."
+
 ALSO FAIL when kai's summary contradicts something visible in RECENT CONVERSATION. If a prior turn shows "Done: 1 auto-promoted" and the current summary says "no code changes appear to have been merged", that's a verifiable lie. RETRY_HINT: "I'm reading the trailer from the prior turn — the work landed; reporting it accurately now."
 
 ALSO FAIL when the reply leaks a PLAN SCHEMA to the user as prose. Specifically: a triple-backtick json fenced block AND the content contains plan-schema keys like "summary":, "agents":, "diagnosis":, "acceptance_criteria":, "EDIT CHECKLIST". That's visual noise — the plan card renders it separately. RETRY_HINT: "I'm reissuing as prose only — dropping the JSON plan block; the plan card already shows it."
@@ -546,22 +548,52 @@ func containsJSONFence(s string) bool {
 // runs marked FAIL). The dogfood evidence showed the critic
 // itself is usually clean; the silent-failure mode is the right
 // safe direction.
+// The CRITIQUE and RETRY_HINT fields are MULTI-LINE aware: a model
+// frequently emits the label on its own line and the content on the
+// following lines ("CRITIQUE:\n<two sentences>\nVERDICT: FAIL"). The
+// original same-line-only capture returned an empty critique in that
+// case — which then tripped the validator's fail-closed path and
+// replaced a correct, grounded verdict with a generic "couldn't
+// verify" message (2026-06-01 trace). So each section accumulates
+// continuation lines until the next recognized label. VERDICT is a
+// single token and closes any open section.
 func parseCriticOutput(text string) (critique string, pass bool, hint string) {
 	pass = true
 	if strings.TrimSpace(text) == "" {
 		return
 	}
+	var critiqueLines, hintLines []string
+	section := "" // "critique" | "hint" | "" (none / after verdict)
 	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(raw)
 		switch {
 		case strings.HasPrefix(line, "CRITIQUE:"):
-			critique = strings.TrimSpace(strings.TrimPrefix(line, "CRITIQUE:"))
+			section = "critique"
+			if rest := strings.TrimSpace(strings.TrimPrefix(line, "CRITIQUE:")); rest != "" {
+				critiqueLines = append(critiqueLines, rest)
+			}
 		case strings.HasPrefix(line, "VERDICT:"):
+			section = ""
 			verdict := strings.TrimSpace(strings.TrimPrefix(line, "VERDICT:"))
 			pass = !strings.EqualFold(verdict, "FAIL")
 		case strings.HasPrefix(line, "RETRY_HINT:"):
-			hint = strings.TrimSpace(strings.TrimPrefix(line, "RETRY_HINT:"))
+			section = "hint"
+			if rest := strings.TrimSpace(strings.TrimPrefix(line, "RETRY_HINT:")); rest != "" {
+				hintLines = append(hintLines, rest)
+			}
+		case line == "":
+			// Blank line is a soft separator; keep the section open so
+			// a paragraph break inside a critique doesn't truncate it.
+		default:
+			switch section {
+			case "critique":
+				critiqueLines = append(critiqueLines, line)
+			case "hint":
+				hintLines = append(hintLines, line)
+			}
 		}
 	}
+	critique = strings.TrimSpace(strings.Join(critiqueLines, " "))
+	hint = strings.TrimSpace(strings.Join(hintLines, " "))
 	return
 }

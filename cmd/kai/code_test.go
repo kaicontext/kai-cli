@@ -2,108 +2,105 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"kai/internal/kitlauncher"
 )
 
-// fakeManagedKit writes an executable stub at <dir>/kit so resolveKitPath
-// succeeds without a download, and returns its path.
-func fakeManagedKit(t *testing.T, dir string) string {
-	t.Helper()
-	p := filepath.Join(dir, "kit")
-	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
+// TestCodeHelpReproducesKitRoot verifies that `kai code -h` reproduces the
+// retired `kit -h`: the full grouped menu of every kai subcommand, rendered
+// under the `kai code` path — not merely code's own flags. kit's bare binary
+// launched the TUI, so `kit -h` was the root help; `kai code` is its drop-in.
+func TestCodeHelpReproducesKitRoot(t *testing.T) {
+	got := renderCodeHelp(t)
 
-// TestCodeCommand_ForwardsFlagsThroughCobra drives the REAL cobra dispatch
-// (`rootCmd.Execute`) with `code --kitflag x -- pos` and asserts the args
-// reach kit verbatim. If DisableFlagParsing weren't set, cobra would reject
-// `--kitflag` as an unknown flag and Execute would error — so this test
-// proves both that `kai` does not eat kit's flags and that os.Args[2:] is
-// forwarded exactly, including `--` and flag-shaped args.
-func TestCodeCommand_ForwardsFlagsThroughCobra(t *testing.T) {
-	binDir := t.TempDir()
-	kitPath := fakeManagedKit(t, binDir)
-
-	var gotArgv []string
-	orig := codeLauncher
-	codeLauncher = func() *kitlauncher.Launcher {
-		l := kitlauncher.Default()
-		l.BinDir = binDir
-		l.LookPath = func(string) (string, error) { return "", errors.New("not on PATH") }
-		l.Exec = func(argv0 string, argv []string, env []string) error {
-			gotArgv = argv
-			return nil // pretend the handoff succeeded
+	// Usage advertises the code path in both runnable and subcommand forms.
+	for _, want := range []string{"Usage:", "kai code [flags]", "kai code [command]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("help missing %q\n---\n%s", want, got)
 		}
-		l.Stderr = &bytes.Buffer{}
-		return l
-	}
-	t.Cleanup(func() { codeLauncher = orig })
-
-	rootCmd.SetArgs([]string{"code", "--kitflag", "x", "--", "pos"})
-	t.Cleanup(func() { rootCmd.SetArgs(nil) })
-
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("`kai code` execute failed (cobra likely parsed a kit flag): %v", err)
 	}
 
-	want := []string{kitPath, "--kitflag", "x", "--", "pos"}
-	if fmt.Sprint(gotArgv) != fmt.Sprint(want) {
-		t.Errorf("forwarded argv = %v, want %v", gotArgv, want)
+	// The full grouped menu is present — group headings AND representative
+	// subcommands that live on the root, not under code.
+	for _, want := range []string{
+		"Getting Started:", "Diff & Review:", "Advanced:", "Additional Commands:",
+		"snapshot", "diff", "gate", "stats",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("help missing menu entry %q\n---\n%s", want, got)
+		}
 	}
-}
 
-// TestCodeMain_FailureIsLoudAndNonZero is the command-boundary version of
-// the non-silence guarantee: a failure yields BOTH a non-zero exit code AND
-// a non-empty, actionable message on stderr — never a silent exit 0.
-func TestCodeMain_FailureIsLoudAndNonZero(t *testing.T) {
-	l := kitlauncher.Default()
-	l.GOOS = "windows" // unsupported → install errors before any network call
-	l.BinDir = t.TempDir()
-	l.LookPath = func(string) (string, error) { return "", errors.New("not on PATH") }
-
-	var stderr bytes.Buffer
-	l.Stderr = &stderr // keep the launcher's progress lines off the real console
-	code := codeMain(l, context.Background(), nil, &stderr)
-
-	if code == 0 {
-		t.Error("a failure must produce a non-zero exit code")
+	// code's own flags stay visible (no regression vs the old subcommand help,
+	// which is strictly better than kit, where they hid behind `kit code -h`).
+	for _, want := range []string{"-p, --prompt", "--auto", "--session"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("help missing code flag %q\n---\n%s", want, got)
+		}
 	}
-	if stderr.Len() == 0 {
-		t.Error("a failure must print to stderr (no silent failure)")
-	}
-	if !strings.Contains(stderr.String(), "Couldn't launch the code experience") {
-		t.Errorf("expected an actionable message, got %q", stderr.String())
+
+	// The listed subcommands resolve under `kai`, so the footer points there
+	// (not the unusable `kai code <command>`).
+	if !strings.Contains(got, `Use "kai [command] --help"`) {
+		t.Errorf("help missing root-path footer\n---\n%s", got)
 	}
 }
 
-// TestCodeMain_SuccessfulHandoff confirms a clean handoff returns 0 and
-// prints nothing to stderr.
-func TestCodeMain_SuccessfulHandoff(t *testing.T) {
-	binDir := t.TempDir()
-	fakeManagedKit(t, binDir)
+// TestCodeHelpMenuMatchesRoot locks the grouped command listing to cobra's own
+// rendering of the root command, so cobra template or alignment drift can't
+// silently desync `kai code -h` from `kai -h`.
+func TestCodeHelpMenuMatchesRoot(t *testing.T) {
+	code := menuSection(renderCodeHelp(t))
 
-	l := kitlauncher.Default()
-	l.BinDir = binDir
-	l.LookPath = func(string) (string, error) { return "", errors.New("not on PATH") }
-	l.Exec = func(string, []string, []string) error { return nil }
+	var rootBuf bytes.Buffer
+	rootCmd.SetOut(&rootBuf)
+	t.Cleanup(func() { rootCmd.SetOut(nil) })
+	_ = rootCmd.Help()
+	root := menuSection(rootBuf.String())
 
-	var stderr bytes.Buffer
-	l.Stderr = &stderr
-	code := codeMain(l, context.Background(), []string{"--foo"}, &stderr)
-	if code != 0 {
-		t.Errorf("expected exit 0 on successful handoff, got %d", code)
+	if root == "" {
+		t.Fatal("root help produced no menu section")
 	}
-	if stderr.Len() != 0 {
-		t.Errorf("expected no stderr on success, got %q", stderr.String())
+	if code != root {
+		t.Errorf("code menu != root menu (alignment/content drift)\n--- root ---\n%s\n--- code ---\n%s", root, code)
 	}
+}
+
+// renderCodeHelp renders printCodeHelp into a string, the same output every
+// `kai code` help path produces (it is codeCmd's HelpFunc).
+func renderCodeHelp(t *testing.T) string {
+	t.Helper()
+	var buf bytes.Buffer
+	codeCmd.SetOut(&buf)
+	t.Cleanup(func() { codeCmd.SetOut(nil) })
+	printCodeHelp(codeCmd, nil)
+	return buf.String()
+}
+
+// menuSection returns the grouped command listing: the lines from the first
+// group heading up to (but excluding) the Flags: section.
+func menuSection(help string) string {
+	if len(rootCmd.Groups()) == 0 {
+		return ""
+	}
+	firstGroup := rootCmd.Groups()[0].Title
+	lines := strings.Split(help, "\n")
+	start := -1
+	for i, ln := range lines {
+		if ln == firstGroup {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return ""
+	}
+	end := len(lines)
+	for i := start; i < len(lines); i++ {
+		if lines[i] == "Flags:" {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n")
 }

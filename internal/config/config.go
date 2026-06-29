@@ -39,9 +39,13 @@ type Config struct {
 	// Autonomy selects how much of a `kai code` run proceeds without
 	// human input. "hands_off" auto-confirms the plan, auto-accepts
 	// file/bash actions, and runs the review→fix loop unattended —
-	// the user only does the final gate approve. Empty / "off"
-	// (default) keeps every confirmation prompt. The `--auto` flag
-	// and KAI_AUTO env var override this per run.
+	// the user only does the final gate approve. "yolo" does everything
+	// hands_off does AND auto-resolves the gate (approve, or reject when
+	// the reviewer says REJECT) — it ships changes the gate held,
+	// unresolved judgment calls included, so it's opt-in and deliberately
+	// risky. Empty / "off" (default) keeps every confirmation prompt. The
+	// `--auto` flag and KAI_AUTO env var force hands_off per run; KAI_YOLO
+	// forces yolo.
 	Autonomy string `yaml:"autonomy"`
 }
 
@@ -54,11 +58,20 @@ type TriageConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// HandsOff reports whether the config selects the hands-off autonomy
-// level. Flag/env overrides are applied by the caller (cmd/kai),
-// not here.
+// HandsOff reports whether the config selects AT LEAST the hands-off
+// autonomy level. "yolo" is a superset (everything hands_off does plus
+// gate auto-approve), so it returns true for yolo too. Flag/env
+// overrides are applied by the caller (cmd/kai), not here.
 func (c Config) HandsOff() bool {
-	return c.Autonomy == "hands_off"
+	return c.Autonomy == "hands_off" || c.Autonomy == "yolo"
+}
+
+// Yolo reports whether the config selects the fully-autonomous "yolo"
+// level: hands_off PLUS auto-resolving the gate (the one decision
+// hands_off leaves to the human). It publishes changes the gate held,
+// so it's opt-in only. Flag/env overrides applied by the caller.
+func (c Config) Yolo() bool {
+	return c.Autonomy == "yolo"
 }
 
 // AgentConfig controls how kai's in-process agent runner behaves.
@@ -143,6 +156,34 @@ type ReviewConfig struct {
 	// incomplete work the build/test pass can't judge), so it's
 	// worth spending Opus tokens on a single diff-review pass.
 	Model string `yaml:"model"`
+
+	// DeployedModels names the model ids the reviewed workspace
+	// actually serves to its users (e.g. the product's configured LLM).
+	// They are runtime keys the reviewer can't see in a diff: a deployed
+	// model need not appear in the changed code, yet must still exist in
+	// the price/config tables. Supplying them lets the gate review's
+	// config cross-reference flag an unpriced *deployed* model. Empty by
+	// default; extendable at runtime via KAI_DEPLOYED_MODELS (comma-sep).
+	DeployedModels []string `yaml:"deployed_models"`
+
+	// Invariants are declared co-occurrence rules enforced by
+	// `kai analyze invariants`: a function that calls Trigger must also
+	// call Require (same body). They make the reviewer's
+	// forward-consequence-trace finding deterministic — once you've
+	// discovered "this mutation must also recompute X", promote it to a
+	// static check instead of re-finding it with a model. Empty by default.
+	Invariants []InvariantRule `yaml:"invariants"`
+}
+
+// InvariantRule is one declared co-occurrence invariant for
+// `kai analyze invariants`. Trigger and Require match the FINAL
+// identifier of a call expression (so the receiver doesn't matter:
+// `h.db.AddMember(...)` matches Trigger "AddMember"). Message, when set,
+// replaces the default violation text.
+type InvariantRule struct {
+	Trigger string `yaml:"trigger"`
+	Require string `yaml:"require"`
+	Message string `yaml:"message"`
 }
 
 // Built-in role models. Routing rationale: Opus decides intent,
@@ -175,7 +216,7 @@ const (
 	// planner keeps DeepSeek-V4-Pro for its reasoning-heavy exploration
 	// and reroutes only its constrained finalize turn (tui.go:514).
 	// A user who wants a reasoning chat model can set KAI_CHAT_MODEL.
-	defaultChatModel       = "z-ai/glm-5.1"
+	defaultChatModel = "z-ai/glm-5.1"
 	// Executor stays on GLM-5.1. DeepSeek-V4-Pro can silently
 	// die mid-task on multi-file edits — observed 2026-05-25:
 	// model emitted a text-only turn with finish_reason=tool_use
@@ -186,7 +227,7 @@ const (
 	// we either improve the runner's empty-response handling or
 	// fix the DSML leak upstream, executors run on GLM-5.1 where
 	// this failure mode hasn't been observed.
-	defaultAgentModel      = "z-ai/glm-5.1"
+	defaultAgentModel = "z-ai/glm-5.1"
 )
 
 // Default returns the config used when no file is present.

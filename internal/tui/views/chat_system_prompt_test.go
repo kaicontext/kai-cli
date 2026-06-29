@@ -10,23 +10,40 @@ import (
 // short so future edits to wording don't break the test.
 func TestChatSystemPrompt_LoadBearing(t *testing.T) {
 	required := map[string]string{
-		"url policy":           "Never generate or guess URLs",
-		"security policy":      "authorized testing",
-		"refuse-destructive":   "Refuse destructive",
-		"discovery rule":       "Discovery rule",
-		"parallel tool calls":  "Parallel tool calls",
-		"not read-only":        "NOT read-only",
-		"voice section":        "Voice:",
-		"style section":        "Style:",
-		"no markdown headers":  "markdown headers",
-		"summarize-not-paste":  "Summarize",
-		"kai_search primary":   "PRIMARY",
-		"kai_grep fallback":    "FALLBACK",
-		"bash restriction":     "Never bash",
+		"url policy":          "Never generate or guess URLs",
+		"security policy":     "authorized testing",
+		"refuse-destructive":  "Refuse destructive",
+		"discovery rule":      "Discovery rule",
+		"parallel tool calls": "Parallel tool calls",
+		"not read-only":       "NOT read-only",
+		"voice section":       "Voice:",
+		"style section":       "Style:",
+		"no markdown headers": "markdown headers",
+		"summarize-not-paste": "Summarize",
+		"kai_search primary":  "PRIMARY",
+		"kai_grep fallback":   "FALLBACK",
+		"bash restriction":    "Never bash",
 	}
 	for name, needle := range required {
 		if !strings.Contains(chatSystemPrompt, needle) {
 			t.Errorf("chatSystemPrompt missing %s (expected substring %q)", name, needle)
+		}
+	}
+}
+
+// TestWorkspaceGroundingGuidance_AuditLenses guards the audit/review
+// investigation lenses that fix the surface the original comparison ran
+// on — they live in the workspace-grounding guidance (audits are
+// codebase questions), alongside the OBSERVED discipline.
+func TestWorkspaceGroundingGuidance_AuditLenses(t *testing.T) {
+	required := map[string]string{
+		"operand-read":  "READ THE OPERANDS",
+		"forward-trace": "TRACE A MUTATION FORWARD",
+		"pricing tool":  "kit analyze pricing",
+	}
+	for name, needle := range required {
+		if !strings.Contains(workspaceGroundingGuidance, needle) {
+			t.Errorf("workspaceGroundingGuidance missing %s (expected substring %q)", name, needle)
 		}
 	}
 }

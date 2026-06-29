@@ -15,6 +15,16 @@ import (
 	"kai/api/workspace"
 )
 
+// heldItem pairs a held snapshot with the project it lives in so the
+// gate can list EVERY project's held integrations workspace-wide (not
+// just the primary's) and approve/reject each against its OWN project
+// DB. project is "" in single-root workspaces (no tag rendered).
+type heldItem struct {
+	node    *graph.Node
+	project string
+	mgr     *workspace.Manager
+}
+
 // Gate is the held-integration pane. It lists snapshots whose gate
 // verdict was Review or Block, lets the user navigate with arrow
 // keys, approve with `a` (advance team-visible refs), reject with
@@ -35,7 +45,7 @@ type Gate struct {
 	height  int
 	focused bool
 
-	items    []*graph.Node
+	items    []heldItem
 	selected int
 
 	status string // last-action message ("approved 9f3a — snap.latest moved", etc.)
@@ -77,7 +87,7 @@ func (g *Gate) Focused() bool             { return g.focused }
 // GateRefreshedMsg is delivered to the parent loop when refresh
 // completes — used to push the latest list back into Update.
 type GateRefreshedMsg struct {
-	items []*graph.Node
+	items []heldItem
 	err   error
 }
 
@@ -102,16 +112,40 @@ func (g *Gate) Refresh() tea.Cmd {
 	gdb := g.db
 	set := g.set
 	return func() tea.Msg {
-		// Scope the held list to the PRIMARY project — the one the
-		// user is actually working in. Aggregating across every
-		// project in a multi-root set made the status bar count a
-		// held item from a sibling project the user wasn't in (and
-		// `/gate list`, primary-scoped, then showed nothing).
+		// Workspace-wide: list held snapshots from EVERY project, each
+		// tagged with its project + a manager bound to that project's DB
+		// so approve/reject target the right store. The old code scoped
+		// to the PRIMARY project only, which silently HID held work in
+		// sibling projects — `/gate` launched in kai/ showed "nothing
+		// held" while kai-tui had 4 (the 2026-06-11 report). The per-row
+		// project tag (renderRow) addresses the "which project is this?"
+		// concern that originally motivated the primary-only scope.
 		if set != nil {
-			if primary := set.Primary(); primary != nil && primary.DB != nil {
-				items, err := safetygate.ListHeld(primary.DB)
-				return GateRefreshedMsg{items: items, err: err}
+			projs := set.Projects()
+			multiRoot := len(projs) > 1
+			var items []heldItem
+			var firstErr error
+			for _, p := range projs {
+				if p.DB == nil {
+					continue
+				}
+				held, err := safetygate.ListHeld(p.DB)
+				if err != nil {
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+				}
+				mgr := workspace.NewManager(p.DB)
+				name := ""
+				if multiRoot {
+					name = p.Name
+				}
+				for _, n := range held {
+					items = append(items, heldItem{node: n, project: name, mgr: mgr})
+				}
 			}
+			return GateRefreshedMsg{items: items, err: firstErr}
 		}
 		// Single-root fallback. gdb can be nil in DB-less contexts
 		// (tests, detached modes) — guard so ListHeld isn't handed a
@@ -119,7 +153,12 @@ func (g *Gate) Refresh() tea.Cmd {
 		if gdb == nil {
 			return GateRefreshedMsg{}
 		}
-		items, err := safetygate.ListHeld(gdb)
+		held, err := safetygate.ListHeld(gdb)
+		mgr := workspace.NewManager(gdb)
+		var items []heldItem
+		for _, n := range held {
+			items = append(items, heldItem{node: n, mgr: mgr})
+		}
 		return GateRefreshedMsg{items: items, err: err}
 	}
 }
@@ -128,8 +167,15 @@ func (g *Gate) Refresh() tea.Cmd {
 // async Refresh() above is preferred at runtime so DB reads don't
 // block the Bubble Tea event loop.
 func (g *Gate) refresh() {
-	items, _ := safetygate.ListHeld(g.db)
-	g.items = items
+	held, _ := safetygate.ListHeld(g.db)
+	mgr := g.mgr
+	if mgr == nil && g.db != nil {
+		mgr = workspace.NewManager(g.db)
+	}
+	g.items = g.items[:0]
+	for _, n := range held {
+		g.items = append(g.items, heldItem{node: n, mgr: mgr})
+	}
 	if g.selected >= len(g.items) {
 		g.selected = len(g.items) - 1
 	}
@@ -201,12 +247,18 @@ func (g Gate) Update(msg tea.Msg) (Gate, tea.Cmd) {
 // is currently highlighted. Returns nil if nothing is selected so the
 // caller can ignore the keypress.
 func (g *Gate) approveSelected() tea.Cmd {
-	if g.mgr == nil || len(g.items) == 0 {
+	if len(g.items) == 0 {
 		return nil
 	}
-	snap := g.items[g.selected]
-	mgr := g.mgr
-	id := snap.ID
+	it := g.items[g.selected]
+	mgr := it.mgr
+	if mgr == nil {
+		mgr = g.mgr
+	}
+	if mgr == nil {
+		return nil
+	}
+	id := it.node.ID
 	return func() tea.Msg {
 		advanced, err := mgr.ApproveHeld(id)
 		return gateActionMsg{
@@ -219,12 +271,18 @@ func (g *Gate) approveSelected() tea.Cmd {
 }
 
 func (g *Gate) rejectSelected() tea.Cmd {
-	if g.mgr == nil || len(g.items) == 0 {
+	if len(g.items) == 0 {
 		return nil
 	}
-	snap := g.items[g.selected]
-	mgr := g.mgr
-	id := snap.ID
+	it := g.items[g.selected]
+	mgr := it.mgr
+	if mgr == nil {
+		mgr = g.mgr
+	}
+	if mgr == nil {
+		return nil
+	}
+	id := it.node.ID
 	return func() tea.Msg {
 		err := mgr.RejectHeld(id)
 		return gateActionMsg{
@@ -249,8 +307,8 @@ func (g Gate) View() string {
 		body = styleDim.Render("  (no integrations are held)")
 	} else {
 		var lines []string
-		for i, n := range g.items {
-			lines = append(lines, g.renderRow(n, i == g.selected))
+		for i, it := range g.items {
+			lines = append(lines, g.renderRow(it, i == g.selected))
 		}
 		body = strings.Join(lines, "\n")
 	}
@@ -276,7 +334,8 @@ func (g Gate) View() string {
 	return frame.Render(inner)
 }
 
-func (g *Gate) renderRow(n *graph.Node, selected bool) string {
+func (g *Gate) renderRow(it heldItem, selected bool) string {
+	n := it.node
 	v, _ := n.Payload["gateVerdict"].(string)
 	blast, _ := n.Payload["gateBlastRadius"].(float64)
 	createdMs, _ := n.Payload["createdAt"].(float64)
@@ -297,7 +356,11 @@ func (g *Gate) renderRow(n *graph.Node, selected bool) string {
 		verdict = styleWarn.Render(verdict)
 	}
 
-	row := fmt.Sprintf("  %s  %-6s  blast=%-4d  %s", id, verdict, int(blast), when)
+	tag := ""
+	if it.project != "" {
+		tag = "[" + it.project + "] "
+	}
+	row := fmt.Sprintf("  %s%s  %-6s  blast=%-4d  %s", tag, id, verdict, int(blast), when)
 	if selected {
 		return styleSelected.Render(row)
 	}

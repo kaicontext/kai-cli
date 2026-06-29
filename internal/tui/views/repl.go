@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
@@ -24,16 +25,20 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	rw "github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 
 	"kai/api/agent"
-	"kai/api/message"
-	"kai/api/provider"
-	"kai/api/session"
 	"kai/api/clipboard"
 	"kai/api/kaipath"
 	"kai/api/memstat"
+	"kai/api/message"
 	"kai/api/planner"
+	"kai/api/provider"
+	"kai/api/session"
 	"kai/api/telemetry"
 	"github.com/kaicontext/kai-engine/tasksmd"
 	errpkg "kai/internal/tui/errors"
@@ -92,9 +97,9 @@ type REPL struct {
 	// detail) still set transient directly — they're mutually
 	// exclusive with the spinner/token state, so overwriting the
 	// composed value is the right behavior.
-	transient    string
-	spinnerView  string
-	tokenView    string
+	transient   string
+	spinnerView string
+	tokenView   string
 	// bannerText holds the rendered startup banner. Emitted to
 	// scrollback once via Banner() (returned from the parent's
 	// Init). Stored on the struct so a /clear can re-emit it.
@@ -106,6 +111,12 @@ type REPL struct {
 	height  int
 	binary  string
 	workDir string
+
+	// pastes holds large pastes diverted out of the input and
+	// replaced by compact placeholders, so a wall of pasted text
+	// doesn't bury the draft. Re-expanded at dispatch time — see
+	// paste_store.go.
+	pastes pasteStore
 
 	// transcript mirrors every block written to scrollback (write /
 	// writeRaw / writeMarkdown). Used by /copy to ship recent output
@@ -209,17 +220,29 @@ type REPL struct {
 	//   2 → feedback  (focus textarea, type to replan)
 	// -1 means "no menu showing." Reset to 0 each time a fresh plan
 	// lands so the user starts on the most-likely "go" answer.
-	planChoice         int
-	planDetailsExpanded bool   // true while full plan details are shown (toggled by ?)
-	planning           bool   // true while a planner LLM call is in flight
-	executing     bool // true while orchestrator is running
-	gateReviewing bool // true while a gate-review audit LLM call is in flight
-
+	planChoice          int
+	planDetailsExpanded bool // true while full plan details are shown (toggled by ?)
+	planning            bool // true while a planner LLM call is in flight
+	executing           bool // true while orchestrator is running
+	gateReviewing       bool // true while a gate-review audit LLM call is in flight
+	validating          bool // true while the claim-validator LLM pass is in flight
 
 	// lastActivity is the wall-clock time of the most recent
 	// model-side signal in this turn — used by the soft stuck-hint
 	// when a real provider state event hasn't arrived yet.
 	lastActivity time.Time
+
+	// toolInFlight is true while a tool the model dispatched is still
+	// executing — set on a "tool" activity event (OnToolCall), cleared
+	// by the next event of any other kind (the model resumed, i.e. the
+	// tool returned). A silent, long-running tool (e.g. a first-use
+	// kai_search backfill) emits nothing while it runs, so lastActivity
+	// goes stale and the idle watchdog would escalate the MODEL — but
+	// the model isn't stalled, it's waiting on its tool. The
+	// auto-escalation (which forces the model to call kai_consult)
+	// targets model-stall, not tool-execution, so it's suppressed while
+	// this is true.
+	toolInFlight bool
 
 	// providerState is the most recent RequestState reported by the
 	// active provider call (planner / spawned agent / gate review).
@@ -275,6 +298,14 @@ type REPL struct {
 	// working on. Reset between turns by the dispatch handler
 	// when a new user submit lands.
 	thinkingLine string
+
+	// reasoningBuf accumulates a reasoning model's streamed hidden
+	// chain-of-thought (OnReasoningDelta → "reasoning" activity events)
+	// for the CURRENT think. Its tail is shown live as "💭 thinking…" so
+	// a multi-minute GLM reasoning turn narrates its direction instead
+	// of freezing the spinner. Cleared when visible output/tool activity
+	// begins (the think is over) and at run start.
+	reasoningBuf string
 
 	// streamBuf accumulates assistant text as it arrives via
 	// OnAssistantDelta events. Rendered live above the input while
@@ -337,6 +368,15 @@ type REPL struct {
 	// dimension Claude Code's status line shows.
 	runStart        time.Time
 	runOutputTokens int
+
+	// pausedTotal accumulates time the run spent BLOCKED ON THE USER (the
+	// plan menu, a gate accept, a file/cost confirm). workElapsed()
+	// subtracts it so the timer shows WORK time, not wall-clock — leaving
+	// for dinner mid-prompt no longer inflates "(14m)" to "1d 13h"
+	// (2026-06-13). reconcilePause (top of Update) maintains it from the
+	// awaiting-human state; pauseStart is non-zero while currently paused.
+	pausedTotal time.Duration
+	pauseStart  time.Time
 
 	// verboseTools, when false (default), suppresses the per-tool-
 	// call scrollback lines ("→ kai_grep …", "→ view …") that
@@ -456,7 +496,7 @@ type REPL struct {
 	// don't like it") needs this to bundle context with the
 	// complaint when forwarding to claude. Capped at 5 turns
 	// to keep the prompt tight; older turns drop silently.
-	recentTurns []turnRecord
+	recentTurns    []turnRecord
 	responseStarts []int // responseStarts records transcript indices where each agent run began. Used by /copy response to ship whole exchanges.
 
 	// Slash-command autocomplete. Active whenever the input starts
@@ -503,6 +543,21 @@ type REPL struct {
 	// in TASKS.md: the next bare Enter launches a fresh turn that
 	// incorporates them. Cleared on that continue or any real submit.
 	continueArmed bool
+	// driveActive is set when a pasted multi-slice spec was decomposed
+	// into a TASKS.md worklist and the orchestrator is driving it one
+	// gated slice at a time (see drive_loop.go). While true, a
+	// successful run is followed by the in-progress task's acceptance
+	// gate, then a pause-at-each-gate "press Enter to continue."
+	// Cleared when the worklist drains or the user steers elsewhere.
+	driveActive bool
+	// driveFiles maps a slice subject to the files that slice's run
+	// changed, accumulated across the drive session so the completion
+	// summary (and /drive) can show what each slice actually did.
+	driveFiles map[string][]string
+	// driveLastChanged holds the files the most recent execute changed,
+	// captured from the ExecuteDoneMsg Result so handleDriveGateMsg can
+	// attribute them to the slice being gated.
+	driveLastChanged []string
 	// cancelRequestedAt records when a cancel last tripped
 	// CancelCurrent. Retained for idle bookkeeping; one-press cancel
 	// clears the busy flags immediately so it rarely matters now.
@@ -539,6 +594,15 @@ const fileIndexRefresh = 30 * time.Second
 // popup loses utility anyway and the walk cost stops being free.
 const fileIndexCap = 50000
 
+// chatVerifyEnabled gates the post-reply verify pass (the claim
+// validator + the prose critic) on the chat/discovery path. Disabled
+// for now: discovery answers are read-only — they don't write code — so
+// re-running their claims adds a 30s–3min round-trip after every reply
+// without protecting any edit. Flip back to true to restore validator +
+// critic. The orchestrator's post-edit verify (orchestrator/verify.go)
+// is unaffected; that guards the WRITE path and still runs.
+const chatVerifyEnabled = false
+
 // slashArgProviders supplies dynamic completion candidates for the
 // third token of `/<cmd> <sub> <prefix>`. Keyed by `cmd sub` (a
 // space-joined string). Providers receive the live PlannerServices
@@ -552,6 +616,7 @@ var slashArgProviders = map[string]func(s *PlannerServices) []string{
 	"gate show":    gateHeldIDs,
 	"gate diff":    gateHeldIDs,
 	"gate review":  gateHeldIDs,
+	"gate fix":     gateHeldIDs,
 }
 
 // slashCommands is the curated set of names offered as completions
@@ -559,11 +624,11 @@ var slashArgProviders = map[string]func(s *PlannerServices) []string{
 // to top-level kai cobra subcommands. Keep alphabetized — the order
 // here is the order shown in the popup.
 var slashCommands = []string{
-	"blame", "capture", "changeset", "chat", "checkout", "checkpoint", "ci",
-	"clear", "clone", "code", "copy", "debug", "diff", "exit", "fetch", "gate", "import",
+	"accept", "approve", "blame", "capture", "changeset", "chat", "checkout", "checkpoint", "ci",
+	"clear", "clone", "code", "copy", "debug", "diff", "drive", "exit", "fetch", "gate", "import",
 	"init", "integrate", "intent", "list", "live", "log", "merge",
-	"model", "modules", "org", "plan", "pull", "push", "query", "quiet", "refresh", "remote", "resolve",
-	"review", "share", "snap", "snapshot", "spawn", "stats", "status", "test",
+	"model", "modules", "notests", "org", "plan", "pull", "push", "query", "quiet", "refresh", "remote", "resolve",
+	"review", "share", "skip-tests", "snap", "snapshot", "spawn", "stats", "status", "test",
 	"ui", "update", "verbose", "version", "ws",
 }
 
@@ -614,6 +679,12 @@ var immediateSlashes = map[string]bool{
 	"/verbose": true,
 	"/quiet":   true,
 	"/share":   true,
+	// Override controls — must be immediate (processed even mid-run)
+	// so the user can interrupt an in-flight validation/retry.
+	"/approve":    true,
+	"/accept":     true,
+	"/skip-tests": true,
+	"/notests":    true,
 }
 
 // isImmediateSlash reports whether line is a slash command that should
@@ -710,15 +781,16 @@ func NewREPL(binary, workDir string, services *PlannerServices) REPL {
 	vp := viewport.New(0, 0)
 
 	r := REPL{
-		input:      in,
-		histIdx:    -1,
-		binary:     binary,
+		input:         in,
+		histIdx:       -1,
+		binary:        binary,
 		workDir:       workDir,
 		services:      services,
 		spinner:       sp,
 		bannerText:    renderBanner(services),
 		historyVP:     vp,
 		bashAllowlist: map[string]bool{},
+		pastes:        newPasteStore(),
 		// -1 means no plan menu showing. Set to 0 (focus "go")
 		// when a plan lands.
 		planChoice: -1,
@@ -778,7 +850,7 @@ func (r REPL) AppendGateBanner(n int) REPL {
 		noun = "changes"
 	}
 	r.write(styleWarn.Render(fmt.Sprintf(
-		"⚠ %d %s held for review. Type /gate review to inspect, or continue working.",
+		"⚠ %d %s held for review. /gate fix to let AI resolve the gaps · /gate review to inspect · or continue working.",
 		n, noun)))
 	return r
 }
@@ -792,7 +864,7 @@ func (r REPL) AppendGateHoldNotice(delta int) REPL {
 		noun = "integrations"
 	}
 	r.write(styleWarn.Render(fmt.Sprintf(
-		"⚠ Gate held %d new %s. Type /gate review when you're ready.",
+		"⚠ Gate held %d new %s. /gate fix to let AI resolve the gaps, or /gate review to inspect.",
 		delta, noun)))
 	return r
 }
@@ -820,15 +892,16 @@ func (r REPL) HistoryView() string { return r.historyVP.View() }
 // IsBusy reports whether the REPL has a run in flight that Ctrl+C
 // should cancel rather than treating as "exit kai." Read-only —
 // safe to call from the parent app.go's key handler.
-func (r REPL) IsBusy() bool { return r.planning || r.executing || r.gateReviewing }
+func (r REPL) IsBusy() bool { return r.planning || r.executing || r.gateReviewing || r.validating }
 
 // fullCancel stops the active run in a SINGLE gesture: trip the
 // context cancel, then immediately drop our local belief that
 // anything is running (clear the busy flags, stop the spinner) so the
 // TUI is usable at once. An in-flight model call may still finish in a
 // background goroutine — that's accepted; the TUI no longer waits on
-// it, and the process still exits cleanly on quit. If the user added
-// tasks during the run, arm the "press Enter to continue" follow-up.
+// it, and the process still exits cleanly on quit (a leaked goroutine
+// doesn't block Go's exit). If the user added tasks during the run,
+// arm the "press Enter to continue" follow-up.
 func (r *REPL) fullCancel() {
 	if r.services != nil {
 		r.services.CancelCurrent()
@@ -836,6 +909,7 @@ func (r *REPL) fullCancel() {
 	r.planning = false
 	r.executing = false
 	r.gateReviewing = false
+	r.validating = false
 	r.clearTransient()
 	r.cancelRequestedAt = time.Time{}
 	if r.tasksAddedThisRun > 0 {
@@ -857,6 +931,8 @@ func (r *REPL) HandleCtrlC() bool {
 		r.cancelRequestedAt = time.Time{}
 		return false
 	}
+	// Telemetry: ctrl-c is correlated with OOM in dogfood. Sample now
+	// (pre-cancel baseline) and burst-sample over the cancel window.
 	memstat.Log("ctrl-c-pressed")
 	memstat.LogBurst("ctrl-c", 2*time.Second, 3*time.Second, 5*time.Second, 10*time.Second)
 	r.fullCancel()
@@ -967,7 +1043,7 @@ const maxInputRows = 8
 // to decide how much vertical room the viewport gets so the layout
 // re-flows as the user types multi-line prompts.
 func (r *REPL) inputBoxHeight() int {
-	rows := r.input.LineCount()
+	rows := r.visualInputRows()
 	if rows < 1 {
 		rows = 1
 	}
@@ -978,6 +1054,96 @@ func (r *REPL) inputBoxHeight() int {
 		r.input.SetHeight(rows)
 	}
 	return rows + 2 // +2 for top + bottom border lines
+}
+
+// visualInputRows returns the number of *rendered* rows the input
+// occupies, counting soft-wrapped continuation rows — not just hard
+// newlines. textarea.LineCount() returns len(value), i.e. only the
+// logical lines split on '\n', so a single line that wraps past the
+// box width still reports 1. Sizing the box off that left the wrapped
+// overflow scrolled out of a 1-row viewport (the "text disappears"
+// bug). We re-run the textarea's own word-wrap to get the true row
+// count at the current content width.
+func (r *REPL) visualInputRows() int {
+	width := r.input.Width()
+	if width <= 0 {
+		// Width not set yet (pre-first-SetSize); fall back to logical
+		// lines rather than divide by zero in the wrap.
+		return r.input.LineCount()
+	}
+	total := 0
+	for _, line := range strings.Split(r.input.Value(), "\n") {
+		total += len(taWrap([]rune(line), width))
+	}
+	if total < 1 {
+		total = 1
+	}
+	return total
+}
+
+// taWrap is a verbatim port of textarea.wrap (bubbles v1.0.0). It must
+// stay byte-for-byte faithful to the library's word-wrap so the row
+// count we compute matches exactly what the textarea renders — an
+// off-by-one here reintroduces either premature growth or hidden
+// overflow. See visualInputRows for why we can't use the public API.
+func taWrap(runes []rune, width int) [][]rune {
+	var (
+		lines  = [][]rune{{}}
+		word   = []rune{}
+		row    int
+		spaces int
+	)
+
+	for _, r := range runes {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			word = append(word, r)
+		}
+
+		if spaces > 0 {
+			if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces > width {
+				row++
+				lines = append(lines, []rune{})
+				lines[row] = append(lines[row], word...)
+				lines[row] = append(lines[row], taRepeatSpaces(spaces)...)
+				spaces = 0
+				word = nil
+			} else {
+				lines[row] = append(lines[row], word...)
+				lines[row] = append(lines[row], taRepeatSpaces(spaces)...)
+				spaces = 0
+				word = nil
+			}
+		} else {
+			lastCharLen := rw.RuneWidth(word[len(word)-1])
+			if uniseg.StringWidth(string(word))+lastCharLen > width {
+				if len(lines[row]) > 0 {
+					row++
+					lines = append(lines, []rune{})
+				}
+				lines[row] = append(lines[row], word...)
+				word = nil
+			}
+		}
+	}
+
+	if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces >= width {
+		lines = append(lines, []rune{})
+		lines[row+1] = append(lines[row+1], word...)
+		spaces++
+		lines[row+1] = append(lines[row+1], taRepeatSpaces(spaces)...)
+	} else {
+		lines[row] = append(lines[row], word...)
+		spaces++
+		lines[row] = append(lines[row], taRepeatSpaces(spaces)...)
+	}
+
+	return lines
+}
+
+func taRepeatSpaces(n int) []rune {
+	return []rune(strings.Repeat(string(' '), n))
 }
 
 // InputValue returns the current draft text. Used by the parent
@@ -1008,6 +1174,9 @@ func (r *REPL) Blur() { r.input.Blur() }
 // Update handles key input and the async CmdResultMsg that arrives
 // when a child command finishes.
 func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
+	// Maintain the work-vs-waiting clock split: stamp/bank time spent
+	// blocked on the user so the timer measures work, not wall-clock.
+	r.reconcilePause()
 	// Flush any queued tea.Println content on every return path,
 	// not just the bottom one. Handlers like PlanReadyMsg and
 	// ChatActivityMsg call r.write/r.writeMarkdown and then return
@@ -1305,6 +1474,19 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 				return r, nil
 			}
 		}
+		// Large-paste diversion. Bracketed paste arrives as a single
+		// KeyMsg with Paste set and the whole pasted chunk in Runes.
+		// Reaches here only after every modal/autocomplete intercept
+		// above has declined the keystroke, so we're in normal input
+		// mode. A big paste is stored and replaced inline by a compact
+		// placeholder (re-expanded at dispatch) instead of dumping a
+		// wall of text into the textarea — which would bury the draft
+		// and, past CharLimit, be truncated. Small pastes fall through
+		// to the textarea untouched.
+		if msg.Paste && r.pastes.shouldStore(string(msg.Runes)) {
+			return r.handleLargePaste(string(msg.Runes))
+		}
+
 		switch msg.String() {
 		case "esc":
 			// Esc fully cancels the in-flight run in ONE press. Reaches
@@ -1328,7 +1510,7 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 					r.continueArmed = false
 					r.tasksAddedThisRun = 0
 					r.input.Reset()
-					return r.submitLine("Continue with the pending tasks in TASKS.md.", true)
+					return r.submitLine(driveContinueSentinel, true)
 				}
 				return r, nil
 			}
@@ -1343,7 +1525,9 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			// Same for the idle-escalation one-shot guard — new
 			// user input is a fresh attempt.
 			r.autoEscalatedTurn = false
-			r.autoEscalateRequest = line
+			// Expand pasted placeholders so an escalation retry
+			// re-dispatches the full content, not the token.
+			r.autoEscalateRequest = r.pastes.expand(line)
 			// Mid-flight case: input typed while a run is active is NOT
 			// queued. It's captured as a Pending task in TASKS.md so the
 			// running agent picks it up on its next turn (TASKS.md is
@@ -1355,7 +1539,7 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 				appendReplHistory(r.workDir, line)
 				r.histIdx = -1
 				r.input.Reset()
-				n, err := tasksmd.AddPending(r.workDir, line)
+				n, err := tasksmd.AddPending(r.workDir, r.pastes.expand(line))
 				if err != nil {
 					r.write(styleDim.Render("could not add task to TASKS.md: " + err.Error()))
 				} else {
@@ -1596,6 +1780,18 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			// and the v0.31.45 host-command auto-followup —
 			// user input always wins).
 			if r.services != nil && !r.IsBusy() && strings.TrimSpace(r.input.Value()) == "" {
+				if hostErrorIsLowSignal(msg.Event.ErrorLine) {
+					// Low-signal: a browser-engine internal log (Chromium /
+					// Electron) or a transient network failure — not an app
+					// code bug. Auto-dispatching a fix-run on it burns a run
+					// on noise AND starts from a far weaker prompt than the
+					// user's own bug report (2026-06-02 dogfood: a Chromium
+					// net::ERR_FAILED line auto-fired a fix-run that couldn't
+					// fix anything). Offer instead — the user decides, with
+					// their context, which turns the weak prompt strong.
+					r.write(styleDim.Render("  ↳ looks like engine/network noise rather than an app bug — not auto-investigating. If it IS the problem, tell me what you're seeing and I'll dig in."))
+					return r, nil
+				}
 				r.write(styleDim.Render("↻ asking kai to look at the error"))
 				// Force coding mode (write+edit). See the matching
 				// override in the HostCommandDoneMsg branch above —
@@ -1604,7 +1800,8 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 				// left the session sticky in conversation mode.
 				r.forcedMode = agent.ModeCoding
 				followup := fmt.Sprintf(
-					"The managed process `%s` produced this error:\n\n%s\n\nDiagnose and fix.",
+					"The managed process `%s` produced this error:\n\n%s\n\n"+
+						"FIRST check whether the RUNNING process is STALE. This is a long-lived dev server started earlier; if it was launched before recent edits, it is still executing the OLD code on disk. A runtime error that names something missing or unregistered — \"X is not a function\", \"no handler registered for ...\", \"undefined is not ...\", \"cannot read properties of undefined\" — appearing AFTER the relevant code was added is most often a stale process, not a code bug. Read the on-disk code for the exact symbol/handler/route the error says is missing. If the code ALREADY defines or registers it, the running process simply predates that code: the fix is to RESTART the dev server (not edit anything) — say that plainly and stop, do not change correct code. Only if the on-disk code genuinely lacks it should you diagnose and fix the code.",
 					msg.Event.Command, msg.Event.ErrorLine,
 				)
 				return r.dispatch(followup)
@@ -1625,8 +1822,27 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 		// the stuck-detector. Stamp here once rather than at every
 		// inner case so we never miss a Kind we forgot to enumerate.
 		r.lastActivity = time.Now()
+		// A "tool" event means the model just dispatched a tool that is
+		// now executing; a "tool_progress" heartbeat means that tool is
+		// STILL executing; any other kind means the model is producing
+		// output again (so its tool, if any, has returned). The last
+		// event before a stretch of silence therefore tells us whether
+		// that silence is a running tool or a stalled model. See
+		// toolInFlight's field comment + maybeAutoEscalate.
+		r.toolInFlight = msg.Event.Kind == "tool" || msg.Event.Kind == "tool_progress"
 		// Inline activity from a chat-fallback agent run.
 		switch msg.Event.Kind {
+		case "tool_progress":
+			// Live elapsed heartbeat for a still-running tool. Drive the
+			// spinner text in place — no scrollback write — so a slow
+			// graph scan / capture reads as "⋯ kai_callers — 8s working",
+			// not a frozen line. clearTransient + renderSpinner repaint
+			// the live region without stacking lines.
+			r.spinnerText = "⋯ " + msg.Event.Summary
+			r.thinkingLine = ""
+			r.clearTransient()
+			r.renderSpinner()
+			return r, nil
 		case "tokens":
 			// Drop late events that arrive after the run's
 			// final trailer already landed. See trailerRendered's
@@ -1655,6 +1871,9 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			r.clearTransient()
 			r.writeRaw(formatDiffEvent(msg.Event, r.wrapWidth()))
 		case "tool":
+			// A tool dispatch means the think produced an action — drop
+			// the live "💭 thinking…" buffer so it doesn't linger.
+			r.reasoningBuf = ""
 			// Tool dispatch from the planner/agent runner — the
 			// "→ bash: ls" headline a tool call emits before its
 			// streamed output. In verbose mode (off by default), it
@@ -1709,6 +1928,9 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			// content. Dumping the raw fenced JSON would duplicate
 			// it as dim noise.
 			r.clearTransient()
+			// Visible narration arrived — this turn's hidden think is
+			// done; drop the 💭 buffer so it doesn't override this line.
+			r.reasoningBuf = ""
 			text := strings.TrimSpace(msg.Event.Summary)
 			if text != "" && !looksLikePlanJSON(text) {
 				r.write(styleDim.Render(text))
@@ -1716,6 +1938,26 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			r.thinkingLine = lastSentence(msg.Event.Summary)
 			r.renderSpinner()
 			return r, nil
+		case "reasoning":
+			// Live hidden chain-of-thought, streamed as deltas (GLM
+			// thinks for minutes). Accumulate and show only the tail
+			// under the spinner — NEVER flush to scrollback (it's chunked
+			// and can be tens of KB). The lastActivity stamp above keeps
+			// the idle watchdog quiet while it thinks. Cleared when
+			// visible output/tools begin (see the delta/tool cases).
+			r.reasoningBuf += msg.Event.Summary
+			if len(r.reasoningBuf) > 2000 {
+				r.reasoningBuf = r.reasoningBuf[len(r.reasoningBuf)-2000:]
+			}
+			if s := lastSentence(r.reasoningBuf); strings.TrimSpace(s) != "" {
+				r.thinkingLine = "💭 " + s
+				r.renderSpinner()
+			}
+			return r, nil
+		case "token_usage":
+			r.sessionCostUSD += msg.Event.CostUSD
+			r.sessionTurns++
+			r.renderSpinner()
 		case "provider_state":
 			// Real HTTP/SSE call state from the provider layer.
 			// Stash the latest; renderSpinner formats it below
@@ -1911,6 +2153,9 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			if r.streamClosed {
 				return r, nil
 			}
+			// Visible text means the think is over — drop the live
+			// "💭 thinking…" buffer so it doesn't linger under the reply.
+			r.reasoningBuf = ""
 			r.clearTransient()
 			ev := r.stepParser.Feed(msg.Event.Delta)
 			if len(ev.Block) > 0 {
@@ -1985,6 +2230,18 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			return r, nil
 		}
 
+	case HeartbeatMsg:
+		// Independent once-per-second liveness re-render. While a run
+		// is active (and not blocked on the user), repaint the spinner
+		// block so the elapsed timer advances even if the bubbles
+		// frame chain has stalled. Always re-arm — the heartbeat runs
+		// for the life of the session so no run-start path has to
+		// remember to restart it. See HeartbeatMsg's doc comment.
+		if (r.planning || r.executing || r.gateReviewing || r.validating) && !r.isAwaitingHuman() {
+			r.renderSpinner()
+		}
+		return r, Heartbeat()
+
 	case spinner.TickMsg:
 		// Advance the spinner frame, repaint the transient line, and
 		// schedule the next tick — but only while there's still work
@@ -1993,7 +2250,7 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 		// animation idles.
 		var sCmd tea.Cmd
 		r.spinner, sCmd = r.spinner.Update(msg)
-		if r.planning || r.executing || r.gateReviewing {
+		if (r.planning || r.executing || r.gateReviewing || r.validating) && !r.isAwaitingHuman() {
 			r.renderSpinner()
 			// Idle-escalation watchdog: if the agent has emitted no
 			// activity for autoEscalateAfter AND we haven't already
@@ -2232,7 +2489,7 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 				// Apples-to-apples Claude-Code-style line: same
 				// "(elapsed · ↓ tokens)" shape so users moving
 				// between tools can compare directly.
-				r.write(styleDim.Render(formatRunSummary(r.runStart, r.turnFirstResponseAt, r.runOutputTokens)))
+				r.write(styleDim.Render(formatRunSummary(r.workElapsed(), r.runStart, r.turnFirstResponseAt, r.runOutputTokens)))
 				r.write(styleDim.Render(formatTokensSplit(totalIn, totalOut, totalCreate, totalRead) +
 					formatSessionTotal(r.sessionCostUSD, r.sessionTurns)))
 				r.maybeRenderDailyCapWarning()
@@ -2300,7 +2557,33 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			// command path has its own end-to-end visibility now via
 			// the v0.31.45 auto-error feedback; a separate critic on
 			// top is noise.
-			if msg.Err == nil && msg.HostCommand == "" && len(strings.TrimSpace(msg.ChatReply)) >= 80 {
+			// Completion-claim guard — fires even when the broader chat
+			// verify (chatVerifyEnabled) is off. An "already done /
+			// already implemented / nothing to do" answer to a change
+			// request is the ONE chat answer still worth verifying
+			// against the code: the 2026-06-09 "✓ Already done" on the
+			// starter tier was false (tiers defined in config + tierRank
+			// but the commit limit unenforced, no checkout path, webhooks
+			// unrouted), and a wrong "nothing to do" silently strands the
+			// user's real request. The done-claim guidance in runValidator
+			// makes it check WIRING (enforcement/usage), not just that the
+			// definitions exist. Skips structural questions (graph-grounded
+			// at generation) like the block below.
+			if msg.Err == nil && msg.HostCommand == "" &&
+				len(strings.TrimSpace(msg.ChatReply)) >= 40 &&
+				looksLikeDoneClaim(msg.ChatReply) && !isStructuralQuestion(msg.Request) {
+				r.retractedAnswer = msg.ChatReply
+				if validatorCmd := runValidator(r.services, msg.Request, msg.ChatReply, msg.SessionID); validatorCmd != nil {
+					r.validating = true
+					r.spinnerText = "verifying the \"already done\" claim against the code"
+					r.spinner.Spinner = pickSpinnerStyle()
+					r.thinkingLine = ""
+					r.clearTransient()
+					r.renderSpinner()
+					return r, tea.Batch(validatorCmd, r.spinner.Tick)
+				}
+			}
+			if chatVerifyEnabled && msg.Err == nil && msg.HostCommand == "" && len(strings.TrimSpace(msg.ChatReply)) >= 80 {
 				// Fast-path: cheap pre-critic detector for generic-
 				// opening replies to workspace questions. When the
 				// model has clearly bypassed the workspace context
@@ -2323,17 +2606,63 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 				// can restore it instead of leaving the user with an
 				// error and nothing.
 				r.retractedAnswer = msg.ChatReply
-				if criticCmd := runCritic(r.services, msg.Request, msg.ChatReply, msg.SessionID); criticCmd != nil {
-					// Visible loading state — the critic call has
-					// latency (one LLM round-trip with a reasoning
-					// model on top). Without this line the user sees
-					// the agent's reply land, then dead air, then a
-					// critic message popping out of nowhere. The dim
-					// line clears when CriticReadyMsg arrives (the
-					// next message overwrites it visually via the
-					// scroll).
-					r.write(styleDim.Render("· reviewing the reply…"))
-					return r, criticCmd
+				// Route by what the reply IS. An answer that makes
+				// checkable claims about this codebase (cites a file,
+				// or answers a workspace question) goes to the tool-
+				// using validator, which RE-RUNS the claims — runs the
+				// commands it cites, greps the symbols it asserts,
+				// reads the file:lines it points to — and FAILs on any
+				// contradiction with the real tool output. The prose
+				// critic can't catch a confidently-wrong factual claim
+				// (it has no tools; catching "kai live --format json is
+				// an unknown flag" requires running the flag). Replies
+				// with nothing to run (conceptual answers) keep the
+				// prose critic + the generic-opening fast-path. Both
+				// emit CriticReadyMsg, so the FAIL → auto-retry →
+				// restore-retracted-answer pipeline is identical.
+				// Structural questions are grounded at GENERATION (the
+				// chat agent was forced to answer from the graph), so the
+				// post-hoc validator is redundant — and it's the case
+				// where it timed out trying to re-verify a 51-caller
+				// blast-radius answer. Skip it: the graph already verified
+				// this at generation time. (Prototype of the "ground at
+				// generation, don't verify after" direction.)
+				if isStructuralQuestion(msg.Request) {
+					r.write(styleDim.Render("· structural answer — grounded in the graph at generation; no separate verify needed"))
+				} else if shouldValidateClaims(msg.ChatReply, msg.Request) {
+					if validatorCmd := runValidator(r.services, msg.Request, msg.ChatReply, msg.SessionID); validatorCmd != nil {
+						// Animated, live-activity status instead of a dead
+						// static gray line. The validator is a 30s–3min
+						// tool-using pass; a frozen "verifying…" line reads
+						// as a hang. Drive the spinner (validating state)
+						// and stream the validator's tool calls + bash
+						// output through ChatActivityCh — the same live
+						// feed the chat agent uses — so the user watches it
+						// run `kit live --json`, grep, read, in real time.
+						r.validating = true
+						r.spinnerText = "verifying — running the answer's claims"
+						r.spinner.Spinner = pickSpinnerStyle()
+						r.thinkingLine = ""
+						r.clearTransient()
+						r.renderSpinner()
+						return r, tea.Batch(validatorCmd, r.spinner.Tick)
+					}
+				}
+				// Skip the prose critic too for structural questions —
+				// they're graph-grounded at generation, nothing to review.
+				if !isStructuralQuestion(msg.Request) {
+					if criticCmd := runCritic(r.services, msg.Request, msg.ChatReply, msg.SessionID); criticCmd != nil {
+						// Visible loading state — the critic call has
+						// latency (one LLM round-trip with a reasoning
+						// model on top). Without this line the user sees
+						// the agent's reply land, then dead air, then a
+						// critic message popping out of nowhere. The dim
+						// line clears when CriticReadyMsg arrives (the
+						// next message overwrites it visually via the
+						// scroll).
+						r.write(styleDim.Render("· reviewing the reply…"))
+						return r, criticCmd
+					}
 				}
 			}
 		case msg.Plan == nil:
@@ -2370,7 +2699,7 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 				r.sessionCostUSD += cost
 				r.sessionTurns++
 				r.runOutputTokens += msg.PlannerTokensOut
-				r.write(styleDim.Render(formatRunSummary(r.runStart, r.turnFirstResponseAt, r.runOutputTokens)))
+				r.write(styleDim.Render(formatRunSummary(r.workElapsed(), r.runStart, r.turnFirstResponseAt, r.runOutputTokens)))
 				r.write(styleDim.Render(formatTokensSplit(
 					msg.PlannerTokensIn, msg.PlannerTokensOut,
 					msg.PlannerTokensCacheCreate, msg.PlannerTokensCacheRead) +
@@ -2428,16 +2757,33 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 		return r, nil
 
 	case CriticReadyMsg:
-		// Satisfaction-gate critic landed. Display in light
+		// Satisfaction-gate critic / claim-validator landed. Stop the
+		// validating spinner first (no-op for the prose critic, which
+		// doesn't set it) and clear the transient so the verdict renders
+		// cleanly without a stale "verifying…" line under it.
+		wasValidating := r.validating
+		if r.validating {
+			r.validating = false
+			r.spinnerText = ""
+			r.thinkingLine = ""
+			r.clearTransient()
+		}
+		// Display in light
 		// gray on both PASS and FAIL — the critic is a soft
 		// signal, not an error. A red "× critic:" line read
 		// as a failure-of-kai when it's actually feedback on
 		// kai's WORK. Same dim weight as the trailer keeps
 		// it in the right register.
-		// On Err: silently drop — a critic transport failure
-		// shouldn't surface noise; the agent's reply was
-		// already rendered.
+		// On Err: the prose critic stays silent (soft signal, reply
+		// already rendered). But the tool-using validator, which the
+		// user just watched run a long visible spinner, must NOT
+		// vanish on a timeout/error — silently dropping after 3 min of
+		// activity reads as "it gave up and hid it." Surface an honest
+		// one-liner so the user knows the answer above is UNVERIFIED.
 		if msg.Err != nil {
+			if wasValidating {
+				r.write(styleDim.Render("· couldn't finish verifying — the answer above stands, but I didn't fully check it"))
+			}
 			return r, nil
 		}
 		if msg.Pass {
@@ -2562,18 +2908,57 @@ func (r REPL) Update(msg tea.Msg) (next REPL, cmd tea.Cmd) {
 			}
 		} else {
 			r.write(formatExecuteResult(msg.Result, nil))
+			// Drive mode: gate the in-progress slice before advancing.
+			// The gate runs off the update loop (it may shell out to
+			// `go test`); its DriveGateMsg arrives back here. Engagement
+			// is derived from the durable ledger, so the gate still fires
+			// after a continue that didn't go through the in-memory flag
+			// (a restart, or a typed "do it").
+			if r.driveEngaged() {
+				r.driveLastChanged = changedPathsFromResult(msg.Result)
+				if cmd := r.driveGateCmdAfterExecute(); cmd != nil {
+					r.pendingPlan = nil
+					r.originalReq = ""
+					return r, cmd
+				}
+			}
 		}
 		r.pendingPlan = nil
 		r.originalReq = ""
 		return r, repairCmd
+	case DriveGateMsg:
+		r.spinnerText = ""
+		r.clearTransient()
+		return r.handleDriveGateMsg(msg)
+	case DriveReconcileMsg:
+		return r.handleDriveReconcileMsg(msg)
 	}
 
 	var inCmd tea.Cmd
-	priorLines := r.input.LineCount()
+	priorRows := r.visualInputRows()
 	priorValue := r.input.Value()
+
+	// Give the textarea its full height *before* it processes the
+	// message. During its own Update the textarea repositions its
+	// internal scroll using whatever height it currently has; if that
+	// height is too short for freshly soft-wrapped text it scrolls the
+	// overflow out of view, and a later SetHeight() will NOT scroll it
+	// back — SetHeight never repositions, and repositionView only
+	// scrolls to keep the cursor visible, never up to reveal newly
+	// available space. With the full height already in place it never
+	// over-scrolls. We trim back to the rows actually used right after.
+	r.input.SetHeight(maxInputRows)
+
 	r.input, inCmd = r.input.Update(msg)
-	if r.input.LineCount() != priorLines && r.width > 0 && r.height > 0 {
+
+	// Re-fit the box to the rows now occupied. When the row count
+	// changed, reflow the surrounding layout so the history viewport
+	// gives up / reclaims the vertical space; otherwise just shrink the
+	// textarea back (inputBoxHeight applies the height as a side effect).
+	if r.visualInputRows() != priorRows && r.width > 0 && r.height > 0 {
 		r.SetSize(r.width, r.height)
+	} else {
+		r.inputBoxHeight()
 	}
 	// Recompute slash-command suggestions whenever the input text
 	// changed. Cheap (linear scan over a small static list) and
@@ -2748,11 +3133,54 @@ func (r *REPL) refreshSuggestions() {
 // passes false so a queued item doesn't re-append to history (the
 // item already landed in history when it was queued, so a second
 // append would duplicate it).
+// handleLargePaste stores a big pasted chunk and inserts a compact
+// placeholder at the cursor in its place. The placeholder is plain
+// text in the textarea, so editing, cursor movement, and submission
+// all work normally; submitLine re-expands it to the full content
+// before dispatch. Mirrors the layout re-fit the bottom of Update does
+// after a textarea edit, since inserting the placeholder can change the
+// input's rendered height.
+func (r REPL) handleLargePaste(content string) (REPL, tea.Cmd) {
+	priorRows := r.visualInputRows()
+	e := r.pastes.store(content)
+	r.input.InsertString(r.pastes.placeholder(e))
+	if r.visualInputRows() != priorRows && r.width > 0 && r.height > 0 {
+		r.SetSize(r.width, r.height)
+	} else {
+		r.inputBoxHeight()
+	}
+	r.refreshSuggestions()
+	return r, nil
+}
+
 func (r *REPL) submitLine(line string, fromUser bool) (REPL, tea.Cmd) {
 	if fromUser {
 		r.history = append(r.history, line)
 		appendReplHistory(r.workDir, line)
 		r.histIdx = -1
+	}
+	// Drive mode: a fresh user-pasted multi-slice spec is decomposed
+	// into a gated TASKS.md worklist and the dispatched prompt is
+	// rewritten to focus the first slice. Otherwise, drive stays engaged
+	// whenever the durable ledger shows a live worklist — so a typed
+	// continue ("do it", "next") and a restart keep driving, not just the
+	// one exact driveContinueSentinel phrase. Drive only disengages when
+	// there is no worklist left to drive.
+	// Re-expand any [Pasted text #N …] placeholders back to the full
+	// content before the line reaches drive decomposition or the
+	// agent. The echo + history above intentionally keep the compact
+	// placeholder so scrollback and up-arrow recall stay readable.
+	expanded := r.pastes.expand(line)
+	dispatchLine := expanded
+	var driveSummary string
+	if fromUser {
+		if d, summary, engaged := r.maybeEngageDriveFromSpec(expanded); engaged {
+			dispatchLine, driveSummary = d, summary
+		} else if r.driveWorklistLive() {
+			r.driveActive = true
+		} else if line != driveContinueSentinel {
+			r.driveActive = false
+		}
 	}
 	// New run starts: reset the mid-flight task-capture counter and the
 	// continue-armed flag (any tasks added previously are already in
@@ -2777,7 +3205,23 @@ func (r *REPL) submitLine(line string, fromUser bool) (REPL, tea.Cmd) {
 	// line itself.
 	r.appendSeparator()
 	r.write(replPrompt() + line)
-	return r.dispatch(line)
+	if driveSummary != "" {
+		r.write(styleDim.Render(driveSummary))
+	}
+	// Drive: before re-running the agent on a continue, reconcile the
+	// in-progress slice against disk. If it carries an explicit
+	// acceptance command that already passes, tick it off and advance
+	// without re-executing (the self-heal for a ledger left behind by
+	// work that already landed). Prose-gated slices fall through to a
+	// normal dispatch. Skip when we just engaged a fresh spec — its first
+	// slice is brand new and cannot already be done.
+	if fromUser && driveSummary == "" {
+		if cmd, ok := r.maybeDriveReconcileCmd(dispatchLine); ok {
+			r.write(styleDim.Render("· reconciling in-progress slice against disk"))
+			return *r, cmd
+		}
+	}
+	return r.dispatch(dispatchLine)
 }
 
 // clipForQueue trims a queued prompt for the queue indicator and
@@ -2793,8 +3237,8 @@ func clipForQueue(s string) string {
 
 // visionModel picks the model id used for /image describe calls.
 // Override via KAI_VISION_MODEL env, otherwise falls back to the
-// vision package's DefaultModel (currently Qwen/Qwen3.5-397B-A17B,
-// which is in kailab's KailabTogetherModels allowlist and supports
+// vision package's DefaultModel (currently qwen/qwen3.5-397b-a17b,
+// which is in kailab's KailabOpenRouterModels allowlist and supports
 // image-in / text-out per Together's catalog).
 func visionModel(s *PlannerServices) string {
 	if v := strings.TrimSpace(os.Getenv("KAI_VISION_MODEL")); v != "" {
@@ -3097,7 +3541,7 @@ func (r REPL) View() string {
 		// no spinner — render the confirm block below instead.
 	case r.transient != "":
 		parts = append(parts, r.transient)
-	case r.planning || r.executing || r.gateReviewing:
+	case r.planning || r.executing || r.gateReviewing || r.validating:
 		if live := r.liveBlock(); live != "" {
 			parts = append(parts, live)
 		}
@@ -3291,6 +3735,19 @@ func (r REPL) dispatch(line string) (REPL, tea.Cmd) {
 		}
 	}
 
+	// `!cmd` runs an arbitrary shell command in the workspace, like Claude
+	// Code's `!` prefix. Output lands in scrollback; nothing is routed to the
+	// agent. Checked before everything else so it's an unambiguous escape
+	// hatch even mid-plan.
+	if strings.HasPrefix(line, "!") {
+		cmd := strings.TrimSpace(strings.TrimPrefix(line, "!"))
+		if cmd == "" {
+			r.write(styleDim.Render("usage: !<shell command>   e.g. !git status"))
+			return r, nil
+		}
+		return r, runBashCommand(cmd, r.workDir)
+	}
+
 	// Mode 2 fixxy: the magic phrase "no sir i don't like it"
 	// (case-insensitive, fuzzy on whitespace + punctuation)
 	// signals that the recent answer was bad. Bundle the
@@ -3355,6 +3812,13 @@ func (r REPL) dispatch(line string) (REPL, tea.Cmd) {
 		head := trimmed
 		if i := strings.IndexAny(head, " \t"); i > 0 {
 			head = head[:i]
+		}
+		if strings.TrimSpace(strings.TrimPrefix(line, "/")) == "drive" {
+			// On-demand worklist summary: what every slice did and
+			// whether it succeeded. Works whether or not a drive is
+			// currently active (you can ask after it finished).
+			r.write(r.renderDriveSummary())
+			return r, nil
 		}
 		if strings.TrimSpace(strings.TrimPrefix(line, "/")) == "clear" {
 			r.streamBuf = ""
@@ -3505,27 +3969,80 @@ func (r REPL) dispatch(line string) (REPL, tea.Cmd) {
 			r.write(r.statusReport())
 			return r, nil
 		}
+		// "/approve" / "/accept" — the user override: accept the current
+		// chat answer as-is and stop the validator/critic verification
+		// loop. The 2026-06-02 dogfood motivated this — a validator
+		// FALSE-failed a correct fix, retracted it, and burned a 5-minute
+		// retry that timed out. This lets the user say "I approve it" and
+		// cut the loop. Works whether a validation is in flight or an
+		// auto-retry has already started; the answer stays in scrollback.
+		// For a HELD integration (a verify-check failed at the gate), the
+		// approve action lives in /gate (press `a`); pointed at here.
+		if h := strings.ToLower(head); h == "/approve" || h == "/accept" {
+			// Only act when a validation/retry is the thing in flight —
+			// NOT a normal run (r.planning alone), which has no answer to
+			// approve yet and shouldn't be silently cancelled. r.validating
+			// = validator in flight; criticRetryCount>0 = an auto-retry is
+			// running or pending.
+			pending := r.validating || r.criticRetryCount > 0
+			if pending {
+				if r.services != nil {
+					r.services.CancelCurrent() // stop an in-flight validator/retry
+				}
+				r.planning = false
+				r.validating = false
+				r.criticRetryCount = 0
+				r.inFlightPendingAction = ""
+				r.retractedAnswer = ""
+				r.spinnerText = ""
+				r.thinkingLine = ""
+				r.clearTransient()
+				r.write(styleDim.Render("✓ approved — keeping the answer above as-is; verification stopped."))
+				return r, nil
+			}
+			r.write(styleDim.Render("/approve: nothing pending here. To approve a held integration, open /gate and press a."))
+			return r, nil
+		}
+		// "/skip-tests" / "/notests" — toggle the orchestrator's auto-test
+		// pass off (or back on) for this session, so a run goes forward
+		// without test-gating. Held verify-checks are separate — override
+		// those at the gate (/gate → a).
+		if h := strings.ToLower(head); h == "/skip-tests" || h == "/notests" {
+			if r.services == nil {
+				r.write(styleDim.Render("/skip-tests: no services configured"))
+				return r, nil
+			}
+			r.services.OrchestratorCfg.AutoTest = !r.services.OrchestratorCfg.AutoTest
+			if r.services.OrchestratorCfg.AutoTest {
+				r.write(styleDim.Render("test pass RE-ENABLED — runs will run the auto-test pass again."))
+			} else {
+				r.write(styleDim.Render("✓ auto-test pass SKIPPED for this session — runs go forward without it. (/skip-tests to re-enable.)"))
+			}
+			return r, nil
+		}
 		if strings.ToLower(head) == "/copy" {
 			// /copy [n|all|response] ships transcript blocks to the
-		// clipboard. n defaults to 1 (the most recent block).
-		// "all" copies the full retained buffer. "response" (or
-		// "r") copies all blocks from the start of the most
-		// recent agent response to the end — no need to count
-		// blocks. OSC 52 inside clipboard.Copy makes this work
-		// over SSH on terminals that support it; falls back to
-		// pbcopy/xclip locally.
+			// clipboard. Bare /copy copies the full retained buffer.
+			// "all" is an explicit synonym. A numeric arg copies the
+			// last N blocks. OSC 52 inside clipboard.Copy makes this
+			// work over SSH on terminals that support it; falls back
+			// to pbcopy/xclip locally.
 			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "/copy"))
-			n := 1
+			n := len(r.transcript)
 			switch {
-			case rest == "":
-				// default n=1
-			case strings.EqualFold(rest, "all"):
-				n = len(r.transcript)
+			case rest == "", strings.EqualFold(rest, "all"):
+				// n already set to full transcript length
+			case strings.EqualFold(rest, "response"):
+				if len(r.responseStarts) == 0 {
+					r.write(styleDim.Render("/copy response: no response yet"))
+					return r, nil
+				}
+				n = len(r.transcript) - r.responseStarts[len(r.responseStarts)-1]
 			default:
 				if v, err := strconv.Atoi(rest); err == nil && v > 0 {
 					n = v
 				} else {
-					r.write(styleDim.Render("usage: /copy [n|all]"))
+					r.write(styleDim.Render("usage: /copy [n|all|response]"))
 					return r, nil
 				}
 			}
@@ -3548,7 +4065,7 @@ func (r REPL) dispatch(line string) (REPL, tea.Cmd) {
 				r.write(styleDim.Render("/copy: " + err.Error()))
 				return r, nil
 			}
-			r.write(styleDim.Render(fmt.Sprintf("copied last %d block(s) to clipboard (%d chars, plain text)", n, len(payload))))
+			r.write(styleDim.Render(fmt.Sprintf("copied %d block(s) to clipboard (%d chars, plain text)", n, len(payload))))
 			return r, nil
 		}
 		if strings.ToLower(head) == "/verbose" || strings.ToLower(head) == "/quiet" {
@@ -3671,9 +4188,19 @@ func (r REPL) dispatch(line string) (REPL, tea.Cmd) {
 		// in-process path renders styled summaries and accepts the
 		// [a]/[r]/[s]/[d] keystrokes the spec calls for. Falls back to
 		// shellout when services are absent (test mode, no DB).
-		if strings.TrimSpace(strings.TrimPrefix(line, "/")) == "gate" {
+		if gsub := strings.TrimSpace(strings.TrimPrefix(line, "/")); gsub == "gate" || gsub == "gate review" || gsub == "gate fix" {
 			if r.services != nil && r.services.DB != nil {
-				return r, r.enterGateReview()
+				cmd := r.enterGateReview()
+				// `/gate fix` enters the same workspace-wide walkthrough
+				// but in auto-fix mode: each held item is audited and the
+				// gap-aware remediation (buildFixPrompt, fed by the
+				// persisted completenessSummary) runs automatically, so
+				// the dev doesn't hand-press [f] per item. Approve/reject
+				// stay manual — the human still reviews the fixed result.
+				if gsub == "gate fix" && r.gateReview != nil {
+					r.gateReview.autoMode = true
+				}
+				return r, cmd
 			}
 			return r, runShellCommand(r.binary, "gate review", r.workDir)
 		}
@@ -3681,6 +4208,19 @@ func (r REPL) dispatch(line string) (REPL, tea.Cmd) {
 		// the single leading slash; arguments preserve their own
 		// punctuation.
 		return r, runShellCommand(r.binary, strings.TrimPrefix(line, "/"), r.workDir)
+	}
+
+	// A slash-shaped line that reached here did NOT match the command
+	// dispatch above — almost always because a paste artifact left
+	// leading whitespace (" /copy 50000"), so HasPrefix(line, "/") was
+	// false and the whole command block was skipped. Never forward a
+	// command attempt to the chat LLM: it just flails on it (the
+	// 2026-06-11 "/copy 50000]" run burned 4 turns with the agent
+	// asking "I see /copy 50000] but nothing else — check the task
+	// ledger…"). Reject locally with a clear message instead.
+	if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "/") {
+		r.write(styleDim.Render("unknown command: " + trimmed + " — type / for the command list"))
+		return r, nil
 	}
 
 	// No slash → planner if configured, else fall back to shellout
@@ -3820,6 +4360,10 @@ func (r *REPL) startRun() {
 	// First-byte tracker also resets — last turn's value would
 	// give a false negative reading on the new turn.
 	r.turnFirstResponseAt = time.Time{}
+	// Clear the tool-in-flight flag so a tool left running at the end
+	// of the prior turn can't suppress this turn's idle watchdog.
+	r.toolInFlight = false
+	r.reasoningBuf = ""
 	// Quiet-mode tool counter resets too — the per-run count is
 	// only meaningful for the current run.
 	r.suppressedToolEvents = 0
@@ -4030,18 +4574,21 @@ func (r *REPL) writeRaw(text string) {
 // handler on each tool/diff/bash/gate event so multi-turn runs
 // don't render as one wall of "Now let me look at..." text.
 //
-// No-op when there's nothing to flush. Skips the markdown render
-// pass — partial in-flight text isn't necessarily well-formed
-// markdown, and we want the visual block to land immediately, not
-// wait for a glamour pass that might mangle a half-emitted code
-// fence.
+// No-op when there's nothing to flush. Rendered through markdown
+// (writeMarkdown), NOT raw write: when a tool boundary flushes the
+// FIRST half of an answer mid-stream and finalizeStream renders the
+// tail, a raw flush left the top half showing literal `**`/backtick
+// markdown while the bottom half rendered styled — the "first half
+// doesn't render" bug. writeMarkdown falls back to plain wrap if
+// glamour can't parse a partial segment (e.g. a half-emitted code
+// fence), so the worst case is the old behavior, not a crash.
 func (r *REPL) flushStreamSegment() {
 	if !r.streamActive || strings.TrimSpace(r.streamBuf) == "" {
 		r.streamBuf = ""
 		r.streamActive = false
 		return
 	}
-	r.write(strings.TrimRight(r.streamBuf, " \n"))
+	r.writeMarkdown(strings.TrimRight(r.streamBuf, " \n"))
 	r.streamBuf = ""
 	r.streamActive = false
 }
@@ -4185,6 +4732,34 @@ func startsWithMarkdownStructure(trim string) bool {
 	return false
 }
 
+// HeartbeatMsg is a once-per-second wakeup that keeps the live region
+// repainting while a run is in flight, INDEPENDENT of the bubbles
+// spinner frame chain. The spinner's own TickMsg chain is fragile —
+// it has ~7 separate start sites and self-cancels whenever a TickMsg
+// arrives during the brief window where all the busy flags are false
+// (see the spinner.TickMsg handler). When that chain dies mid-run and
+// the provider goes silent (a long model think between SSE deltas, the
+// "HTTP 200 · 3m17s" state), nothing forces a re-render, so the live
+// elapsed timer freezes on screen even though work is ongoing — the
+// freeze reported 2026-06-25. The heartbeat is a belt-and-suspenders
+// re-render: it never stops re-arming, so the elapsed keeps advancing
+// and the renderer stays continuously in sync (a multi-minute render
+// gap is also what lets the alt-screen renderer drift and leave a
+// duplicate input line behind). One wakeup per second is negligible.
+type HeartbeatMsg struct{}
+
+// heartbeatInterval is the cadence of the liveness re-render. One
+// second matches the resolution of the elapsed timer (rendered to the
+// nearest second) — finer would repaint without changing the display.
+const heartbeatInterval = time.Second
+
+// Heartbeat starts the once-per-second liveness tick. Called from
+// app.Init so the chain exists for the whole session; the REPL re-arms
+// it on every HeartbeatMsg so it never has to be restarted.
+func Heartbeat() tea.Cmd {
+	return tea.Tick(heartbeatInterval, func(time.Time) tea.Msg { return HeartbeatMsg{} })
+}
+
 // tokenTickMsg is the self-scheduled tween tick for the live token
 // counter. Each tick interpolates tokenShown toward tokenTarget and,
 // if there's still distance to cover, schedules the next tick.
@@ -4227,7 +4802,7 @@ func (r *REPL) renderTokenLine() {
 	// renderSpinner) so the bottom region renders as one fixed
 	// 3-line block. Skipping the bucket here avoids double-render
 	// and keeps the layout stable as inline events arrive.
-	if r.planning || r.executing || r.gateReviewing {
+	if r.planning || r.executing || r.gateReviewing || r.validating {
 		r.tokenView = ""
 		r.composeTransient()
 		return
@@ -4242,6 +4817,53 @@ func (r *REPL) renderTokenLine() {
 // line. The block height is constant so the layout doesn't jitter
 // as inline events arrive (clearTransient + repaint can't desync
 // the lines anymore — they're all in one render call).
+// isAwaitingHuman reports whether the run is blocked on a human answer
+// (plan menu, gate accept, file/cost confirm) rather than actively
+// working. "Blocked on you" must never look like a stalled agent: it
+// pauses the elapsed timer and suspends the idle watchdog.
+func (r *REPL) isAwaitingHuman() bool {
+	if r.pendingPlan != nil || r.pendingAction != nil || r.pendingCostCap != nil {
+		return true
+	}
+	// A gate review that's showing an item but NOT running an audit/fix
+	// (gateReviewing == false) is blocked on the user's [a]/[r]/[s].
+	if r.gateReview != nil && !r.gateReviewing {
+		return true
+	}
+	return false
+}
+
+// reconcilePause maintains pausedTotal/pauseStart from the current
+// awaiting-human state. Called at the top of Update on every message,
+// so entering a wait stamps pauseStart and leaving it banks the gap —
+// correct even across a long away period, since the events that begin
+// and end a wait are themselves Updates.
+func (r *REPL) reconcilePause() {
+	switch waiting := r.isAwaitingHuman(); {
+	case waiting && r.pauseStart.IsZero():
+		r.pauseStart = time.Now()
+	case !waiting && !r.pauseStart.IsZero():
+		r.pausedTotal += time.Since(r.pauseStart)
+		r.pauseStart = time.Time{}
+	}
+}
+
+// workElapsed is wall-clock since runStart MINUS time spent blocked on
+// the user — the work-time the live timer and run summary should show.
+func (r *REPL) workElapsed() time.Duration {
+	if r.runStart.IsZero() {
+		return 0
+	}
+	e := time.Since(r.runStart) - r.pausedTotal
+	if !r.pauseStart.IsZero() {
+		e -= time.Since(r.pauseStart) // currently paused: exclude the open gap
+	}
+	if e < 0 {
+		e = 0
+	}
+	return e
+}
+
 func (r *REPL) renderSpinner() {
 	if r.spinnerText == "" {
 		r.spinnerView = ""
@@ -4250,7 +4872,7 @@ func (r *REPL) renderSpinner() {
 	}
 	label := r.spinnerText
 	if !r.runStart.IsZero() {
-		if elapsed := time.Since(r.runStart); elapsed >= 2*time.Second {
+		if elapsed := r.workElapsed(); elapsed >= 2*time.Second {
 			label += " (" + elapsed.Round(time.Second).String() + ")"
 		}
 	}
@@ -4270,7 +4892,7 @@ func (r *REPL) renderSpinner() {
 		first += "\n  " + styleDim.Render(think)
 	}
 
-	if r.planning || r.executing || r.gateReviewing {
+	if r.planning || r.executing || r.gateReviewing || r.validating {
 		// Provider state line. Always reserved during a run so
 		// the layout doesn't shift as state events come and go.
 		// Empty between transitions renders as a single bullet.
@@ -4346,6 +4968,16 @@ func (r *REPL) maybeAutoEscalate() tea.Cmd {
 		return nil
 	}
 	if time.Since(r.lastActivity) < autoEscalateAfter {
+		return nil
+	}
+	// Don't escalate while a tool the model dispatched is still
+	// executing — the silence is the tool working, not the model
+	// stalling. A first-use kai_search backfill (and any other
+	// genuinely long tool) used to false-trip this and cancel the run
+	// mid-tool with "agent idle for 4m0s — auto-escalating via
+	// kai_consult". The escalation forces the MODEL to act, which is
+	// pointless and harmful while it's waiting on its own tool.
+	if r.toolInFlight {
 		return nil
 	}
 	// Don't fire while the orchestrator is executing. Executor
@@ -4506,7 +5138,7 @@ func (r REPL) liveBlock() string {
 	}
 	label := r.spinnerText
 	if !r.runStart.IsZero() {
-		if elapsed := time.Since(r.runStart); elapsed >= 2*time.Second {
+		if elapsed := r.workElapsed(); elapsed >= 2*time.Second {
 			label += " (" + elapsed.Round(time.Second).String() + ")"
 		}
 	}
@@ -4524,7 +5156,7 @@ func (r REPL) liveBlock() string {
 		out += "\n  " + styleDim.Render(think)
 	}
 
-	if r.planning || r.executing || r.gateReviewing {
+	if r.planning || r.executing || r.gateReviewing || r.validating {
 		stateLine := ""
 		if r.providerState.Kind == "provider_state" {
 			stateLine = r.providerState.Summary
@@ -4862,23 +5494,35 @@ func (r *REPL) appendSeparator() {
 	r.pendingPrints = append(r.pendingPrints, "")
 }
 
+// markdownStyle is glamour's dark theme with one change: inline code is
+// recolored from its default coral red ("203") to a blue-violet. The red
+// dominated chat output (every `inline-code` span) and read as alarming;
+// the violet sits more calmly against the dark pane. Built once from a
+// value copy of styles.DarkStyleConfig — assigning Code.Color a fresh
+// pointer leaves the upstream package var untouched.
+var markdownStyle = func() ansi.StyleConfig {
+	s := styles.DarkStyleConfig
+	inlineCode := "#b4a0ff" // blue-violet; degrades to nearest 256-color on non-truecolor terms
+	s.Code.Color = &inlineCode
+	return s
+}()
+
 // renderMarkdown turns markdown into ANSI-styled terminal text using
 // glamour. The renderer is reconstructed each call because the pane
 // width can change between calls (resize); glamour caches per-width.
 //
-// We pin the "dark" style rather than using glamour.WithAutoStyle().
-// AutoStyle queries the terminal for its background color via an
-// OSC 11 sequence; in alt-screen mode (which Bubble Tea uses) the
-// terminal's reply leaks back into the visible buffer as garbled
-// text like `> 11;rgb:158e/193a/1e75\`. Pinned style avoids the
-// query entirely. Light-terminal users can override via a future
-// `repl.markdown_style` config — not worth the complexity right now.
+// We pin a (customized) dark style rather than using
+// glamour.WithAutoStyle(). AutoStyle queries the terminal for its
+// background color via an OSC 11 sequence; in alt-screen mode (which
+// Bubble Tea uses) the terminal's reply leaks back into the visible
+// buffer as garbled text like `> 11;rgb:158e/193a/1e75\`. Pinned style
+// avoids the query entirely. See markdownStyle for the inline-code recolor.
 func renderMarkdown(md string, width int) (string, error) {
 	if width <= 0 {
 		width = 80
 	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
+		glamour.WithStyles(markdownStyle),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -4983,6 +5627,27 @@ func runShellCommand(binary, line, workDir string) tea.Cmd {
 		err := c.Run()
 		return CmdResultMsg{
 			Cmd:    line,
+			Stdout: stdout.String(),
+			Stderr: stderr.String(),
+			Err:    err,
+		}
+	}
+}
+
+// runBashCommand runs an arbitrary shell command (the `!` prefix) via
+// `bash -c` in workDir and returns its output as a CmdResultMsg, reusing the
+// shell-out rendering path. Driven as a tea.Cmd so a slow command doesn't
+// freeze the UI.
+func runBashCommand(command, workDir string) tea.Cmd {
+	return func() tea.Msg {
+		c := exec.Command("bash", "-c", command)
+		c.Dir = workDir
+		var stdout, stderr bytes.Buffer
+		c.Stdout = &stdout
+		c.Stderr = &stderr
+		err := c.Run()
+		return CmdResultMsg{
+			Cmd:    "!" + command,
 			Stdout: stdout.String(),
 			Stderr: stderr.String(),
 			Err:    err,

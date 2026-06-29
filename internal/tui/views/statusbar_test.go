@@ -16,7 +16,7 @@ func TestStatusBar_GateCountIsRefreshAuthoritative(t *testing.T) {
 	var s StatusBar
 
 	// A refresh carrying one held item sets the count.
-	s = s.Update(GateRefreshedMsg{items: []*graph.Node{{}}})
+	s = s.Update(GateRefreshedMsg{items: []heldItem{{node: &graph.Node{}}}})
 	if s.gateHeld != 1 {
 		t.Fatalf("GateRefreshedMsg should set gateHeld=1, got %d", s.gateHeld)
 	}

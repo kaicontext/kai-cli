@@ -243,6 +243,38 @@ func StartManagedProcess(s *PlannerServices, command string) (*ManagedProcess, e
 //
 // The scanner exits when ctx is cancelled (process exited OR /stop
 // killed it OR TUI is shutting down).
+// hostErrorIsLowSignal reports whether a managed-process error line is
+// noise — a browser-engine (Chromium/Electron) internal log or a
+// transient/operational network failure — rather than an app-level code
+// bug. These get OFFERED (the user adds context) instead of
+// auto-dispatching a fix-run, because (a) most are transient/environmental
+// so a fix-run solves nothing, and (b) a raw engine error is a far weaker
+// prompt than the user's own bug report. Default is false (actionable):
+// only recognized noise classes are downgraded, so unfamiliar errors
+// still auto-dispatch as before.
+func hostErrorIsLowSignal(line string) bool {
+	l := strings.ToLower(line)
+	// Chromium/Electron internal logs all carry a "file.cc:line" source
+	// ref (e.g. "ERROR:services/network/...chunked_data_pipe...cc:212").
+	// App JS errors never do.
+	if strings.Contains(l, ".cc:") {
+		return true
+	}
+	for _, p := range []string{
+		// browser-engine subsystems
+		"chromium", "imkclient", "gpu process", "/gpu/", "viz_", "vulkan",
+		"egl ", "mesa", "libva", "angle:", "skia", "dawn:",
+		// transient / operational network failures
+		"net::err", "err_failed", "onsizereceived", "econnreset",
+		"etimedout", "socket hang up", "eai_again",
+	} {
+		if strings.Contains(l, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func runManagedScanner(ctx context.Context, s *PlannerServices, mp *ManagedProcess) {
 	tick := time.NewTicker(managedScanInterval)
 	defer tick.Stop()

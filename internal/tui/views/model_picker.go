@@ -25,12 +25,11 @@ var fallbackModels = map[provider.Kind][]string{
 		"gpt-5.5",
 		"gpt-5.4",
 		"gpt-5.4-mini",
-		// Open models via OpenRouter (switched from Together 2026-06-05).
-		"deepseek/deepseek-v4-pro",
-		"z-ai/glm-5.1",
-		"moonshotai/kimi-k2.6",
 		"qwen/qwen3.5-397b-a17b",
+		"deepseek/deepseek-v4-pro",
 		"qwen/qwen3-coder-next",
+		"moonshotai/kimi-k2.6",
+		"z-ai/glm-5.1", // kai-rename-keep — GLM-5.1 stays a user-selectable model even when it is not the default
 	},
 	provider.KindAnthropic: {
 		"claude-opus-4-7",

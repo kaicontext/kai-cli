@@ -2,6 +2,8 @@ package views
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -183,3 +185,51 @@ func sliceContains(haystack []string, needle string) bool {
 // shutUnusedFmt silences the fmt import unused warning if no test
 // uses it. Cheap; keeps the import for future tests.
 var _ = fmt.Sprintf
+
+func TestHostErrorIsLowSignal(t *testing.T) {
+	low := []string{
+		"[62416:0602/111350:ERROR:services/network/chunked_data_pipe_upload_data_stream.cc:212] OnSizeReceived failed with Error: -2",
+		"net::ERR_FAILED",
+		"GPU process exited unexpectedly",
+		"socket hang up",
+	}
+	for _, l := range low {
+		if !hostErrorIsLowSignal(l) {
+			t.Errorf("expected low-signal: %q", l)
+		}
+	}
+	actionable := []string{
+		"TypeError: window.therapist.chat is not a function",
+		"Error: No handler registered for 'therapist:chat'",
+		"Cannot find module './missing.js'",
+	}
+	for _, l := range actionable {
+		if hostErrorIsLowSignal(l) {
+			t.Errorf("expected actionable (auto-dispatch): %q", l)
+		}
+	}
+}
+
+// TestStartManagedProcess_RunsInWorkspace is the regression for the bug where
+// a managed "run it" executed in kit's process cwd instead of the active
+// project (so it launched kit's own kai-desktop instead of the user's project).
+// A relative-path write must land in the workspace, proving c.Dir is pinned.
+func TestStartManagedProcess_RunsInWorkspace(t *testing.T) {
+	ws := t.TempDir()
+	ch := make(chan HostProcEvent, 16)
+	s := &PlannerServices{HostProcEventCh: ch, MainRepo: ws}
+	if _, err := StartManagedProcess(s, "echo ok > marker.txt"); err != nil {
+		t.Fatalf("StartManagedProcess: %v", err)
+	}
+	defer StopManagedProcess(s)
+
+	marker := filepath.Join(ws, "marker.txt")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return // success: relative write landed in the workspace
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("marker.txt not created in workspace %s — managed process ran in the wrong cwd", ws)
+}

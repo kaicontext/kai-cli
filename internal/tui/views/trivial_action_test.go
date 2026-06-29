@@ -38,6 +38,46 @@ func TestTrivialActionFastPath_PackageJSON(t *testing.T) {
 	}
 }
 
+// TestTrivialActionFastPath_MonorepoSubPackage is the regression for
+// the 2026-06-07 loom bounce: the root package.json had empty scripts
+// and the runnable electron app lived in client/, so "run it" / "run
+// the desktop app" bounced with "which app?" instead of resolving the
+// sub-package's command.
+func TestTrivialActionFastPath_MonorepoSubPackage(t *testing.T) {
+	ws := t.TempDir()
+	// Root: workspace manifest with no usable scripts (loom's shape).
+	if err := os.WriteFile(filepath.Join(ws, "package.json"),
+		[]byte(`{"scripts":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "client", "package.json"),
+		[]byte(`{"scripts":{"dev":"vite","start":"electron .","build":"vite build"}}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		prompt  string
+		wantCmd string
+	}{
+		{"run it", "cd client && npm run dev"},
+		{"run it?", "cd client && npm run dev"},
+		{"run the desktop app", "cd client && npm run dev"},
+		{"run the electron app", "cd client && npm run dev"},
+		{"start it", "cd client && npm run start"},
+	}
+	for _, c := range cases {
+		t.Run(c.prompt, func(t *testing.T) {
+			cmd, _ := trivialActionFastPath(c.prompt, ws)
+			if cmd != c.wantCmd {
+				t.Errorf("trivialActionFastPath(%q) = %q, want %q", c.prompt, cmd, c.wantCmd)
+			}
+		})
+	}
+}
+
 func TestTrivialActionFastPath_CargoToml(t *testing.T) {
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "Cargo.toml"), []byte(`[package]`), 0o644); err != nil {

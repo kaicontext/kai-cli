@@ -13,10 +13,14 @@ type AgentTask = engine.AgentTask
 type Config = engine.Config
 type Completer = engine.Completer
 type PlannerAgent = engine.PlannerAgent
+type DebugLog = engine.DebugLog
 
 var (
-	ErrTooVague      = engine.ErrTooVague
-	Plan             = engine.Plan
-	Replan           = engine.Replan
-	OpenChatDebugLog = engine.OpenChatDebugLog
+	ErrTooVague       = engine.ErrTooVague
+	Plan              = engine.Plan
+	Replan            = engine.Replan
+	OpenChatDebugLog  = engine.OpenChatDebugLog
+	OpenDebugLogNamed = engine.OpenDebugLogNamed
+	FoldFromPlan      = engine.FoldFromPlan
+	FoldRequest       = engine.FoldRequest
 )

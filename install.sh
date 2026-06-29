@@ -31,41 +31,6 @@ place_binary() {
     fi
 }
 
-# install_kit fetches the kit TUI agent alongside kai. Best-effort: any failure
-# here never aborts the install (kai is the primary binary). Skip with
-# KAI_SKIP_KIT=1. Served from app.kaicontext.com/dl/ (kailab-control proxies it
-# from the private kai-tui release, Cloudflare-cached). Uses $os/$arch from main.
-install_kit() {
-    [ "${KAI_SKIP_KIT:-0}" = "1" ] && return 0
-    kit_asset="kit-${os}-${arch}.gz"
-    kit_url="https://app.kaicontext.com/dl/${kit_asset}"
-    echo "  Installing kit (TUI agent)..."
-    kdir="$(mktemp -d)"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$kit_url" -o "${kdir}/${kit_asset}" 2>/dev/null || {
-            echo "  (kit not available for ${os}/${arch} yet — skipped; kai is installed)"
-            rm -rf "$kdir"; return 0
-        }
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q "$kit_url" -O "${kdir}/${kit_asset}" 2>/dev/null || {
-            echo "  (kit not available for ${os}/${arch} yet — skipped; kai is installed)"
-            rm -rf "$kdir"; return 0
-        }
-    fi
-    if ! gunzip "${kdir}/${kit_asset}" 2>/dev/null || ! chmod +x "${kdir}/kit-${os}-${arch}" 2>/dev/null; then
-        echo "  (kit install skipped)"; rm -rf "$kdir"; return 0
-    fi
-    place_binary "${kdir}/kit-${os}-${arch}" "kit"
-    rm -rf "$kdir"
-    # Ad-hoc codesign on macOS so Gatekeeper doesn't block the unsigned binary
-    # — mirrors what the kai launcher does for a kit it downloads itself
-    # (internal/kitlauncher adhocCodesign). Best-effort; never aborts.
-    if [ "$os" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
-        codesign --force --sign - "${INSTALL_DIR}/kit" 2>/dev/null || true
-    fi
-    echo "  kit installed to ${INSTALL_DIR}/kit"
-}
-
 # ensure_path adds INSTALL_DIR to the user's shell rc if it isn't already on
 # PATH (rustup/deno/bun style — idempotent, guarded by a marker comment).
 ensure_path() {
@@ -141,9 +106,6 @@ main() {
     chmod +x "${tmpdir}/${BINARY}-${os}-${arch}"
 
     place_binary "${tmpdir}/${BINARY}-${os}-${arch}" "${BINARY}"
-
-    # kit (TUI agent) alongside kai — best-effort, never aborts the install.
-    install_kit || true
 
     echo ""
     echo "kai ${VERSION} installed to ${INSTALL_DIR}/${BINARY}"

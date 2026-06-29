@@ -36,6 +36,18 @@ func TestClassify_Patterns(t *testing.T) {
 			wantSev:  Info,
 		},
 		{
+			name:     "wall-clock timeout (typed)",
+			err:      context.DeadlineExceeded,
+			wantKind: "run.timeout",
+			wantSev:  Warn,
+		},
+		{
+			name:     "wall-clock timeout (provider-wrapped string)",
+			err:      stderr.New("kailab provider: stream read: context deadline exceeded"),
+			wantKind: "run.timeout",
+			wantSev:  Warn,
+		},
+		{
 			name:     "auth expired (401)",
 			err:      stderr.New("kailab provider: 401: unauthorized"),
 			wantKind: "auth.expired",

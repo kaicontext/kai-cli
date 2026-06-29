@@ -145,6 +145,27 @@ func classifyKnown(err error) (UserError, bool) {
 		}, true
 	}
 
+	// Run hit its wall-clock budget. The chat/agent run wraps itself in
+	// context.WithTimeout (5 min for the default model, 15 for a
+	// reasoning model); a slow or stuck step exhausts it and surfaces as
+	// context.DeadlineExceeded — often wrapped by the provider as a
+	// plain string ("…: context deadline exceeded"), so match the string
+	// too. Without this it falls through to internal.unknown ("Something
+	// unexpected happened / file a bug report"), which is wrong and
+	// alarming: a timeout is a recoverable budget limit, not a crash.
+	// (Common trigger before kit 0.33.63: a first-use kai_search index
+	// backfill that ran for minutes and ate the whole budget.)
+	if stderr.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(strings.ToLower(err.Error()), "deadline exceeded") {
+		return UserError{
+			Kind:     "run.timeout",
+			Headline: "Run hit its time budget",
+			Detail:   "The agent ran out of wall-clock time mid-task (5 min for the default model, 15 for a reasoning model) — usually a slow or stuck step, not a crash.",
+			Action:   "Re-ask in the same session to continue, or narrow the request. If a first-use workspace search/index was the slow step, the next run is faster (the index is cached).",
+			Severity: Warn,
+		}, true
+	}
+
 	// Provider cap-exceeded is already a typed error; check for
 	// it explicitly so future field additions on CapExceededError
 	// flow through without changing classifyKnown.
@@ -206,7 +227,7 @@ func classifyKnown(err error) (UserError, bool) {
 			Kind:     "api.rate_limit",
 			Headline: "Model provider rate limit hit",
 			Detail:   "The upstream model provider rejected the request as rate-limited (typically tokens-per-minute on a free tier).",
-			Action:   "Switch with `/model kailab z-ai/glm-5.1` (or any other model). The kai-server logs show which upstream returned the limit.",
+			Action:   "Switch with `/model kailab qwen/qwen3.5-397b-a17b` (or any other model). The kai-server logs show which upstream returned the limit.",
 			Severity: Warn,
 		}, true
 	}

@@ -177,12 +177,10 @@ func backgroundUpdateCheck() {
 var rootCmd = &cobra.Command{
 	Use:     "kai",
 	Short:   "Kai - semantic, intent-based version control",
-	Long:    `Kai is a local CLI that creates semantic snapshots from Git refs, computes changesets, classifies change types, and generates intent sentences.`,
+	Long:    `kai is the Kai CLI. Run 'kai code' to launch the interactive TUI (REPL + sync + gate panes). All kai subcommands (snapshot, diff, stats, gate, etc.) are also available.`,
 	Version: Version,
 	// Bare `kai` prints help. The interactive coding experience is
-	// launched explicitly via `kai code`, which resolves (and
-	// self-installs) the managed `kit` binary and hands off to it
-	// (see cmd/kai/code.go and internal/kitlauncher; kit-in-kai Phase 1).
+	// launched explicitly via `kai code` (in-process TUI).
 	SilenceUsage:  true,
 	SilenceErrors: false,
 }
@@ -4049,12 +4047,8 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(captureCmd)
 
-	// `kai code` — unified coding entrypoint (kit-in-kai Phase 1). Resolves
-	// and self-installs the managed kit binary, then hands off to it.
-	// groupStart so it surfaces alongside init/capture as a primary action.
-	// codeCmd is declared in tui.go (repurposed from the old orphaned
-	// native-TUI command); it must be registered exactly once.
-	codeCmd.GroupID = groupStart
+	// codeCmd is declared in tui.go; registered here exactly once.
+	// No GroupID — surfaces in Additional Commands alongside gate, spawn, etc.
 	rootCmd.AddCommand(codeCmd)
 
 	rootCmd.AddCommand(importCmd)

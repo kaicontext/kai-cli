@@ -1,8 +1,10 @@
 package views
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -10,10 +12,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kai/api/agent"
-	"kai/api/graph"
-	"kai/api/provider"
 	"kai/api/gatereview"
+	"kai/api/graph"
 	"kai/api/orchestrator"
+	"kai/api/provider"
 	"kai/api/safetygate"
 	"kai/api/telemetry"
 	"kai/api/util"
@@ -45,10 +47,19 @@ const gateVerifyTimeout = 4 * time.Minute
 
 type gateReviewState struct {
 	snaps   []*graph.Node // held items at /gate entry; copy so DB churn doesn't shift the cursor
+	snapDB  []*graph.DB   // parallel to snaps: the project DB each held snapshot lives in (workspace-wide gate). approve/reject/audit target snapDB[idx], not a single primary DB.
+	snapDir []string      // parallel to snaps: the project DIRECTORY each held snapshot lives in. The fix agent's Workspace + recapture target snapDir[idx] so a sibling-project fix captures the right project.
 	idx     int           // current index into snaps; len(snaps) means "done"
 	loading bool          // LLM call in flight for snaps[idx]
 	result  *gatereview.Result
 	err     error
+
+	// reviewRound counts how many times the CURRENT item has been
+	// fixed+re-reviewed: 0 = original audit, 1+ = "after AI fix · round
+	// N". Drives the header so the user can tell the original held change
+	// from a post-fix re-review (they looked identical before). Resets on
+	// advance to a new item.
+	reviewRound int
 
 	// fixRounds counts auto review→fix iterations for the current
 	// item; reset on advance. Capped at maxAutoFixRounds.
@@ -75,10 +86,10 @@ type gateReviewResultMsg struct {
 // GateReviewActionMsg lands after an approve / reject completes. The
 // REPL writes a confirmation line and advances to the next item.
 type GateReviewActionMsg struct {
-	idx    int
-	kind   string // "approve" | "reject"
+	idx     int
+	kind    string // "approve" | "reject"
 	advRefs []string
-	err    error
+	err     error
 }
 
 // gateReviewDiffMsg lands when [d] finishes loading the patch text.
@@ -140,17 +151,49 @@ func (r *REPL) enterGateReview() tea.Cmd {
 		return nil
 	}
 
-	held, err := safetygate.ListHeld(r.services.DB)
-	if err != nil {
-		r.write(styleError.Render(fmt.Sprintf("/gate: list held failed: %v", err)))
-		return nil
+	// Workspace-wide: aggregate held snapshots from EVERY project,
+	// remembering which project DB each lives in (snapDB) so approve /
+	// reject / audit later target the right store. The old single-DB
+	// scope showed "Nothing held" from a project whose own DB was empty
+	// even when siblings held work — the banner said "7 held" while
+	// `/gate` showed nothing (2026-06-11).
+	var held []*graph.Node
+	var snapDB []*graph.DB
+	var snapDir []string
+	if r.services.Projects != nil && len(r.services.Projects.Projects()) > 0 {
+		for _, p := range r.services.Projects.Projects() {
+			if p.DB == nil {
+				continue
+			}
+			items, lerr := safetygate.ListHeld(p.DB)
+			if lerr != nil {
+				r.write(styleError.Render(fmt.Sprintf("/gate: list held failed for %s: %v", p.Name, lerr)))
+				continue
+			}
+			for _, n := range items {
+				held = append(held, n)
+				snapDB = append(snapDB, p.DB)
+				snapDir = append(snapDir, p.Path)
+			}
+		}
+	} else {
+		items, err := safetygate.ListHeld(r.services.DB)
+		if err != nil {
+			r.write(styleError.Render(fmt.Sprintf("/gate: list held failed: %v", err)))
+			return nil
+		}
+		held = items
+		for range items {
+			snapDB = append(snapDB, r.services.DB)
+			snapDir = append(snapDir, r.services.MainRepo)
+		}
 	}
 	if len(held) == 0 {
 		r.write(styleDim.Render("Nothing held by the gate."))
 		return nil
 	}
 
-	r.gateReview = &gateReviewState{snaps: held, idx: 0, loading: true}
+	r.gateReview = &gateReviewState{snaps: held, snapDB: snapDB, snapDir: snapDir, idx: 0, loading: true}
 	// Header during loading: just the count + a "loading…" hint.
 	// Keybinds intentionally NOT shown here — they appear in the
 	// per-item footer once the audit lands. Listing them up front
@@ -181,7 +224,7 @@ func (r *REPL) enterGateReview() tea.Cmd {
 	r.streamClosed = true
 	r.renderSpinner()
 	return tea.Batch(
-		runGateReviewItem(r.services, held[0], r.fmtRecentTurns(), 0),
+		runGateReviewItem(r.services, snapDB[0], held[0], r.fmtRecentTurns(), 0),
 		r.spinner.Tick,
 	)
 }
@@ -189,7 +232,7 @@ func (r *REPL) enterGateReview() tea.Cmd {
 // runGateReviewItem fires the LLM review for one held snapshot and
 // wraps the result as a tea.Msg. Telemetry is opened/closed inside so
 // each item is one event regardless of how the user resolves it.
-func runGateReviewItem(svc *PlannerServices, snap *graph.Node, sessionTurns string, idx int) tea.Cmd {
+func runGateReviewItem(svc *PlannerServices, db *graph.DB, snap *graph.Node, sessionTurns string, idx int) tea.Cmd {
 	return func() tea.Msg {
 		te := telemetry.NewEvent("gate_review_started")
 		prov := svc.OrchestratorCfg.AgentProvider
@@ -250,14 +293,15 @@ func runGateReviewItem(svc *PlannerServices, snap *graph.Node, sessionTurns stri
 			return gateReviewResultMsg{idx: idx, result: r}
 		}
 
-		// Review runs on ReviewModel (Opus by default), not the agent
+		// Review runs on ReviewModel (GLM-5.1 by default), not the agent
 		// model: the reviewer is the quality gate over the cheaper
 		// agent's output, so it must not be the same model that
 		// produced the change.
-		res, err := gatereview.Review(context.Background(), prov, svc.ReviewModel, svc.DB, snap, gatereview.Inputs{
-			SessionTurns:  sessionTurns,
-			VerifySummary: vr.Summary,
-			OnState:       onState,
+		res, err := gatereview.Review(context.Background(), prov, svc.ReviewModel, db, snap, gatereview.Inputs{
+			SessionTurns:   sessionTurns,
+			VerifySummary:  vr.Summary,
+			DeployedModels: svc.DeployedModels,
+			OnState:        onState,
 		})
 		// Hard gate: execution beats opinion. If the build/tests are
 		// red, the reviewer may not recommend APPROVE no matter how
@@ -358,9 +402,9 @@ func stringSliceFromPayload(v any) []string {
 
 // runGateReviewApprove / Reject delegate to workspace.Manager so the
 // in-process action behaves identically to `kai gate approve|reject`.
-func runGateReviewApprove(svc *PlannerServices, snap *graph.Node, idx int) tea.Cmd {
+func runGateReviewApprove(svc *PlannerServices, db *graph.DB, snap *graph.Node, idx int) tea.Cmd {
 	return func() tea.Msg {
-		mgr := workspace.NewManager(svc.DB)
+		mgr := workspace.NewManager(db)
 		advanced, err := mgr.ApproveHeld(snap.ID)
 		te := telemetry.NewEvent("gate_review_decision")
 		if te != nil {
@@ -374,9 +418,9 @@ func runGateReviewApprove(svc *PlannerServices, snap *graph.Node, idx int) tea.C
 	}
 }
 
-func runGateReviewReject(svc *PlannerServices, snap *graph.Node, idx int) tea.Cmd {
+func runGateReviewReject(svc *PlannerServices, db *graph.DB, snap *graph.Node, idx int) tea.Cmd {
 	return func() tea.Msg {
-		mgr := workspace.NewManager(svc.DB)
+		mgr := workspace.NewManager(db)
 		err := mgr.RejectHeld(snap.ID)
 		te := telemetry.NewEvent("gate_review_decision")
 		if te != nil {
@@ -393,9 +437,9 @@ func runGateReviewReject(svc *PlannerServices, snap *graph.Node, idx int) tea.Cm
 // runGateReviewDiff loads the patch in a goroutine. The render path
 // (writing to scrollback) is on the REPL side so we keep the
 // background work narrow.
-func runGateReviewDiff(svc *PlannerServices, snap *graph.Node, idx int) tea.Cmd {
+func runGateReviewDiff(svc *PlannerServices, db *graph.DB, snap *graph.Node, idx int) tea.Cmd {
 	return func() tea.Msg {
-		patch, err := gatereview.HeldSnapshotDiff(svc.DB, snap)
+		patch, err := gatereview.HeldSnapshotDiff(db, snap)
 		return gateReviewDiffMsg{idx: idx, patch: patch, err: err}
 	}
 }
@@ -406,7 +450,7 @@ func runGateReviewDiff(svc *PlannerServices, snap *graph.Node, idx int) tea.Cmd 
 // because the held snapshot's edits are already there (the original
 // agent wrote them); after the fix agent returns, gatereview.Fix
 // re-stages and re-integrates so the gate gets another swing.
-func runGateReviewFix(svc *PlannerServices, snap *graph.Node, issues []gatereview.Issue, idx int) tea.Cmd {
+func runGateReviewFix(svc *PlannerServices, db *graph.DB, workspaceDir string, snap *graph.Node, issues []gatereview.Issue, idx int) tea.Cmd {
 	return func() tea.Msg {
 		te := telemetry.NewEvent("gate_fix_attempted")
 		fixable := 0
@@ -420,7 +464,19 @@ func runGateReviewFix(svc *PlannerServices, snap *graph.Node, issues []gaterevie
 		}
 
 		opts := buildFixAgentOptions(svc)
-		out := gatereview.Fix(context.Background(), svc.DB, gatereview.FixInputs{
+		// Scope the fix agent + its capture to the held snapshot's OWN
+		// project directory, not svc.MainRepo. A workspace-wide gate can
+		// hold a snapshot from any project (e.g. kai-server); the fix
+		// agent resolves the file via the project set and edits it fine,
+		// but the recapture ran against svc.MainRepo (the launch repo) —
+		// a different project — so it saw "no observable changes" and
+		// failed even though the edit landed (2026-06-11). Pointing
+		// Workspace at the snapshot's project makes capture + the db arg
+		// agree on which project they're integrating.
+		if workspaceDir != "" {
+			opts.Workspace = workspaceDir
+		}
+		out := gatereview.Fix(context.Background(), db, gatereview.FixInputs{
 			Snap:       snap,
 			Issues:     issues,
 			AgentOpts:  opts,
@@ -461,7 +517,7 @@ func buildFixAgentOptions(svc *PlannerServices) agent.Options {
 	if svc == nil || svc.OrchestratorCfg.AgentProvider == nil {
 		return agent.Options{}
 	}
-	// The fix agent runs on the REVIEW model (Opus/Claude), not the
+	// The fix agent runs on the REVIEW model (GLM-5.1 by default), not the
 	// cheaper code-agent model. The code agent is what produced the
 	// held change; asking the same model to repair its own mistake is
 	// asking it to re-make the reasoning error. Gate review is the
@@ -528,7 +584,7 @@ func buildFixAgentOptions(svc *PlannerServices) agent.Options {
 // r.wrapWidth()). Long issue descriptions are wrapped to this
 // width with a hanging indent so they don't get truncated mid-
 // sentence.
-func renderGateReviewBlock(snap *graph.Node, res *gatereview.Result, idx, total int, width int) string {
+func renderGateReviewBlock(snap *graph.Node, res *gatereview.Result, idx, total int, project string, round int, width int) string {
 	short := util.BytesToHex(snap.ID)
 	if len(short) > 12 {
 		short = short[:12]
@@ -539,9 +595,26 @@ func renderGateReviewBlock(snap *graph.Node, res *gatereview.Result, idx, total 
 	good := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	bad := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 
+	// Header in plain terms: WHICH held change (X of N) in WHICH project,
+	// and whether this is the original or a post-fix re-review. The old
+	// "Gate Review 1/3: <hex>" confused even the author (2026-06-11): the
+	// hex read as an identity, "1/3" looked like a round count, and there
+	// was no original-vs-fixed signal.
+	stage := "original"
+	if round > 0 {
+		stage = fmt.Sprintf("after AI fix · round %d", round)
+	}
+	title := fmt.Sprintf("━━━ Held change %d of %d", idx+1, total)
+	if strings.TrimSpace(project) != "" {
+		title += " — " + project
+	}
+	title += fmt.Sprintf("  (%s) ━━━", stage)
+
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sb.WriteString(headerColor.Render(fmt.Sprintf("━━━ Gate Review %d/%d: %s ━━━", idx+1, total, short)))
+	sb.WriteString(headerColor.Render(title))
+	sb.WriteString("\n")
+	sb.WriteString(dim.Render("  snapshot " + short))
 	sb.WriteString("\n")
 
 	// Why-held block — translated into user-facing terms.
@@ -566,53 +639,68 @@ func renderGateReviewBlock(snap *graph.Node, res *gatereview.Result, idx, total 
 	if res.AuditClean && len(res.Issues) == 0 {
 		sb.WriteString(good.Render("CLEAN — no issues found."))
 	} else {
-		sb.WriteString(warn.Render(fmt.Sprintf("%d issue(s) found:", len(res.Issues))))
-		// Numbered, hanging-indent issues with a blank line between
-		// each. Without numbering + visual gap, multi-line wrapped
-		// issues bleed into each other and the reader can't tell
-		// where one ends and the next begins.
-		const issueIndent = "    " // 4 spaces (visual gutter)
-		// "1. [fixable] " is the longest plausible tag prefix at one
-		// digit; continuation lines align under the description so
-		// the wrapped text reads as a single paragraph per issue.
-		// Compute prefix width per-issue to keep things tidy as the
-		// list grows past 9 (extra digit shifts the indent).
-		for i, iss := range res.Issues {
-			tag := "human"
-			tagStyle := bad
-			if iss.Fixable {
-				tag = "fixable"
-				tagStyle = warn
-			}
-			numStr := fmt.Sprintf("%d. ", i+1)
-			tagStr := "[" + tag + "] "
-			contIndent := issueIndent + strings.Repeat(" ", len(numStr)+len(tagStr))
-			issueWrap := width - len(contIndent)
-			if issueWrap < 30 {
-				issueWrap = 30
-			}
-			wrapped := wrapToWidth(iss.Description, issueWrap)
-			lines := strings.Split(wrapped, "\n")
-			// Blank line between items (and before the first one is
-			// fine — separates from the "N issue(s) found" header).
-			sb.WriteString("\n\n")
-			sb.WriteString(issueIndent)
-			sb.WriteString(numStr)
-			sb.WriteString(tagStyle.Render("[" + tag + "]"))
-			sb.WriteString(" ")
-			sb.WriteString(lines[0])
-			for _, cont := range lines[1:] {
-				sb.WriteString("\n")
-				sb.WriteString(contIndent)
-				sb.WriteString(cont)
+		// Partition by stakes so the framing matches reality: defects to
+		// fix, decisions for the human, and nitpicks that need NO action.
+		// The old flat "N issue(s) found" made a pile of pedantic notes
+		// read as N failures — alarming on a change that's basically fine.
+		var toFix, decisions, nits []gatereview.Issue
+		for _, iss := range res.Issues {
+			switch {
+			case iss.Fixable:
+				toFix = append(toFix, iss)
+			case iss.Nitpick:
+				nits = append(nits, iss)
+			default:
+				decisions = append(decisions, iss)
 			}
 		}
-		// Tiny legend so the tag column reads as more than jargon.
-		// First-time users hit "[human]" / "[fixable]" with no
-		// referent; one dim line below the issues turns it into
-		// signal.
-		sb.WriteString("\n\n  ")
-		sb.WriteString(dim.Render("[human] = needs your judgment · [fixable] = kai can fix it"))
+		// Calm one-line summary, keyed on what's actually actionable.
+		var parts []string
+		if len(toFix) > 0 {
+			parts = append(parts, fmt.Sprintf("%d to fix", len(toFix)))
+		}
+		if len(decisions) > 0 {
+			parts = append(parts, fmt.Sprintf("%d for your call", len(decisions)))
+		}
+		if len(nits) > 0 {
+			parts = append(parts, fmt.Sprintf("%d nitpick(s)", len(nits)))
+		}
+		if len(toFix) == 0 && len(decisions) == 0 {
+			sb.WriteString(good.Render(fmt.Sprintf("looks good — %d nitpick(s), nothing blocking", len(nits))))
+		} else {
+			sb.WriteString(warn.Render(strings.Join(parts, " · ")))
+		}
+
+		const issueIndent = "    " // visual gutter
+		renderGroup := func(label string, labelStyle lipgloss.Style, items []gatereview.Issue) {
+			if len(items) == 0 {
+				return
+			}
+			sb.WriteString("\n\n  ")
+			sb.WriteString(labelStyle.Render(label))
+			for i, iss := range items {
+				numStr := fmt.Sprintf("%d. ", i+1)
+				contIndent := issueIndent + strings.Repeat(" ", len(numStr))
+				issueWrap := width - len(contIndent)
+				if issueWrap < 30 {
+					issueWrap = 30
+				}
+				lines := strings.Split(wrapToWidth(iss.Description, issueWrap), "\n")
+				sb.WriteString("\n")
+				sb.WriteString(issueIndent)
+				sb.WriteString(numStr)
+				sb.WriteString(lines[0])
+				for _, cont := range lines[1:] {
+					sb.WriteString("\n")
+					sb.WriteString(contIndent)
+					sb.WriteString(cont)
+				}
+			}
+		}
+		// Order: what you must act on first, judgment next, FYI last.
+		renderGroup("🔧 To fix (kai can do these):", warn, toFix)
+		renderGroup("🤔 Your call — decisions only you can make:", bad, decisions)
+		renderGroup("💬 Nitpicks — no action needed, just noting:", dim, nits)
 	}
 	sb.WriteString("\n\n")
 
@@ -679,15 +767,15 @@ func (r *REPL) handleGateReviewKey(key string) (bool, tea.Cmd) {
 	switch key {
 	case "a":
 		st.loading = true
-		return true, runGateReviewApprove(r.services, snap, st.idx)
+		return true, runGateReviewApprove(r.services, st.snapDB[st.idx], snap, st.idx)
 	case "r":
 		st.loading = true
-		return true, runGateReviewReject(r.services, snap, st.idx)
+		return true, runGateReviewReject(r.services, st.snapDB[st.idx], snap, st.idx)
 	case "s":
 		r.write(styleDim.Render(fmt.Sprintf("skipped %s", shortHex(snap.ID))))
 		return true, r.advanceGateReview()
 	case "d":
-		return true, runGateReviewDiff(r.services, snap, st.idx)
+		return true, runGateReviewDiff(r.services, st.snapDB[st.idx], snap, st.idx)
 	case "f":
 		// Refuse only when the audit is completely empty. Both
 		// [fixable] and [human] issues go to the fix agent — its
@@ -709,7 +797,7 @@ func (r *REPL) handleGateReviewKey(key string) (bool, tea.Cmd) {
 		st.loading = true
 		r.armGateReviewSpinner()
 		r.write(styleDim.Render(fmt.Sprintf("→ fix agent: addressing %d issue(s)…", len(st.result.Issues))))
-		return true, tea.Batch(runGateReviewFix(r.services, snap, st.result.Issues, st.idx), r.spinner.Tick)
+		return true, tea.Batch(runGateReviewFix(r.services, st.snapDB[st.idx], st.snapDir[st.idx], snap, st.result.Issues, st.idx), r.spinner.Tick)
 	case "q", "esc":
 		r.exitGateReview("review exited")
 		return true, nil
@@ -731,6 +819,27 @@ func (r *REPL) armGateReviewSpinner() {
 	r.renderSpinner()
 }
 
+// yoloAutoResolve makes the gate decision that hands_off leaves to the
+// human, when the run is fully autonomous (yolo): auto-approve the held
+// change (or auto-reject when the reviewer recommends REJECT — shipping
+// reviewer-rejected code is past yolo into reckless), then move on with
+// no prompt. Returns (cmd, true) when it acted. Only fires under
+// r.services.Yolo, because it publishes changes the gate held —
+// unresolved judgment calls included.
+func (r *REPL) yoloAutoResolve(st *gateReviewState, res *gatereview.Result) (tea.Cmd, bool) {
+	// Only in the autonomous flow (autoMode) — never auto-resolve under a
+	// yolo user who opened /gate manually to inspect.
+	if r.services == nil || !r.services.Yolo || st == nil || !st.autoMode || st.idx >= len(st.snaps) {
+		return nil, false
+	}
+	if res != nil && res.Recommendation == gatereview.RecReject {
+		r.write(styleWarn.Render("🤖 yolo: auto-rejecting (reviewer recommended REJECT)"))
+		return runGateReviewReject(r.services, st.snapDB[st.idx], st.snaps[st.idx], st.idx), true
+	}
+	r.write(styleWarn.Render("🤖 yolo: auto-approving held change"))
+	return runGateReviewApprove(r.services, st.snapDB[st.idx], st.snaps[st.idx], st.idx), true
+}
+
 // advanceGateReview moves to the next held item; if exhausted, exits
 // review mode. Returns the cmd that fires the next LLM call (or nil
 // when there's nothing left).
@@ -742,7 +851,8 @@ func (r *REPL) advanceGateReview() tea.Cmd {
 	st.idx++
 	st.result = nil
 	st.err = nil
-	st.fixRounds = 0 // each held item gets its own auto-fix budget
+	st.fixRounds = 0   // each held item gets its own auto-fix budget
+	st.reviewRound = 0 // and starts at "original" in the header
 	if st.idx >= len(st.snaps) {
 		r.exitGateReview(fmt.Sprintf("review complete — %d item(s) processed", len(st.snaps)))
 		return nil
@@ -761,7 +871,7 @@ func (r *REPL) advanceGateReview() tea.Cmd {
 	r.streamClosed = true
 	r.renderSpinner()
 	return tea.Batch(
-		runGateReviewItem(r.services, st.snaps[st.idx], r.fmtRecentTurns(), st.idx),
+		runGateReviewItem(r.services, st.snapDB[st.idx], st.snaps[st.idx], r.fmtRecentTurns(), st.idx),
 		r.spinner.Tick,
 	)
 }
@@ -806,7 +916,11 @@ func (r *REPL) applyGateReviewMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		st.result = m.result
-		r.writeRaw(renderGateReviewBlock(st.snaps[st.idx], m.result, st.idx, len(st.snaps), r.wrapWidth()))
+		proj := ""
+		if st.idx < len(st.snapDir) && st.snapDir[st.idx] != "" {
+			proj = filepath.Base(st.snapDir[st.idx])
+		}
+		r.writeRaw(renderGateReviewBlock(st.snaps[st.idx], m.result, st.idx, len(st.snaps), proj, st.reviewRound, r.wrapWidth()))
 		// Auto-fix dispatch (Slice B): when we got here via
 		// TriggerAutoGateReview AND the reviewer wants
 		// FIX_THEN_APPROVE AND there's something the constrained fix
@@ -826,8 +940,12 @@ func (r *REPL) applyGateReviewMsg(msg tea.Msg) tea.Cmd {
 			// "cap then surface for the final approve" behavior.
 			if st.fixRounds >= maxAutoFixRounds {
 				r.write(styleDim.Render(fmt.Sprintf(
-					"auto-fix stopped after %d round(s) — your call: [a]pprove / [r]eject / [d]iff",
+					"auto-fix stopped after %d round(s)",
 					st.fixRounds)))
+				if cmd, ok := r.yoloAutoResolve(st, m.result); ok {
+					return cmd
+				}
+				r.write(styleDim.Render("   your call: [a]pprove / [r]eject / [d]iff"))
 				return nil
 			}
 			st.fixRounds++
@@ -836,7 +954,12 @@ func (r *REPL) applyGateReviewMsg(msg tea.Msg) tea.Cmd {
 			r.write(styleDim.Render(fmt.Sprintf(
 				"→ auto-fix (round %d/%d): addressing %d issue(s)…",
 				st.fixRounds, maxAutoFixRounds, len(m.result.Issues))))
-			return tea.Batch(runGateReviewFix(r.services, st.snaps[st.idx], m.result.Issues, st.idx), r.spinner.Tick)
+			return tea.Batch(runGateReviewFix(r.services, st.snapDB[st.idx], st.snapDir[st.idx], st.snaps[st.idx], m.result.Issues, st.idx), r.spinner.Tick)
+		}
+		// Terminal audit state (APPROVE / ASK / nothing to fix). In yolo,
+		// resolve the gate automatically instead of waiting for the user.
+		if cmd, ok := r.yoloAutoResolve(st, m.result); ok {
+			return cmd
 		}
 		return nil
 	case GateReviewActionMsg:
@@ -924,11 +1047,78 @@ func (r *REPL) applyGateReviewMsg(msg tea.Msg) tea.Cmd {
 				shortHex(out.NewSnapshotID), strings.Join(out.AdvancedRefs, ", "), shortHex(st.snaps[m.idx].ID))))
 			return r.advanceGateReview()
 		}
+		// Convergence guard: if the fix reproduced the IDENTICAL snapshot
+		// it just audited (same content-addressed ID), it accomplished
+		// NOTHING — the remaining issues are judgment calls (verify /
+		// confirm), not concrete fixable edits, so the agent made no net
+		// change. Re-firing the audit here just re-rolls the non-
+		// deterministic review over frozen code (the 2026-06-11 "fix
+		// landed but new snapshot e73720642ca2 — same one — every round"
+		// loop). Stop and hand it to the human instead of looping.
+		if bytes.Equal(out.NewSnapshotID, st.snaps[st.idx].ID) {
+			r.gateReviewing = false
+			r.spinnerText = ""
+			r.clearTransient()
+			// The fix dismissed the original as part of "superseding" it —
+			// but it produced the IDENTICAL snapshot, so it dismissed the
+			// very one the user is about to approve. Re-instate it so [a]
+			// works (fix.go now skips that reject on a no-op, but recover
+			// any snapshot dismissed by an older build too).
+			reinstateSnapshot(st.snapDB[st.idx], out.NewSnapshotID)
+
+			// Split what's left into real DECISIONS vs NITPICKS so the
+			// framing is honest — the old message called nitpicks
+			// "decisions" (2026-06-11). Fixable shouldn't remain after a
+			// no-op, so it's not bucketed here.
+			var decisions, nits []string
+			if st.result != nil {
+				for _, iss := range st.result.Issues {
+					switch {
+					case iss.Fixable:
+						// no-op produced no change → nothing to do
+					case iss.Nitpick:
+						nits = append(nits, iss.Description)
+					default:
+						decisions = append(decisions, iss.Description)
+					}
+				}
+			}
+			dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+			r.write(styleWarn.Render("✋ The AI fixed everything it mechanically could and re-ran — it produced the same code, so there's nothing left to auto-fix."))
+			if len(decisions) > 0 {
+				if st.result != nil {
+					st.result.Recommendation = gatereview.RecAsk
+				}
+				r.write(dim.Render(fmt.Sprintf("   %d decision(s) remain — only you can make them:", len(decisions))))
+				for _, d := range decisions {
+					r.write(dim.Render("     • " + firstSentence(d)))
+				}
+			}
+			if len(nits) > 0 {
+				if len(decisions) == 0 && st.result != nil {
+					st.result.Recommendation = gatereview.RecApprove
+				}
+				r.write(dim.Render(fmt.Sprintf("   %d nitpick(s) remain — no action needed, safe to approve:", len(nits))))
+				for _, n := range nits {
+					r.write(dim.Render("     • " + firstSentence(n)))
+				}
+			}
+			if len(decisions) == 0 && len(nits) == 0 && st.result != nil {
+				st.result.Recommendation = gatereview.RecApprove
+			}
+			// yolo: the fix converged with only judgment calls/nitpicks
+			// left — auto-resolve instead of stopping for the human.
+			if cmd, ok := r.yoloAutoResolve(st, st.result); ok {
+				return cmd
+			}
+			r.write(styleWarn.Render("   [a] approve  ·  [r] reject  ·  [s] decide later"))
+			return nil
+		}
 		// New snapshot was held again. Replace the current item with
 		// the new one and re-fire the LLM review so the user sees a
 		// fresh audit on the post-fix change. The original snap is
 		// already rejected by Fix(); we don't enqueue it again.
-		newNode, err := r.services.DB.GetNode(out.NewSnapshotID)
+		newNode, err := st.snapDB[st.idx].GetNode(out.NewSnapshotID)
 		if err != nil || newNode == nil {
 			r.write(styleError.Render(fmt.Sprintf(
 				"fix produced snapshot %s but it can't be loaded for re-review: %v",
@@ -939,9 +1129,10 @@ func (r *REPL) applyGateReviewMsg(msg tea.Msg) tea.Cmd {
 			"⚠ fix landed but new snapshot %s is %s (blast %d). Re-reviewing…",
 			shortHex(out.NewSnapshotID), strings.ToUpper(string(out.NewVerdict)), out.NewBlast)))
 		st.snaps[st.idx] = newNode
+		st.reviewRound++ // this re-review is "after AI fix · round N"
 		st.result = nil
 		st.loading = true
-		return runGateReviewItem(r.services, newNode, r.fmtRecentTurns(), st.idx)
+		return runGateReviewItem(r.services, st.snapDB[st.idx], newNode, r.fmtRecentTurns(), st.idx)
 	}
 	return nil
 }
@@ -986,4 +1177,39 @@ func shortHex(id []byte) string {
 		return h[:12]
 	}
 	return h
+}
+
+// reinstateSnapshot clears a snapshot's "dismissed" flag so it can be
+// approved again. A no-op gate-fix dismisses the original it was
+// "superseding" — but since the result was identical, it dismissed the
+// very snapshot the user now wants to approve. Best-effort.
+func reinstateSnapshot(db *graph.DB, id []byte) {
+	if db == nil || len(id) == 0 {
+		return
+	}
+	node, err := db.GetNode(id)
+	if err != nil || node == nil || node.Payload == nil {
+		return
+	}
+	if dismissed, _ := node.Payload["dismissed"].(bool); !dismissed {
+		return
+	}
+	node.Payload["dismissed"] = false
+	delete(node.Payload, "dismissedAt")
+	_ = db.UpdateNodePayload(node.ID, node.Payload)
+}
+
+// firstSentence returns the first sentence of s (up to the first ". ")
+// or ~160 chars, whichever comes first — keeps a judgment-call line
+// scannable instead of dumping a full audit paragraph.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if i := strings.Index(s, ". "); i > 0 && i < 200 {
+		return s[:i+1]
+	}
+	const max = 160
+	if len(s) > max {
+		return strings.TrimSpace(s[:max]) + "…"
+	}
+	return s
 }

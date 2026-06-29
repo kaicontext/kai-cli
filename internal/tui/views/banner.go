@@ -87,7 +87,7 @@ func renderBanner(s *PlannerServices) string {
 }
 
 // shortModel strips a Together/HF-style org prefix for display:
-// "zai-org/GLM-5.1" → "GLM-5.1", "gpt-4o" → "gpt-4o".
+// "z-ai/glm-5.1" → "GLM-5.1", "gpt-4o" → "gpt-4o".
 func shortModel(model string) string {
 	if i := strings.LastIndex(model, "/"); i >= 0 {
 		return model[i+1:]
@@ -138,6 +138,8 @@ func providerBannerLabel() string {
 			host = host[:i]
 		}
 		return "openai-compatible @ " + host
+	case string(provider.KindOpenRouter):
+		return "openrouter (direct)"
 	default:
 		return kind
 	}
@@ -156,6 +158,8 @@ func normalizeKindForBanner(raw string) string {
 		return string(provider.KindOpenAI)
 	case "anthropic", "anthropic-direct", "claude":
 		return string(provider.KindAnthropic)
+	case "openrouter", "openrouter-direct":
+		return string(provider.KindOpenRouter)
 	case "kailab":
 		return string(provider.KindKailab)
 	}

@@ -74,9 +74,10 @@ const (
 // ─── Kind constants ──────────────────────────────────────────────────────
 
 const (
-	KindKailab    = engineprovider.KindKailab
-	KindAnthropic = engineprovider.KindAnthropic
-	KindOpenAI    = engineprovider.KindOpenAI
+	KindKailab     = engineprovider.KindKailab
+	KindAnthropic  = engineprovider.KindAnthropic
+	KindOpenAI     = engineprovider.KindOpenAI
+	KindOpenRouter = engineprovider.KindOpenRouter
 )
 
 // ─── Package-level helpers ───────────────────────────────────────────────
