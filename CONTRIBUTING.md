@@ -6,7 +6,7 @@ Have questions? Join us on [Slack](https://join.slack.com/t/kailayer/shared_invi
 
 ## Scope
 
-The Kai CLI is open source under Apache 2.0. This repo (`kaicontext/kai-cli`) contains the CLI. The core engine (`kai-core`) ships as a prebuilt module dependency, and the server components live in their own repos. The single `kai` binary you download statically links the CLI and the core engine together.
+The Kai CLI is open source under Apache 2.0. This repo (`kaicontext/kai-cli`) contains the CLI. The agent engine ships as two prebuilt private module dependencies (`kai-core` primitives and `kai-engine` agent loop/tools/providers), and the server components live in their own repos. The single `kai` binary you download statically links the CLI and the engine together. The dependency boundary between this repo and the engine modules is checked automatically — see [Engine module boundary](#engine-module-boundary).
 
 ### What we accept
 
@@ -81,6 +81,44 @@ cloud provider URLs, and no server concepts (`tenant`, `org_id`, `sso`,
 `billing`). These rules are enforced by `scripts/check-core-purity.sh` in the
 `kai-core` repo's CI. CLI contributions in this repo do not need to run it.
 
+### Engine module boundary
+
+The agent engine ships as two versioned module dependencies, `kai-core` and
+`kai-engine`, which `kai-cli` *imports* rather than *contains* — the same way
+you'd depend on any external module. Keeping that boundary clean avoids source
+duplication (which silently diverges from the real module) and keeps the build
+reproducible for everyone:
+
+- **Engine code lives in the engine module.** Import it via `go.mod`; don't
+  copy engine source (the agent loop, planner, providers, the agent system
+  prompt, gate logic, etc.) into this repo. The thin `api/*` packages that
+  re-export engine types are wrappers — they `import` the engine, they don't
+  duplicate it.
+- **Keep `replace` directives in `go.work`, not `go.mod`.** Use a gitignored
+  `go.work` for local side-by-side development (see Build above); a committed
+  `replace` resolves only against a local checkout and breaks the build for
+  others.
+- **Don't copy engine-owned content** (e.g. the agent system prompt text) into
+  committed source.
+
+The check in [`internal/boundary`](internal/boundary/boundary.go) backstops
+these rules: a dependency-free Go test that scans the tree and `go.mod`, run
+locally and in CI (the secret-less `boundary` job, so it also covers fork-based
+PRs). It **deterministically** catches the high-value cases — a vendored engine
+module (by directory name or its `go.mod`), a `replace` for either module, or a
+dropped `require` — and **best-effort** flags engine-owned content (the agent
+system prompt, gate logic) via a sentinel denylist. The sentinel layer is
+defense-in-depth, not a guarantee: a copy of engine source under an unrelated
+name with no known sentinel won't be caught, so reviewers are still the
+backstop there. To run it yourself:
+
+```bash
+go test ./internal/boundary/...
+```
+
+If you add a new engine-owned asset, extend the sentinel list in
+`boundary.go`.
+
 ## Development Setup
 
 ### Prerequisites
@@ -91,23 +129,33 @@ cloud provider URLs, and no server concepts (`tenant`, `org_id`, `sso`,
 
 ### Build
 
-This repo's module (`kai`) depends on `github.com/kaicontext/kai-core`. CI
-resolves it as a private module (via `GOPRIVATE` + a read token). For local
-development with a checkout of both repos side by side, use a gitignored
-`go.work` that points the CLI at your local core:
+This repo's module (`kai`) depends on two **private** modules:
+`github.com/kaicontext/kai-core` (primitives) and
+`github.com/kaicontext/kai-engine` (agent loop, planner, tools, providers,
+and the agent system prompt). CI resolves them as private modules (via
+`GOPRIVATE` + a short-lived read token). For local development with the repos
+checked out side by side, use a **gitignored `go.work`** that points the CLI
+at your local engine sources:
 
 ```bash
-# from the kai-cli checkout, with kai-core checked out as a sibling dir
+# from the kai-cli checkout, with kai-core and kai-engine as sibling dirs
 cat > go.work <<'EOF'
-go 1.24.2
+go 1.25.0
 
 use .
 
 replace github.com/kaicontext/kai-core => ../kai-core
+replace github.com/kaicontext/kai-engine => ../kai-engine
 EOF
 
 CGO_ENABLED=1 go build ./cmd/kai
 ```
+
+> **Keep these `replace` directives in `go.work`, never in `go.mod`.**
+> `go.work` is gitignored; `go.mod` is committed. A `replace => ../kai-engine`
+> in `go.mod` resolves only against a local checkout, so it breaks the build
+> for everyone else. The module-boundary check (below) fails CI if one is ever
+> committed.
 
 ### Run Tests
 
