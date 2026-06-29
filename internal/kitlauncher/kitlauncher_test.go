@@ -590,3 +590,140 @@ func assertNoTempLeftovers(t *testing.T, binDir string) {
 		}
 	}
 }
+
+// --- version pinning (Option A) --------------------------------------------
+
+// serveAssetPath serves body only at the given exact path, 404 otherwise —
+// so a test asserts the launcher requested precisely that (e.g. the
+// version-qualified) asset.
+func serveAssetPath(t *testing.T, assetPath string, body []byte) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != assetPath {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func writeSidecar(t *testing.T, binDir, version string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(binDir, "kit.version"), []byte(version+"\n"), 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+}
+
+func TestAssetName_Pinned(t *testing.T) {
+	l := &Launcher{GOOS: "linux", GOARCH: "amd64", ExpectedVersion: "1.2.3"}
+	got, err := l.assetName()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "kit-linux-amd64-1.2.3.gz" {
+		t.Errorf("assetName() = %q, want version-qualified asset", got)
+	}
+}
+
+func TestResolveKitPath_PinnedMatch(t *testing.T) {
+	l := testLauncher(t)
+	l.ExpectedVersion = "1.2.3"
+	managed := filepath.Join(l.BinDir, "kit")
+	writeExecutable(t, managed)
+	writeSidecar(t, l.BinDir, "1.2.3")
+	got, err := l.resolveKitPath()
+	if err != nil {
+		t.Fatalf("matching pin should resolve cleanly, got %v", err)
+	}
+	if got != managed {
+		t.Errorf("got %q, want %q", got, managed)
+	}
+}
+
+func TestResolveKitPath_PinnedStale(t *testing.T) {
+	l := testLauncher(t)
+	l.ExpectedVersion = "2.0.0"
+	managed := filepath.Join(l.BinDir, "kit")
+	writeExecutable(t, managed)
+	writeSidecar(t, l.BinDir, "1.0.0")
+	got, err := l.resolveKitPath()
+	if !errors.Is(err, ErrKitStale) {
+		t.Fatalf("version mismatch should be ErrKitStale, got %v", err)
+	}
+	if got != managed {
+		t.Errorf("stale path should still be reported: got %q, want %q", got, managed)
+	}
+}
+
+func TestResolveKitPath_PinnedNoSidecar(t *testing.T) {
+	l := testLauncher(t)
+	l.ExpectedVersion = "2.0.0"
+	writeExecutable(t, filepath.Join(l.BinDir, "kit")) // no sidecar — like an old install.sh kit
+	if _, err := l.resolveKitPath(); !errors.Is(err, ErrKitStale) {
+		t.Fatalf("missing sidecar under a pin should be stale, got %v", err)
+	}
+}
+
+func TestResolveKitPath_UnpinnedIgnoresVersion(t *testing.T) {
+	l := testLauncher(t)                               // ExpectedVersion == "" (default)
+	writeExecutable(t, filepath.Join(l.BinDir, "kit")) // no sidecar
+	if _, err := l.resolveKitPath(); err != nil {
+		t.Fatalf("an unpinned launcher must not version-check: got %v", err)
+	}
+}
+
+func TestInstall_PinnedWritesSidecarAndRequestsVersionedAsset(t *testing.T) {
+	want := []byte("\x7fELF pinned kit contents")
+	// Only the version-qualified path is served; an unversioned request 404s.
+	srv := serveAssetPath(t, "/kit-linux-amd64-3.1.4.gz", gzipBytes(t, want))
+	l := testLauncher(t)
+	l.ExpectedVersion = "3.1.4"
+	l.BaseURL = srv.URL + "/"
+
+	path, err := l.install(context.Background())
+	if err != nil {
+		t.Fatalf("pinned install failed (wrong asset requested?): %v", err)
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, want) {
+		t.Errorf("installed content mismatch")
+	}
+	v, err := os.ReadFile(filepath.Join(l.BinDir, "kit.version"))
+	if err != nil {
+		t.Fatalf("version sidecar not written: %v", err)
+	}
+	if got := string(bytes.TrimSpace(v)); got != "3.1.4" {
+		t.Errorf("sidecar = %q, want 3.1.4", got)
+	}
+}
+
+func TestRun_ReinstallsWhenStale(t *testing.T) {
+	newBin := []byte("#!/bin/sh\nexit 0\n")
+	srv := serveAssetPath(t, "/kit-linux-amd64-9.9.9.gz", gzipBytes(t, newBin))
+	l := testLauncher(t)
+	l.ExpectedVersion = "9.9.9"
+	l.BaseURL = srv.URL + "/"
+	managed := filepath.Join(l.BinDir, "kit")
+	writeExecutable(t, managed)        // an old kit is present...
+	writeSidecar(t, l.BinDir, "1.0.0") // ...at a stale version
+	spy := &execSpy{}
+	l.Exec = spy.fn
+
+	code, err := l.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("expected 0, got %d", code)
+	}
+	if !spy.called {
+		t.Fatal("Exec not called after stale re-install")
+	}
+	if got, _ := os.ReadFile(managed); !bytes.Equal(got, newBin) {
+		t.Errorf("stale kit was not replaced with the pinned build")
+	}
+	if v, _ := os.ReadFile(filepath.Join(l.BinDir, "kit.version")); string(bytes.TrimSpace(v)) != "9.9.9" {
+		t.Errorf("sidecar after update = %q, want 9.9.9", string(bytes.TrimSpace(v)))
+	}
+}
