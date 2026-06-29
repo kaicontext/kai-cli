@@ -4046,6 +4046,7 @@ func init() {
 	initCmd.Flags().BoolVar(&initAssumeYes, "yes", false, "Non-interactive: auto-select the personal org and link an existing repo (also implied when stdin isn't a TTY)")
 	initCmd.Flags().StringVar(&initOrg, "org", "", "Org slug to initialize under (default: your personal org; also via KAI_ORG)")
 	initCmd.Flags().StringVar(&initEmail, "email", "", "Email to sign up / log in with non-interactively (also via KAI_INIT_EMAIL)")
+	initCmd.Flags().BoolVar(&initNoRemote, "no-remote", false, "Build the local semantic graph only: skip kaicontext.com signup/login and the automatic push")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(captureCmd)
 
@@ -4375,6 +4376,7 @@ var initForce bool
 var initAssumeYes bool
 var initOrg string
 var initEmail string
+var initNoRemote bool
 
 // initOrgOverride returns an explicit org slug from --org or KAI_ORG, else "".
 func initOrgOverride() string {
@@ -5164,6 +5166,16 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 	stop := spinner("Building semantic graph")
 	captureErr := runCapture(cmd, []string{"."})
 	stop(captureErr)
+
+	// --no-remote: stop after the local graph build. Skips signup/login,
+	// repo linking, and the automatic push — for users who want kai's
+	// local semantics without connecting to kaicontext.com, and for
+	// headless/automation flows (e.g. autofix) that only need the graph
+	// and must never block on auth or reach the network.
+	if initNoRemote {
+		printInitFinish(isGitRepo)
+		return nil
+	}
 
 	// ── Step 5: Sign up / log in to kaicontext.com ──
 	serverURL := os.Getenv("KAI_SERVER")

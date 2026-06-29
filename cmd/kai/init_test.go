@@ -1,6 +1,10 @@
 package main
 
 import (
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kaicontext/kai-engine/remote"
@@ -38,5 +42,44 @@ func TestPickPersonalOrg(t *testing.T) {
 	// No orgs → nil.
 	if got := pickPersonalOrg(nil, "jschatz1@gmail.com"); got != nil {
 		t.Fatalf("expected nil for empty org list, got %+v", got)
+	}
+}
+
+func TestRunInitAlreadyInitialized(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, dbFile)
+	if err := os.WriteFile(dbPath, []byte{}, 0o644); err != nil {
+		t.Fatalf("failed to create db file: %v", err)
+	}
+
+	oldKaiDir := kaiDir
+	kaiDir = dir
+	defer func() { kaiDir = oldKaiDir }()
+
+	oldInitForce := initForce
+	initForce = false
+	defer func() { initForce = oldInitForce }()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = oldStderr }()
+
+	err = runInit(nil, nil)
+	w.Close()
+	if err != nil {
+		t.Fatalf("expected nil error on idempotent init, got: %v", err)
+	}
+
+	outputBytes, _ := io.ReadAll(r)
+	output := string(outputBytes)
+	if !strings.Contains(output, "already initialized") {
+		t.Errorf("expected stderr to contain 'already initialized', got: %q", output)
+	}
+	if !strings.Contains(output, "kai init --force") {
+		t.Errorf("expected stderr to contain 'kai init --force', got: %q", output)
 	}
 }
