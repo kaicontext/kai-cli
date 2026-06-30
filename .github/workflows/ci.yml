@@ -2,7 +2,10 @@
 #
 # Builds the single `kai` binary (CLI statically linked with the private
 # kai-core engine) for linux+darwin / amd64+arm64, and on version tags
-# publishes them to this repo's GitHub Releases.
+# dual-publishes them to BOTH the public Google Cloud Storage bucket
+# gs://kaicontext-releases (keyless via Workload Identity Federation) and this
+# repo's GitHub Releases (so get.kaicontext.com / install.sh / `kai update`
+# keep working off /releases/latest).
 #
 # The engine lives in two PRIVATE Go modules: github.com/kaicontext/kai-core
 # (primitives) and github.com/kaicontext/kai-engine (agent loop, planner,
@@ -79,6 +82,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -104,19 +110,31 @@ jobs:
         run: |
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build -ldflags="-s -w" -o kai-linux-arm64 ./cmd/kai
           gzip -kf kai-linux-arm64
-      - uses: actions/upload-artifact@v6
+      - name: Authenticate to Google Cloud
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: google-github-actions/auth@v2
         with:
-          name: kai-linux-amd64
-          path: kai-linux-amd64.gz
-      - uses: actions/upload-artifact@v6
-        with:
-          name: kai-linux-arm64
-          path: kai-linux-arm64.gz
+          workload_identity_provider: projects/1093447114400/locations/global/workloadIdentityPools/github/providers/github
+          service_account: kai-release-uploader@preplanai.iam.gserviceaccount.com
+      - name: Set up Cloud SDK
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Upload linux binaries to GCS
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for asset in kai-linux-amd64.gz kai-linux-arm64.gz; do
+            gcloud storage cp "$asset" "gs://kaicontext-releases/kai-cli/v${VERSION}/${asset}"
+            gcloud storage cp "$asset" "gs://kaicontext-releases/kai-cli/latest/${asset}"
+          done
 
   build-darwin:
     runs-on: macos-latest
     needs: [test]
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -140,36 +158,59 @@ jobs:
         run: |
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o kai-darwin-amd64 ./cmd/kai
           gzip -kf kai-darwin-amd64
-      - uses: actions/upload-artifact@v6
+      - name: Authenticate to Google Cloud
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: google-github-actions/auth@v2
         with:
-          name: kai-darwin-arm64
-          path: kai-darwin-arm64.gz
-      - uses: actions/upload-artifact@v6
-        with:
-          name: kai-darwin-amd64
-          path: kai-darwin-amd64.gz
+          workload_identity_provider: projects/1093447114400/locations/global/workloadIdentityPools/github/providers/github
+          service_account: kai-release-uploader@preplanai.iam.gserviceaccount.com
+      - name: Set up Cloud SDK
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Upload darwin binaries to GCS
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for asset in kai-darwin-arm64.gz kai-darwin-amd64.gz; do
+            gcloud storage cp "$asset" "gs://kaicontext-releases/kai-cli/v${VERSION}/${asset}"
+            gcloud storage cp "$asset" "gs://kaicontext-releases/kai-cli/latest/${asset}"
+          done
 
-  # Publish binaries to this repo's GitHub Releases on version tags.
-  # GitHub's /releases/latest pointer is what `kai update` and install.sh use,
-  # so no synthetic "latest" release is needed — just real semver tags.
+  # Dual-publish on version tags. The binaries are uploaded directly to GCS by
+  # the build-linux/build-darwin jobs (to both v<X.Y.Z>/ and latest/). This job
+  # (1) records the `latest/VERSION` marker so GCS installers can discover the
+  # current version, and (2) recreates the GitHub Release — pulling the same
+  # binaries back down from GCS (instead of Actions artifacts) and re-attaching
+  # them alongside install.sh, so get.kaicontext.com and `kai update` keep
+  # working off /releases/latest.
   release:
     runs-on: ubuntu-latest
     needs: [build-linux, build-darwin]
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v7
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
         with:
-          path: dist
-      - name: Stage release assets
+          workload_identity_provider: projects/1093447114400/locations/global/workloadIdentityPools/github/providers/github
+          service_account: kai-release-uploader@preplanai.iam.gserviceaccount.com
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Publish VERSION marker
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          printf '%s' "$VERSION" > VERSION
+          gcloud storage cp VERSION "gs://kaicontext-releases/kai-cli/latest/VERSION"
+      - name: Stage release assets (download binaries from GCS)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p release
-          cp dist/kai-linux-amd64/kai-linux-amd64.gz release/
-          cp dist/kai-linux-arm64/kai-linux-arm64.gz release/
-          cp dist/kai-darwin-arm64/kai-darwin-arm64.gz release/
-          cp dist/kai-darwin-amd64/kai-darwin-amd64.gz release/
+          for asset in kai-linux-amd64.gz kai-linux-arm64.gz kai-darwin-arm64.gz kai-darwin-amd64.gz; do
+            gcloud storage cp "gs://kaicontext-releases/kai-cli/v${VERSION}/${asset}" "release/${asset}"
+          done
           # The curl installer itself — get.kaicontext.com redirects to
           # .../releases/latest/download/install.sh, so ship it as an asset.
           cp install.sh release/
