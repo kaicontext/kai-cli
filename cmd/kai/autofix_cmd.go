@@ -209,7 +209,7 @@ func runAutofixOne(ctx context.Context, gh *autofix.Client, issueNum int) (err e
 	}()
 
 	// 4. Build agent services and run the fix.
-	svc, err := buildAgentServices(ctx, cwd, false)
+	svc, err := buildAgentServices(ctx, cwd, false, true)
 	if err != nil {
 		return err
 	}

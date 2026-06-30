@@ -49,7 +49,14 @@ type agentServices struct {
 // The caller must call Close when done. autoBootstrap mirrors
 // runCodeHeadless's one-time project setup; autofix passes false because
 // it expects to run inside an already-initialized repo.
-func buildAgentServices(ctx context.Context, cwd string, autoBootstrap bool) (*agentServices, error) {
+//
+// singleRoot narrows a discovered multi-root workspace down to just the
+// project that owns cwd. Autofix passes true: it operates on ONE git repo
+// (it branches cwd's repo, pushes one branch, opens one PR), so the
+// planner, executor, and verify step must all root at THAT repo and emit
+// repo-relative paths. `kai code -p` passes false because cross-project
+// planning over the whole workspace is a wanted feature there.
+func buildAgentServices(ctx context.Context, cwd string, autoBootstrap, singleRoot bool) (*agentServices, error) {
 	if err := projects.CheckContainerInvariant(cwd); err != nil {
 		return nil, fmt.Errorf("container/project invariant violated: %w", err)
 	}
@@ -73,6 +80,26 @@ func buildAgentServices(ctx context.Context, cwd string, autoBootstrap bool) (*a
 			return nil, fmt.Errorf("kai init succeeded but rediscovery still found nothing")
 		}
 	case projects.OutcomeRootsFound:
+	}
+
+	// Single-repo callers (autofix) must run entirely single-root.
+	// Discover deliberately walks UP to a parent kai.projects.yaml and
+	// returns the full multi-root Set — correct for `kai code`. But in a
+	// multi-root Set the planner prompt and graph overview switch to
+	// workspace-relative, project-prefixed paths (`cd kai-tui && go test`,
+	// `kai-tui/internal/...`; see the len(Projects())>1 branches in
+	// planner/agent_planner.go and agent/graph_context.go) while the
+	// executor and runVerifyChecks run at mainRepo = the sub-project. The
+	// two then disagree by one directory level and every edit/verify
+	// fails. Narrowing to the project that owns cwd makes the whole run
+	// self-consistent. Done BEFORE Open so only the one DB is opened and
+	// promptCtx.Roots reflects the narrowed set.
+	if singleRoot {
+		narrowed, err := narrowToOwner(set, cwd)
+		if err != nil {
+			return nil, err
+		}
+		set = narrowed
 	}
 
 	if err := set.Open(); err != nil {
@@ -136,6 +163,30 @@ func buildAgentServices(ctx context.Context, cwd string, autoBootstrap bool) (*a
 		plannerModel: plannerModel,
 		agentModel:   agentModel,
 	}, nil
+}
+
+// narrowToOwner collapses a (possibly multi-root) discovered Set down to
+// a single-root Set containing only the project that owns cwd. It returns
+// an unopened Set rooted at that project's path, so a subsequent Open
+// touches just the one DB. Used by single-repo callers (autofix) to keep
+// the planner, executor, and verify step rooted at the same repo.
+//
+// Owner selection reuses Set.Primary, which routes by the InvokedFrom
+// that Discover records (longest-prefix match on cwd). Errors when cwd
+// sits in no project — the container case, where a single-repo run makes
+// no sense.
+func narrowToOwner(set *projects.Set, cwd string) (*projects.Set, error) {
+	if set == nil {
+		return nil, fmt.Errorf("no projects discovered at %s", cwd)
+	}
+	owner := set.Primary()
+	if owner == nil {
+		return nil, fmt.Errorf("%s is not inside any initialized kai project", cwd)
+	}
+	if len(set.Projects()) == 1 {
+		return set, nil // already single-root; nothing to narrow
+	}
+	return projects.New(owner.Path, []*projects.Project{owner}), nil
 }
 
 // Close releases the project DB handles.

@@ -261,6 +261,27 @@ func runCodeTUI(cmd *cobra.Command, args []string) error {
 		// Fall through.
 	}
 
+	// Multi-root narrowing. Discover deliberately walks UP to a parent
+	// kai.projects.yaml and returns the FULL multi-root Set. That's the
+	// right behavior when the user launches `kai code` from the container
+	// root itself (the dir holding kai.projects.yaml) — the deliberate
+	// "multi-root workspace" cross-project mode whose banner prints below.
+	// But when the user launches from INSIDE one of the sub-projects, the
+	// multi-root Set makes the planner + graph context emit workspace-
+	// relative, project-prefixed paths (`cd kai-tui && go test`,
+	// `kai-tui/internal/...`) while the executor and verify step run at
+	// MainRepo = that single sub-project. The two then disagree by one
+	// directory level and every edit/verify fails ("cd: kai-tui: No such
+	// file or directory"). Narrowing to the project that owns the
+	// invocation dir makes the whole run repo-relative and self-consistent
+	// — the same fix autofix applies via buildAgentServices(singleRoot).
+	// Done BEFORE Open so only the one project's DB opens.
+	narrowed, err := narrowToInvokedProject(set)
+	if err != nil {
+		return err
+	}
+	set = narrowed
+
 	if err := set.Open(); err != nil {
 		return fmt.Errorf("opening projects: %w", err)
 	}
@@ -661,6 +682,39 @@ func buildFixxyWorker() *fixxy.Worker {
 		binPath = "kai"
 	}
 	return fixxy.New(repo, binPath)
+}
+
+// narrowToInvokedProject collapses a discovered multi-root Set down to
+// the single sub-project the user launched `kai code` from — but ONLY
+// when the launch happened from INSIDE a sub-project, not from the
+// multi-root container root.
+//
+// The distinction is encoded in the Set itself. Discover records two
+// paths derived from the same cwd: InvokedFrom (filepath.Clean of the
+// dir the command ran in) and DiscoveryRoot (the ancestor reached by
+// walking UP to the nearest kai.projects.yaml). When the user runs from
+// the container root, the yaml is found at cwd, so DiscoveryRoot ==
+// InvokedFrom and we KEEP the full Set — the deliberate cross-project
+// workspace mode. When the user runs from inside a sub-project, the walk
+// climbs to the parent, so InvokedFrom is a strict descendant of
+// DiscoveryRoot and we narrow to the owning project (via narrowToOwner,
+// reused from autofix). Comparing the two recorded fields rather than a
+// freshly fetched cwd avoids any symlink/cleaning mismatch: both come
+// from the same Discover input and share normalization state, so an
+// exact != is correct. A single-root Set (or one with no recorded
+// invocation context) passes through unchanged.
+func narrowToInvokedProject(set *projects.Set) (*projects.Set, error) {
+	if set == nil {
+		return set, nil
+	}
+	// Container-root launch (or a Set built without invocation context):
+	// preserve the full multi-root workspace.
+	if set.InvokedFrom == "" || set.InvokedFrom == set.DiscoveryRoot {
+		return set, nil
+	}
+	// Launched from inside a sub-project: narrow to the owner so the
+	// planner emits repo-relative paths the executor/verify agree with.
+	return narrowToOwner(set, set.InvokedFrom)
 }
 
 // promptRootsFromSet flattens a Set into the agentprompt.RootInfo
