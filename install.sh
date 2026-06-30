@@ -10,9 +10,10 @@ set -e
 # it to your PATH. Override with KAI_INSTALL_DIR=/usr/local/bin (may need sudo).
 #
 # The single `kai` binary statically links the closed-source kai-core engine
-# and is published to public GitHub Releases on kaicontext/kai-cli.
+# and is published to the public Google Cloud Storage bucket
+# kaicontext-releases (kai-cli/<latest|vX.Y.Z>/).
 
-REPO="kaicontext/kai-cli"
+GCS_BASE="https://storage.googleapis.com/kaicontext-releases/kai-cli"
 INSTALL_DIR="${KAI_INSTALL_DIR:-$HOME/.kai/bin}"
 BINARY="kai"
 VERSION="${VERSION:-latest}"
@@ -116,9 +117,17 @@ main() {
     asset="${BINARY}-${os}-${arch}.gz"
 
     if [ "$VERSION" = "latest" ]; then
-        url="https://github.com/${REPO}/releases/latest/download/${asset}"
+        # Always pull from the rolling latest/ path so we get the current
+        # build; resolve the latest/VERSION marker only to display the number.
+        url="${GCS_BASE}/latest/${asset}"
+        if command -v curl >/dev/null 2>&1; then
+            resolved="$(curl -fsSL "${GCS_BASE}/latest/VERSION" 2>/dev/null || true)"
+        elif command -v wget >/dev/null 2>&1; then
+            resolved="$(wget -qO- "${GCS_BASE}/latest/VERSION" 2>/dev/null || true)"
+        fi
+        [ -n "${resolved:-}" ] && VERSION="$resolved"
     else
-        url="https://github.com/${REPO}/releases/download/v${VERSION}/${asset}"
+        url="${GCS_BASE}/v${VERSION}/${asset}"
     fi
 
     echo "Installing kai ${VERSION} (${os}/${arch}) to ${INSTALL_DIR}..."
