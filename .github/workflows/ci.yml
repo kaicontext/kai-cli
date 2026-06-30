@@ -108,10 +108,12 @@ jobs:
         with:
           name: kai-linux-amd64
           path: kai-linux-amd64.gz
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         with:
           name: kai-linux-arm64
           path: kai-linux-arm64.gz
+          retention-days: 3
 
   build-darwin:
     runs-on: macos-latest
@@ -144,10 +146,12 @@ jobs:
         with:
           name: kai-darwin-arm64
           path: kai-darwin-arm64.gz
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         with:
           name: kai-darwin-amd64
           path: kai-darwin-amd64.gz
+          retention-days: 3
 
   # Publish binaries to this repo's GitHub Releases on version tags.
   # GitHub's /releases/latest pointer is what `kai update` and install.sh use,
