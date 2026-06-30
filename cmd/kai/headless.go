@@ -23,7 +23,7 @@ func runCodeHeadless(ctx context.Context, prompt string) error {
 	}
 	cwd, _ := os.Getwd()
 
-	svc, err := buildAgentServices(ctx, cwd, true)
+	svc, err := buildAgentServices(ctx, cwd, true, false)
 	if err != nil {
 		return err
 	}

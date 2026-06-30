@@ -85,7 +85,7 @@ var kaiDir = kaipath.Resolve(".")
 var ciPolicyFile = filepath.Join(kaiDir, "rules", "ci-policy.yaml")
 
 // Version is the current kai CLI version
-var Version = "0.34.1"
+var Version = "0.34.2"
 
 // verbose enables debug output when --verbose/-v flag or KAI_VERBOSE env var is set
 var verbose bool
