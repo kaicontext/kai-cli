@@ -63,6 +63,7 @@ import (
 	tuierrors "kai/internal/tui/errors"
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
+	"kai/internal/kitlauncher"
 	spawnpkg "kai/pkg/spawn"
 )
 
@@ -20862,6 +20863,16 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Updated successfully!")
 	fmt.Println("Run 'kai --version' to verify.")
+
+	// Also refresh the managed kit binary so it stays in sync with kai.
+	// Best-effort: a kit refresh failure is a warning, not a fatal error.
+	fmt.Println("Refreshing kit...")
+	l := kitlauncher.Default()
+	if _, err := l.Refresh(cmd.Context()); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: kit refresh failed (%v) — run `kai code` to retry\n", err)
+	} else {
+		fmt.Println("kit refreshed.")
+	}
 	return nil
 }
 

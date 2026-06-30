@@ -124,6 +124,13 @@ func Default() *Launcher {
 	}
 }
 
+// Refresh re-downloads and installs the latest kit binary unconditionally,
+// replacing whatever managed copy exists. Called by `kai update` so kit stays
+// current alongside kai. Returns the installed path on success.
+func (l *Launcher) Refresh(ctx context.Context) (string, error) {
+	return l.install(ctx)
+}
+
 // Run resolves kit (installing it on first use), then hands off to it with
 // args forwarded verbatim by replacing this process via syscall.Exec. On a
 // successful handoff this never returns. On failure it returns a non-zero

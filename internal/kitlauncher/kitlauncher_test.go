@@ -568,6 +568,49 @@ func TestRun_NoFailureIsSilent(t *testing.T) {
 	}
 }
 
+// --- Refresh ---------------------------------------------------------------
+
+func TestRefresh_ReplacesExistingKit(t *testing.T) {
+	old := []byte("old kit binary")
+	new := []byte("new kit binary")
+	srv := serveGzip(t, gzipBytes(t, new))
+
+	l := testLauncher(t)
+	l.BaseURL = srv.URL + "/"
+
+	// Pre-install an existing kit so Refresh must overwrite it.
+	dest := filepath.Join(l.BinDir, "kit")
+	if err := os.WriteFile(dest, old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := l.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+	if path != dest {
+		t.Errorf("Refresh returned %q, want %q", path, dest)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, new) {
+		t.Errorf("Refresh did not replace kit: got %q, want %q", got, new)
+	}
+}
+
+func TestRefresh_PropagatesError(t *testing.T) {
+	l := testLauncher(t)
+	l.Client = &http.Client{Transport: errRoundTripper{}}
+	l.BaseURL = "http://example.invalid/"
+
+	_, err := l.Refresh(context.Background())
+	if err == nil {
+		t.Fatal("expected error on network failure, got nil")
+	}
+}
+
 // --- assertion helpers -----------------------------------------------------
 
 func assertNoKitInstalled(t *testing.T, binDir string) {
