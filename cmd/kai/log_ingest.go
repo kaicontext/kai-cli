@@ -571,11 +571,25 @@ func writeLoopRecord(rec *loopRecord) {
 	_ = os.WriteFile(filepath.Join(dir, rec.ID+".json"), data, 0644)
 }
 
+// liFindRepoRoot returns the project root for session-ingest artifacts: the
+// nearest ancestor of start holding a repo marker (.kai or .git). The user's
+// global ~/.kai config dir is explicitly NOT a repo root — otherwise every
+// session run under $HOME would misfile its loop record (and self-healed
+// hooks) into the home directory instead of the actual project. Accepting
+// .git as well means a kai-init'd git repo ingests even before it grows a
+// local .kai (these are gated separately by the hook only being installed
+// where the user opted in).
 func liFindRepoRoot(start string) string {
+	home, _ := os.UserHomeDir()
 	dir := start
 	for dir != "" && dir != "/" {
-		if fi, err := os.Stat(filepath.Join(dir, ".kai")); err == nil && fi.IsDir() {
-			return dir
+		if dir != home {
+			if fi, err := os.Stat(filepath.Join(dir, ".kai")); err == nil && fi.IsDir() {
+				return dir
+			}
+			if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && fi.IsDir() {
+				return dir
+			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -627,18 +641,203 @@ func liParseTime(s string) time.Time {
 
 // ---- agent-hook installation (called from `kai init`) ----
 
-// writeAgentHooks registers the session-ingest hook with Claude Code and Codex,
-// project-local, so every agent session in this repo updates .kai/loops/.
-// Merge-not-clobber and idempotent. Best-effort — never fails init.
+// stableIngestCommand is the hook command string to bake into agent settings:
+// `"<kai>" log ingest`, using a durable binary path (see stableKaiPath).
+func stableIngestCommand() string {
+	return fmt.Sprintf(`"%s" log ingest`, stableKaiPath())
+}
+
+// stableKaiPath returns a durable path to the kai binary for embedding in
+// agent hooks. os.Executable() alone is unsafe here: during a Claude Code run
+// kai often executes from an ephemeral copy in a temp scratchpad that gets
+// wiped between sessions, and that dead path was silently baked into the hook.
+// Preference order: the canonical install (~/.kai/bin/kai), then the running
+// binary if it's not in a temp dir, then a bare "kai" (PATH lookup).
+func stableKaiPath() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		if p := filepath.Join(home, ".kai", "bin", "kai"); isExecutableFile(p) {
+			return p
+		}
+	}
+	if exe, err := os.Executable(); err == nil && !isTempPath(exe) {
+		return exe
+	}
+	return "kai"
+}
+
+func isExecutableFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir() && fi.Mode()&0111 != 0
+}
+
+// isTempPath reports whether p lives under a temp directory (throwaway).
+func isTempPath(p string) bool {
+	p = filepath.Clean(p)
+	roots := []string{filepath.Clean(os.TempDir()), "/tmp", "/private/tmp", "/var/folders"}
+	for _, r := range roots {
+		if r != "" && (p == r || strings.HasPrefix(p, r+string(filepath.Separator))) {
+			return true
+		}
+	}
+	return false
+}
+
+// writeAgentHooks registers (and self-heals) the session-ingest hook with
+// Claude Code and Codex, project-local, so every agent session in this repo
+// updates .kai/loops/. Reconcile-not-clobber and idempotent: it prunes stale
+// ingest entries (dead temp paths, old installs) and ensures the current one
+// is present. Best-effort — never fails the caller.
 func writeAgentHooks(repoRoot string) {
-	command := fmt.Sprintf(`"%s" log ingest`, kaiExe())
-	// These files embed kaiExe()'s absolute, machine-specific path — they are
-	// purely local tooling and must never be committed. gitignore them first
-	// so they can't be swept into a commit (e.g. the headless autofix loop
-	// once shipped a PR whose entire diff was .codex/hooks.json).
+	command := stableIngestCommand()
+	// These files embed an absolute, machine-specific path — they are purely
+	// local tooling and must never be committed. gitignore them first so they
+	// can't be swept into a commit (e.g. the headless autofix loop once
+	// shipped a PR whose entire diff was .codex/hooks.json).
 	ensureGitignored(repoRoot, ".claude/settings.local.json", ".codex/hooks.json")
-	mergeHookEvents(filepath.Join(repoRoot, ".claude", "settings.local.json"), []string{"Stop", "SessionEnd"}, command)
-	mergeHookEvents(filepath.Join(repoRoot, ".codex", "hooks.json"), []string{"Stop"}, command) // Codex has no SessionEnd
+	reconcileHookEvents(filepath.Join(repoRoot, ".claude", "settings.local.json"), []string{"Stop", "SessionEnd"}, command)
+	reconcileHookEvents(filepath.Join(repoRoot, ".codex", "hooks.json"), []string{"Stop"}, command) // Codex has no SessionEnd
+}
+
+// selfHealAgentHooks re-asserts the ingest hook in the kai repo containing the
+// current working dir, on every kai invocation. It heals a stale binary path
+// or a removed entry with no user action. No-op outside a kai repo; writes
+// only when reconcile finds something to fix.
+func selfHealAgentHooks() {
+	wd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	root := liFindRepoRoot(wd)
+	if root == "" {
+		return
+	}
+	// Repair-only: fix an existing ingest hook whose binary path went stale
+	// (e.g. baked to a temp copy). Don't create a fresh install where the user
+	// never opted in — that's what `kai init` / `kai doctor --fix` are for.
+	want := stableIngestCommand()
+	files := []struct {
+		path   string
+		events []string
+	}{
+		{filepath.Join(root, ".claude", "settings.local.json"), []string{"Stop", "SessionEnd"}},
+		{filepath.Join(root, ".codex", "hooks.json"), []string{"Stop"}},
+	}
+	for _, f := range files {
+		if len(ingestHookCommands(f.path, f.events)) > 0 {
+			reconcileHookEvents(f.path, f.events, want)
+		}
+	}
+}
+
+// checkAgentIngest is a `kai doctor` probe: it verifies the Claude/Codex
+// session-ingest hook is installed in this repo, points to a live binary, and
+// is actually producing loop records. With `fix` it re-asserts the hook first
+// (prune stale + install current). Mirrors runDoctor's ok/warn/bad prefixes.
+func checkAgentIngest(ok, warn, bad string, fix bool) {
+	root := liFindRepoRoot(mustGetwd())
+	if root == "" {
+		fmt.Printf("%s session-ingest: not a kai repo (skipped)\n", warn)
+		return
+	}
+	if fix {
+		writeAgentHooks(root)
+	}
+
+	want := stableIngestCommand()
+	settings := filepath.Join(root, ".claude", "settings.local.json")
+	installed := ingestHookCommands(settings, []string{"Stop", "SessionEnd"})
+
+	// Check 1: hook installed?
+	if len(installed) == 0 {
+		fmt.Printf("%s session-ingest hook not installed — run 'kai doctor --fix' or 'kai init'\n", bad)
+		return
+	}
+	fmt.Printf("%s session-ingest hook installed (.claude/settings.local.json)\n", ok)
+
+	// Check 2: does every installed hook point to a live binary?
+	allLive := true
+	for _, c := range installed {
+		bin := hookBinaryPath(c)
+		if bin != "kai" && !isExecutableFile(bin) {
+			allLive = false
+			fmt.Printf("%s ingest hook points to a dead binary: %s\n", bad, bin)
+		} else if c != want {
+			fmt.Printf("%s ingest hook binary reachable but stale (want %s)\n", warn, want)
+		}
+	}
+	if allLive {
+		fmt.Printf("%s ingest binary reachable\n", ok)
+	} else {
+		fmt.Printf("%s run 'kai doctor --fix' to repoint the ingest hook to %s\n", warn, want)
+	}
+
+	// Check 3: is output actually being produced?
+	loops := filepath.Join(root, ".kai", "loops")
+	entries, _ := os.ReadDir(loops)
+	n := 0
+	var newest time.Time
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			n++
+			if info, err := e.Info(); err == nil && info.ModTime().After(newest) {
+				newest = info.ModTime()
+			}
+		}
+	}
+	if n > 0 {
+		fmt.Printf("%s ingest producing records (%d loop(s), newest %s)\n", ok, n, newest.Format("2006-01-02 15:04"))
+	} else {
+		fmt.Printf("%s no loop records yet (appears after your next Claude/Codex session ends)\n", warn)
+	}
+}
+
+func mustGetwd() string {
+	wd, _ := os.Getwd()
+	return wd
+}
+
+// ingestHookCommands returns the command strings of kai ingest hooks found in
+// the given settings file under any of `events`.
+func ingestHookCommands(path string, events []string) []string {
+	var out []string
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	var root map[string]any
+	if json.Unmarshal(data, &root) != nil {
+		return out
+	}
+	hooks, _ := root["hooks"].(map[string]any)
+	for _, ev := range events {
+		arr, _ := hooks[ev].([]any)
+		for _, g := range arr {
+			gm, _ := g.(map[string]any)
+			hs, _ := gm["hooks"].([]any)
+			for _, h := range hs {
+				hm, _ := h.(map[string]any)
+				if c, _ := hm["command"].(string); isIngestHookCommand(c) {
+					out = append(out, c)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// hookBinaryPath extracts the binary path from a `"<path>" log ingest` (or
+// `<path> log ingest`) command string.
+func hookBinaryPath(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if strings.HasPrefix(cmd, `"`) {
+		if end := strings.Index(cmd[1:], `"`); end >= 0 {
+			return cmd[1 : 1+end]
+		}
+	}
+	if fields := strings.Fields(cmd); len(fields) > 0 {
+		return fields[0]
+	}
+	return cmd
 }
 
 // ensureGitignored appends any of entries not already present to the repo's
@@ -675,7 +874,12 @@ func ensureGitignored(repoRoot string, entries ...string) {
 	}
 }
 
-func mergeHookEvents(path string, events []string, command string) {
+// reconcileHookEvents makes the ingest hook in `path` match `command` exactly,
+// for each of `events`: it prunes any of OUR stale ingest entries (a kai
+// `log ingest` command pointing somewhere other than `command` — e.g. a dead
+// temp path or a prior install) and ensures the current one is present. It
+// never touches non-ingest hooks. Writes only when something changed.
+func reconcileHookEvents(path string, events []string, command string) {
 	var root map[string]any
 	if data, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(data, &root)
@@ -691,14 +895,34 @@ func mergeHookEvents(path string, events []string, command string) {
 	changed := false
 	for _, ev := range events {
 		arr, _ := hooks[ev].([]any)
-		if hookCommandPresent(arr, command) {
-			continue
+		kept := make([]any, 0, len(arr))
+		for _, g := range arr {
+			gm, _ := g.(map[string]any)
+			hs, _ := gm["hooks"].([]any)
+			live := make([]any, 0, len(hs))
+			for _, h := range hs {
+				hm, _ := h.(map[string]any)
+				c, _ := hm["command"].(string)
+				if isIngestHookCommand(c) && c != command {
+					changed = true // drop a stale ingest entry
+					continue
+				}
+				live = append(live, h)
+			}
+			if len(live) == 0 {
+				continue // group was entirely stale ingest hooks
+			}
+			gm["hooks"] = live
+			kept = append(kept, gm)
 		}
-		group := map[string]any{
-			"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 30}},
+		if !hookCommandPresent(kept, command) {
+			group := map[string]any{
+				"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 30}},
+			}
+			kept = append(kept, group)
+			changed = true
 		}
-		hooks[ev] = append(arr, group)
-		changed = true
+		hooks[ev] = kept
 	}
 	if !changed {
 		return
@@ -709,6 +933,13 @@ func mergeHookEvents(path string, events []string, command string) {
 	if data, err := json.MarshalIndent(root, "", "  "); err == nil {
 		_ = os.WriteFile(path, data, 0644)
 	}
+}
+
+// isIngestHookCommand reports whether a hook command is one of kai's own
+// session-ingest hooks (any kai binary path + "log ingest"), so we can prune
+// stale copies without disturbing unrelated hooks (TokenBar, prompt-logger…).
+func isIngestHookCommand(cmd string) bool {
+	return strings.Contains(cmd, "log ingest")
 }
 
 func hookCommandPresent(arr []any, command string) bool {
