@@ -86,7 +86,7 @@ var kaiDir = kaipath.Resolve(".")
 var ciPolicyFile = filepath.Join(kaiDir, "rules", "ci-policy.yaml")
 
 // Version is the current kai CLI version
-var Version = "0.34.2"
+var Version = "0.34.3"
 
 // verbose enables debug output when --verbose/-v flag or KAI_VERBOSE env var is set
 var verbose bool
@@ -2994,11 +2994,14 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Printf("%s remote 'origin' not configured\n", warn)
 	}
 
+	// Claude/Codex session-ingest logging (.kai/loops).
+	checkAgentIngest(ok, warn, bad, doctorFix)
+
 	fmt.Println()
 	if doctorFix {
 		fmt.Println("Fixes applied (if any) above. Re-run 'kai doctor' to verify.")
 	} else {
-		fmt.Println("Run 'kai doctor --fix' to upgrade out-of-date kai-managed git hooks.")
+		fmt.Println("Run 'kai doctor --fix' to upgrade out-of-date kai-managed git hooks and repair the session-ingest hook.")
 	}
 	return nil
 }
@@ -3651,6 +3654,11 @@ func init() {
 		// Silently upgrade old (dangerous v1) kai-managed git hooks if present.
 		// Heals users who installed hooks on an older release.
 		selfHealHooks()
+		// Re-assert the Claude/Codex session-ingest hook in the current kai
+		// repo so logging keeps working even if its binary path went stale
+		// (e.g. baked to a temp copy) or the entry was removed — without the
+		// user ever re-running `kai init`. Cheap, silent, writes only on change.
+		selfHealAgentHooks()
 	}
 	rootCmd.PersistentPostRun = func(cmd *cobra.Command, args []string) {
 		// Flush any queued PostHog events before the CLI exits. Best-effort:
