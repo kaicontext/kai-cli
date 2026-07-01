@@ -1,0 +1,13 @@
+# Per-Dockerfile ignore (BuildKit) — paths are relative to the build context
+# root (the workspace dir holding kai-cli/ kai-core/ kai-engine/). Keep the
+# context to just the three Go modules; drop everything heavy/irrelevant.
+*
+!kai-cli/
+!kai-core/
+!kai-engine/
+# Prune non-source weight from the three modules.
+**/.git
+**/node_modules
+**/testdata
+**/*_test.go
+kai-cli/deploy/kai-ci/build.sh
