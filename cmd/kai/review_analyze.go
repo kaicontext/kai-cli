@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -9,11 +10,14 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/spf13/cobra"
 
-	"github.com/kaicontext/kai-engine/ai"
+	"kai/internal/config"
+
 	"github.com/kaicontext/kai-engine/contract"
 	semanticdiff "github.com/kaicontext/kai-engine/diff"
 	"github.com/kaicontext/kai-engine/finding"
 	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/message"
+	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/review"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/shouldtouch"
@@ -128,7 +132,7 @@ func runReviewAnalyze(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	f.Blast = blast
-	f.Blast.ShouldTouch = buildShouldTouch(db, headSnapID, changedFns)
+	f.Blast.ShouldTouch = buildShouldTouch(cmd, db, headSnapID, changedFns)
 
 	out, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
@@ -369,23 +373,22 @@ func countCallers(callers []string) string {
 // buildShouldTouch finds nodes the change pattern implied but didn't modify.
 // The graph produces high-recall candidates (peers of a changed function that
 // share a common callee it lacks); an LLM judge confirms each is a genuine
-// omission and phrases the "why". Without an API key the judge can't run, so we
-// emit nothing rather than assert an unverified candidate.
-func buildShouldTouch(db *graph.DB, headSnapID []byte, changedFns []string) []finding.ShouldTouch {
+// omission and phrases the "why". The judge runs through the same provider path
+// as the rest of the engine (provider.FromEnv → kailab/OpenRouter, with an
+// ANTHROPIC_API_KEY fallback). If no provider can be built we emit nothing
+// rather than assert an unverified candidate.
+func buildShouldTouch(cmd *cobra.Command, db *graph.DB, headSnapID []byte, changedFns []string) []finding.ShouldTouch {
 	out := []finding.ShouldTouch{}
 	cands, err := shouldtouch.Detect(db, headSnapID, changedFns)
 	if err != nil || len(cands) == 0 {
 		return out
 	}
-	if !ai.IsConfigured() {
-		return out
-	}
-	client, err := ai.NewClient()
-	if err != nil {
+	prov, model := judgeProvider()
+	if prov == nil {
 		return out
 	}
 	for _, c := range cands {
-		ok, why := judgeShouldTouch(client, c)
+		ok, why := judgeShouldTouch(cmd.Context(), prov, model, c)
 		if !ok {
 			continue
 		}
@@ -399,6 +402,22 @@ func buildShouldTouch(db *graph.DB, headSnapID []byte, changedFns []string) []fi
 	return out
 }
 
+// judgeProvider builds the LLM provider for the should-touch judge, reusing the
+// gate/planner plumbing (kailab credentials → OpenRouter when logged in, else an
+// ANTHROPIC_API_KEY fallback). Returns (nil, "") when no provider is available,
+// so the judge degrades to emitting no should-touch findings.
+func judgeProvider() (provider.Provider, string) {
+	cfg, err := config.Load(kaiDir)
+	if err != nil {
+		return nil, ""
+	}
+	prov, reviewModel, _, err := buildGateProvider(cfg)
+	if err != nil {
+		return nil, ""
+	}
+	return prov, reviewModel
+}
+
 const shouldTouchSystem = `You verify whether an agent's code change is missing a call it almost certainly should have made. You are given a changed function, the peer functions that do the same kind of work, and a callee that every peer invokes but the changed function does not. A wrong "yes" wastes a reviewer's time, so answer "yes" ONLY when the omission is a real, likely-unintended gap. When unsure, answer no.
 
 Respond in exactly one line:
@@ -406,15 +425,29 @@ YES: <one sentence explaining what the change fails to do>
 or
 NO`
 
-func judgeShouldTouch(client *ai.Client, c shouldtouch.Candidate) (bool, string) {
+func judgeShouldTouch(ctx context.Context, prov provider.Provider, model string, c shouldtouch.Candidate) (bool, string) {
 	user := fmt.Sprintf(
 		"Changed function: %s\nPeer functions that all call %s: %s\nThe changed function does NOT call %s.\n\nIs this a genuine omission the change should have included?",
 		c.ChangedFn, c.Callee, strings.Join(c.Peers, ", "), c.Callee)
-	resp, err := client.Complete(shouldTouchSystem, []ai.Message{{Role: "user", Content: user}}, 150)
+	resp, err := prov.Send(ctx, provider.Request{
+		Model:     model,
+		System:    shouldTouchSystem,
+		MaxTokens: 150,
+		Messages: []message.Message{{
+			Role:  message.RoleUser,
+			Parts: []message.ContentPart{message.TextContent{Text: user}},
+		}},
+	})
 	if err != nil {
 		return false, ""
 	}
-	line := strings.TrimSpace(resp)
+	var raw strings.Builder
+	for _, p := range resp.Parts {
+		if t, ok := p.(message.TextContent); ok {
+			raw.WriteString(t.Text)
+		}
+	}
+	line := strings.TrimSpace(raw.String())
 	if !strings.HasPrefix(strings.ToLower(line), "yes") {
 		return false, ""
 	}
