@@ -15619,7 +15619,12 @@ func runPush(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("listing refs: %w", err)
 		}
 		for _, r := range allRefs {
-			if strings.HasPrefix(r.Name, "snap.") || strings.HasPrefix(r.Name, "cs.") || strings.HasPrefix(r.Name, "tag.") {
+			// git.<sha> refs are the git↔kai bridge mapping (a commit SHA →
+			// its snapshot). Pushing them makes the data plane git-addressable,
+			// so a server-side review can resolve a PR's base/head SHA to the
+			// snapshots to diff — without re-capturing the tree.
+			if strings.HasPrefix(r.Name, "snap.") || strings.HasPrefix(r.Name, "cs.") ||
+				strings.HasPrefix(r.Name, "tag.") || strings.HasPrefix(r.Name, "git.") {
 				refsToSync = append(refsToSync, r)
 			}
 		}
@@ -15795,15 +15800,25 @@ func runPush(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Skip push if snap.latest hasn't changed since last push. This does NOT
-	// apply to a workspace push (--ws): a workspace's state lives in
-	// ws.<name>.head, which advances independently of snap.latest, so this
-	// snap.latest check would wrongly report "Already up to date." and transmit
-	// nothing — leaving the workspace unshareable (F-12).
+	// Skip the push only when EVERY ref we'd sync is already published at the
+	// same target on THIS remote (compared against its remote/<remote>/<name>
+	// tracking ref). The old check keyed on snap.latest alone, which (a) wrongly
+	// reported "Already up to date" for a different remote's tracking ref, and
+	// (b) never published refs whose target snapshot already existed — e.g. the
+	// git.<sha> bridge refs, which point at snapshots already on the server, so
+	// they'd silently never propagate. Ref-aware means new/moved refs (git.*,
+	// tags, etc.) always publish even when snap.latest is unchanged. Does NOT
+	// apply to a workspace push (--ws): its state lives in ws.<name>.head (F-12).
 	if !pushForce && workspaceToPush == nil {
-		localLatest, _ := refMgr.Get("snap.latest")
-		lastPushed, _ := refMgr.Get("remote/origin/snap.latest")
-		if localLatest != nil && lastPushed != nil && bytes.Equal(localLatest.TargetID, lastPushed.TargetID) {
+		allPublished := true
+		for _, r := range refsToSync {
+			tracking, _ := refMgr.Get("remote/" + remoteName + "/" + r.Name)
+			if tracking == nil || !bytes.Equal(tracking.TargetID, r.TargetID) {
+				allPublished = false
+				break
+			}
+		}
+		if allPublished {
 			fmt.Println("Already up to date.")
 			return nil
 		}
@@ -16428,6 +16443,80 @@ func runPush(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// hydrateSnapshot fully materializes a snapshot's graph in the local store: the
+// snapshot node, every file node and its content blob, and the HAS_FILE edges
+// connecting them. Fetching a snapshot by ref previously inserted only the bare
+// root node, which left the snapshot undiffable (`kai diff` saw no files and a
+// review over it analyzed to files:0). This mirrors the clone hydration path so
+// a fetched-by-ref snapshot is diffable/analyzable — the primitive a server-side
+// review needs to diff two snapshots resolved from a PR's base/head SHA.
+//
+// Note: symbol-level edges (calls/deps) are not transferred by the object/file
+// endpoints, so blast radius over a fetched snapshot is empty until a snapshot
+// edge-fetch lands; file-level diff, line totals, and intent are complete.
+func hydrateSnapshot(db *graph.DB, client *remote.Client, snapDigest []byte) error {
+	if exists, _ := db.HasNode(snapDigest); !exists {
+		content, kind, err := client.GetObject(snapDigest)
+		if err != nil {
+			return fmt.Errorf("fetching snapshot object: %w", err)
+		}
+		if content == nil {
+			return fmt.Errorf("snapshot %s not found on remote", hex.EncodeToString(snapDigest)[:12])
+		}
+		var payload map[string]interface{}
+		if err := json.Unmarshal(content, &payload); err != nil {
+			return fmt.Errorf("parsing snapshot: %w", err)
+		}
+		tx, err := db.BeginTx()
+		if err != nil {
+			return err
+		}
+		if _, err := db.InsertNode(tx, graph.NodeKind(kind), payload); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("inserting snapshot node: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	filesResp, err := client.ListSnapshotFiles(hex.EncodeToString(snapDigest))
+	if err != nil {
+		return fmt.Errorf("listing snapshot files: %w", err)
+	}
+	for _, f := range filesResp.Files {
+		fileDigest, err := hex.DecodeString(f.Digest)
+		if err != nil {
+			continue
+		}
+		// File node
+		if exists, _ := db.HasNode(fileDigest); !exists {
+			if nodeContent, nodeKind, gerr := client.GetObject(fileDigest); gerr == nil && nodeContent != nil {
+				var payload map[string]interface{}
+				if json.Unmarshal(nodeContent, &payload) == nil {
+					if t, terr := db.BeginTx(); terr == nil {
+						if _, ierr := db.InsertNode(t, graph.NodeKind(nodeKind), payload); ierr == nil {
+							t.Commit()
+						} else {
+							t.Rollback()
+						}
+					}
+				}
+			}
+		}
+		// Content blob — /v1/raw takes the file NODE digest and dereferences.
+		if _, err := db.ReadObject(f.ContentDigest); err != nil {
+			if raw, gerr := client.GetRawContent(f.Digest); gerr == nil {
+				db.WriteObject(raw)
+			}
+		}
+		// HAS_FILE edge (snapshot -> file), required for the snapshot to enumerate
+		// its files during a diff.
+		db.InsertEdgeDirect(snapDigest, graph.EdgeHasFile, fileDigest, nil)
+	}
+	return nil
+}
+
 func runFetch(cmd *cobra.Command, args []string) error {
 	te := telemetry.NewEvent("fetch")
 	defer te.Finish()
@@ -16516,45 +16605,31 @@ func runFetch(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("  Found %d ref(s)\n", len(remoteRefs))
 
-	// Collect objects to fetch
-	var objectsToFetch [][]byte
+	// Materialize each ref. Snapshot refs (snap.*, git.*, tag.*) are hydrated
+	// FULLY — snapshot node + every file node, content blob, and HAS_FILE edge —
+	// so the snapshot is diffable/analyzable locally. Changeset (cs.*) and
+	// workspace (ws.*) refs keep the lightweight root-node fetch; their contents
+	// arrive via their own sync paths (--ws / --review).
 	for _, r := range remoteRefs {
-		exists, _ := db.HasNode(r.Target)
-		if !exists {
-			objectsToFetch = append(objectsToFetch, r.Target)
+		if strings.HasPrefix(r.Name, "cs.") || strings.HasPrefix(r.Name, "ws.") {
+			if exists, _ := db.HasNode(r.Target); !exists {
+				if content, kind, gerr := client.GetObject(r.Target); gerr == nil && content != nil {
+					var payload map[string]interface{}
+					if json.Unmarshal(content, &payload) == nil {
+						if tx, terr := db.BeginTx(); terr == nil {
+							if _, ierr := db.InsertNode(tx, graph.NodeKind(kind), payload); ierr == nil {
+								tx.Commit()
+							} else {
+								tx.Rollback()
+							}
+						}
+					}
+				}
+			}
+			continue
 		}
-	}
-
-	if len(objectsToFetch) > 0 {
-		fmt.Printf("  Objects to fetch: %d\n", len(objectsToFetch))
-
-		for _, digest := range objectsToFetch {
-			content, kind, err := client.GetObject(digest)
-			if err != nil {
-				fmt.Printf("  Warning: failed to get object %s: %v\n", hex.EncodeToString(digest)[:12], err)
-				continue
-			}
-
-			if content != nil {
-				// Parse and store the object
-				var payload map[string]interface{}
-				if err := json.Unmarshal(content, &payload); err != nil {
-					fmt.Printf("  Warning: failed to parse object %s: %v\n", hex.EncodeToString(digest)[:12], err)
-					continue
-				}
-
-				// Insert node directly
-				tx, err := db.BeginTx()
-				if err != nil {
-					continue
-				}
-				_, err = db.InsertNode(tx, graph.NodeKind(kind), payload)
-				if err != nil {
-					tx.Rollback()
-					continue
-				}
-				tx.Commit()
-			}
+		if err := hydrateSnapshot(db, client, r.Target); err != nil {
+			fmt.Printf("  Warning: hydrating %s: %v\n", r.Name, err)
 		}
 	}
 
