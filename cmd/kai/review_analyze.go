@@ -10,6 +10,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/reviewanalyze"
+	"github.com/kaicontext/kai-engine/util"
 )
 
 var (
@@ -59,6 +60,58 @@ func runReviewAnalyze(cmd *cobra.Command, args []string) error {
 		Judge:       judge,
 		JudgeModel:  model,
 	})
+	if err != nil {
+		return err
+	}
+
+	out, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling finding: %w", err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), string(out))
+	return nil
+}
+
+var reviewAnalyzeSnapshotsCmd = &cobra.Command{
+	Use:   "analyze-snapshots <base> <head>",
+	Short: "Emit the Finding for a base→head snapshot pair (no review needed)",
+	Long: `Assemble the review Finding directly from two snapshots — the same headless
+JSON as 'review analyze', but for an arbitrary base→head pair instead of a
+persisted review. This is the entry the server-side review path uses after
+resolving a PR's base/head to snapshots; exposed on the CLI for parity/testing.
+
+Examples:
+  kai review analyze-snapshots @snap:prev @snap:last
+  kai review analyze-snapshots git.<baseSHA> git.<headSHA>`,
+	Args: cobra.ExactArgs(2),
+	RunE: runReviewAnalyzeSnapshots,
+}
+
+func runReviewAnalyzeSnapshots(cmd *cobra.Command, args []string) error {
+	db, err := openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	baseID, err := resolveSnapshotID(db, args[0])
+	if err != nil {
+		return fmt.Errorf("resolving base %q: %w", args[0], err)
+	}
+	headID, err := resolveSnapshotID(db, args[1])
+	if err != nil {
+		return fmt.Errorf("resolving head %q: %w", args[1], err)
+	}
+
+	judge, model := judgeProvider()
+
+	f, err := reviewanalyze.AnalyzeSnapshots(cmd.Context(), db, util.BytesToHex(baseID), util.BytesToHex(headID),
+		reviewanalyze.Meta{ID: "snap", Title: fmt.Sprintf("%s..%s", args[0], args[1])},
+		reviewanalyze.Options{
+			ContractDir: kaiDir,
+			Judge:       judge,
+			JudgeModel:  model,
+		})
 	if err != nil {
 		return err
 	}

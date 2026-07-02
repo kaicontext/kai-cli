@@ -4279,6 +4279,7 @@ func init() {
 	reviewCmd.AddCommand(reviewAnalyzeCmd)
 	reviewAnalyzeCmd.Flags().StringVar(&analyzeFormat, "format", "json", "Output format (json)")
 	reviewAnalyzeCmd.Flags().StringVar(&analyzeContract, "contract", "", "Contract id to enrich the intent-vs-code panel")
+	reviewCmd.AddCommand(reviewAnalyzeSnapshotsCmd)
 	reviewSummaryCmd.Flags().BoolVarP(&reviewInteractive, "interactive", "i", false, "Interactive drill-down mode")
 	reviewSummaryCmd.Flags().BoolVar(&reviewAI, "ai", false, "Run AI review (requires ANTHROPIC_API_KEY)")
 	rootCmd.AddCommand(reviewCmd)
