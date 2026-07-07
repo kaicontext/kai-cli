@@ -18,6 +18,7 @@ import (
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/provider"
+	"github.com/kaicontext/kai-engine/reviewanalyze"
 )
 
 // review-commit is the agentic, graph-grounded PR reviewer: the same read-only
@@ -138,6 +139,19 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	risks, match, note := rcParseReviewOutput(raw)
 	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
 
+	// Blast radius: walk the captured graph outward from the changed files so the
+	// finding shows what the change reaches (callers/importers), not just the diff.
+	// headHex="" walks the freshly-captured (single-snapshot) graph unscoped.
+	// Non-fatal — blast is a panel, not the review itself.
+	changedPaths := make([]string, 0, len(files))
+	for _, df := range files {
+		changedPaths = append(changedPaths, df.Path)
+	}
+	blast, berr := reviewanalyze.BlastFor(ctx, set.Primary().DB, changedPaths, "")
+	if berr != nil {
+		fmt.Fprintf(os.Stderr, "  blast radius unavailable: %v\n", berr)
+	}
+
 	from := rcShort(rcParentHash(hash))
 	if reviewCommitBase != "" {
 		if b, e := exec.Command("git", "rev-parse", reviewCommitBase).Output(); e == nil {
@@ -171,6 +185,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		},
 		Claims: claims,
 		Diff:   finding.Diff{Files: files},
+		Blast:  blast,
 	}
 
 	if reviewCommitFormat == "json" {
