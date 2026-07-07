@@ -1174,6 +1174,12 @@ type PlannerServices struct {
 	// agent runner synthesizes a single-project Set from MainRepo.
 	Projects *projects.Set
 
+	// TraceID, when non-empty, tags planner and chat-agent activity
+	// emitted during this session so runs can be correlated across
+	// roots in telemetry. Empty means no correlation tag is attached,
+	// which is the default for single-root callers.
+	TraceID string
+
 	// ChatActivityCh, when non-nil, receives live tool-call and
 	// file-change events from the chat-fallback agent so the REPL
 	// can render them inline as the agent works. Sends are
