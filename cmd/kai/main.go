@@ -16277,9 +16277,16 @@ func runPush(cmd *cobra.Command, args []string) error {
 	// all nodes but zero edges.)
 	var edgesToPush []remote.EdgeData
 	edgeSeen := make(map[string]bool)
+	var edgeReadErr error
 	for _, d := range allDigests {
 		fromEdges, err := db.GetAllEdgesFrom(d)
 		if err != nil {
+			// The local edges table was already read for the closure above, so a
+			// failure here is unexpected. Surface it (once, below) rather than
+			// silently shipping an incomplete graph — but don't abort the push,
+			// whose objects and refs already landed and whose edges are
+			// supplementary (PushEdges failures are likewise non-fatal).
+			edgeReadErr = err
 			continue
 		}
 		for _, edge := range fromEdges {
@@ -16296,6 +16303,9 @@ func runPush(cmd *cobra.Command, args []string) error {
 				At:   hex.EncodeToString(edge.At),
 			})
 		}
+	}
+	if edgeReadErr != nil {
+		fmt.Fprintf(os.Stderr, "\nwarning: some local edges could not be read (%v); the pushed graph may be missing edges\n", edgeReadErr)
 	}
 
 	if len(edgesToPush) > 0 {
