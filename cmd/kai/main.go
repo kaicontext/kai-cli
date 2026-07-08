@@ -16266,34 +16266,47 @@ func runPush(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Push edges for pushed snapshots
-	// Collect edges for all snapshot refs we just pushed
+	// Push the FULL edge set for the pushed graph.
+	//
+	// Kai is a graph database: an edge is an object that belongs on the wire, just
+	// like a node. We push every edge whose source is a node in the closure we just
+	// sent — every edge type (DEFINES_IN, HAS_FILE, CALLS, IMPORTS, MODIFIES, …) and
+	// every context — so the remote graph is object-for-object identical to local.
+	//
+	// (Previously this only sent IMPORTS/TESTS/CALLS scoped to snapshots, which
+	// silently dropped DEFINES_IN, HAS_FILE and the rest — the remote ended up with
+	// all nodes but zero edges.)
 	var edgesToPush []remote.EdgeData
-	for _, r := range validRefs {
-		// Only push edges for snapshots (where import/test analysis is scoped)
-		if r.TargetKind != ref.KindSnapshot {
+	edgeSeen := make(map[string]bool)
+	var edgeReadErr error
+	for _, d := range allDigests {
+		fromEdges, err := db.GetAllEdgesFrom(d)
+		if err != nil {
+			// The local edges table was already read for the closure above, so a
+			// failure here is unexpected. Surface it (once, below) rather than
+			// silently shipping an incomplete graph — but don't abort the push,
+			// whose objects and refs already landed and whose edges are
+			// supplementary (PushEdges failures are likewise non-fatal).
+			edgeReadErr = err
 			continue
 		}
-
-		// Get edges scoped to this snapshot (IMPORTS, TESTS, CALLS, etc.)
-		for _, edgeType := range []graph.EdgeType{
-			graph.EdgeImports,
-			graph.EdgeTests,
-			graph.EdgeCalls,
-		} {
-			edges, err := db.GetEdgesByContext(r.TargetID, edgeType)
-			if err != nil {
+		for _, edge := range fromEdges {
+			key := hex.EncodeToString(edge.Src) + "|" + string(edge.Type) + "|" +
+				hex.EncodeToString(edge.Dst) + "|" + hex.EncodeToString(edge.At)
+			if edgeSeen[key] {
 				continue
 			}
-			for _, edge := range edges {
-				edgesToPush = append(edgesToPush, remote.EdgeData{
-					Src:  hex.EncodeToString(edge.Src),
-					Type: string(edge.Type),
-					Dst:  hex.EncodeToString(edge.Dst),
-					At:   hex.EncodeToString(edge.At),
-				})
-			}
+			edgeSeen[key] = true
+			edgesToPush = append(edgesToPush, remote.EdgeData{
+				Src:  hex.EncodeToString(edge.Src),
+				Type: string(edge.Type),
+				Dst:  hex.EncodeToString(edge.Dst),
+				At:   hex.EncodeToString(edge.At),
+			})
 		}
+	}
+	if edgeReadErr != nil {
+		fmt.Fprintf(os.Stderr, "\nwarning: some local edges could not be read (%v); the pushed graph may be missing edges\n", edgeReadErr)
 	}
 
 	if len(edgesToPush) > 0 {
