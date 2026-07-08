@@ -85,8 +85,9 @@ var kaiDir = kaipath.Resolve(".")
 // ciPolicyFile is the primary CI policy location (inside kaiDir).
 var ciPolicyFile = filepath.Join(kaiDir, "rules", "ci-policy.yaml")
 
-// Version is the current kai CLI version
-var Version = "0.34.3"
+// Version is the current kai CLI default; release builds override it via
+// -ldflags "-X main.Version=<tag>" (see .github/workflows/ci.yml).
+var Version = "0.34.5"
 
 // verbose enables debug output when --verbose/-v flag or KAI_VERBOSE env var is set
 var verbose bool

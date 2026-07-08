@@ -104,11 +104,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc gcc-aarch64-linux-gnu
       - name: Build linux/amd64
         run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o kai-linux-amd64 ./cmd/kai
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0-dev+${GITHUB_SHA::7}"; fi
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.Version=${VERSION}" -o kai-linux-amd64 ./cmd/kai
           gzip -kf kai-linux-amd64
       - name: Build linux/arm64
         run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build -ldflags="-s -w" -o kai-linux-arm64 ./cmd/kai
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0-dev+${GITHUB_SHA::7}"; fi
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build -ldflags="-s -w -X main.Version=${VERSION}" -o kai-linux-arm64 ./cmd/kai
           gzip -kf kai-linux-arm64
       - name: Authenticate to Google Cloud
         if: startsWith(github.ref, 'refs/tags/')
@@ -152,11 +154,13 @@ jobs:
         run: git config --global url."https://x-access-token:${{ steps.core-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
       - name: Build darwin/arm64
         run: |
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o kai-darwin-arm64 ./cmd/kai
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0-dev+${GITHUB_SHA::7}"; fi
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.Version=${VERSION}" -o kai-darwin-arm64 ./cmd/kai
           gzip -kf kai-darwin-arm64
       - name: Build darwin/amd64
         run: |
-          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o kai-darwin-amd64 ./cmd/kai
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0-dev+${GITHUB_SHA::7}"; fi
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.Version=${VERSION}" -o kai-darwin-amd64 ./cmd/kai
           gzip -kf kai-darwin-amd64
       - name: Authenticate to Google Cloud
         if: startsWith(github.ref, 'refs/tags/')
