@@ -21,7 +21,10 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    # Only build on pushes to main (post-merge) and version tags (releases).
+    # Feature branches are covered by the pull_request trigger below, so
+    # scoping push to main avoids a duplicate run per branch-PR.
+    branches: [main]
     tags: ['*']
   pull_request:
     branches: [main]
