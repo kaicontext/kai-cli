@@ -16921,7 +16921,25 @@ func runCloneKaiOnly(args []string) error {
 	//          org/repo (defaults to DefaultServer)
 	serverURL := remote.DefaultServer
 	var tenant, repo string
-	if cloneTenant != "" && cloneRepo != "" {
+	if strings.HasPrefix(rawURL, "ssh://") {
+		// ssh://user@host/tenant/repo — the kailabd serve-stdio transport. Keep
+		// the userinfo (user@) so ssh dials the right account; NewClient detects
+		// the ssh:// scheme downstream and swaps in the ssh transport.
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return fmt.Errorf("parsing URL: %w", err)
+		}
+		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+		if len(parts) < 2 {
+			return fmt.Errorf("URL must include /<tenant>/<repo>")
+		}
+		tenant, repo = parts[0], parts[1]
+		host := parsed.Host
+		if parsed.User != nil {
+			host = parsed.User.String() + "@" + host
+		}
+		serverURL = "ssh://" + host
+	} else if cloneTenant != "" && cloneRepo != "" {
 		tenant = cloneTenant
 		repo = cloneRepo
 		if !strings.HasPrefix(rawURL, "http") && !strings.Contains(rawURL, "/") {
@@ -17189,6 +17207,13 @@ func dirExistsNonEmpty(path string) bool {
 
 func runClone(cmd *cobra.Command, args []string) error {
 	if cloneKaiOnly {
+		return runCloneKaiOnly(args)
+	}
+
+	// ssh:// remotes are Kai-only (a kailabd serve-stdio endpoint with no git
+	// backing), so skip the git clone attempt — it would only fail with
+	// "git-upload-pack: command not found" before falling back anyway.
+	if len(args) > 0 && strings.HasPrefix(args[0], "ssh://") {
 		return runCloneKaiOnly(args)
 	}
 
