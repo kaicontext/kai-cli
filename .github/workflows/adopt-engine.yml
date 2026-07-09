@@ -1,0 +1,107 @@
+name: adopt-engine
+# Leaf of the cascade: when kai-engine releases, adopt it and release kai-cli
+# automatically. Bump the engine version (go mod tidy also pulls the matching
+# kai-core forward), build/test, commit to main, then tag the next kai-cli
+# patch. That tag triggers the existing ci.yml, which builds the binaries and
+# publishes to GCS + GitHub Releases.
+#
+# Pure versioned bump — no `replace` is added, so ci.yml's boundary job stays
+# green. The bot pushes the bump commit + tag straight to main.
+on:
+  repository_dispatch:
+    types: [engine-released]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: kai-engine version to adopt (e.g. v0.3.0)
+        required: true
+
+concurrency:
+  group: cli-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  GOPRIVATE: github.com/kaicontext/*
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve and validate target version
+        id: v
+        env:
+          # The raw value comes from a repository_dispatch payload (untrusted).
+          # Read it via env, never inline it into a later run-block: GitHub
+          # substitutes ${{ }} into scripts BEFORE the shell parses them, so an
+          # unvalidated 'v1$(curl evil)' would execute. Enforce strict semver
+          # here; this also rejects an empty workflow_dispatch input.
+          RAW_VERSION: ${{ github.event.client_payload.version || github.event.inputs.version }}
+        run: |
+          if ! printf '%s' "$RAW_VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::invalid or empty version '$RAW_VERSION' (expected vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+          echo "version=$RAW_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Mint App token
+        uses: actions/create-github-app-token@v3
+        id: token
+        with:
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-core,kai-engine,kai-cli
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+      - name: Authenticate to private modules
+        run: git config --global url."https://x-access-token:${{ steps.token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y gcc
+      - name: Bump kai-engine, build, test
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          go get "github.com/kaicontext/kai-engine@${VERSION}"
+          go mod tidy
+          CGO_ENABLED=1 go build ./...
+          CGO_ENABLED=1 go test -timeout 5m -skip 'TestRunCompletion' ./...
+      - name: Commit bump to main and tag the next kai-cli release
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          git config user.name "kai-release-bot"
+          git config user.email "bot@kaicontext.com"
+          # Commit ONLY the dependency files, never a fixture a test may dirty.
+          if ! git diff --quiet go.mod go.sum; then
+            git commit go.mod go.sum -m "chore(deps): bump kai-engine to ${VERSION}"
+          fi
+          # Idempotency keyed on the TAG, not the go.mod diff: a bump that landed
+          # on main but died before tagging (tag collision, transient push
+          # failure) must still be released, not silently dropped by a re-run.
+          if git describe --exact-match --tags HEAD >/dev/null 2>&1; then
+            echo "HEAD already tagged $(git describe --exact-match --tags HEAD); nothing to release."
+            exit 0
+          fi
+          # Next free strict-semver patch. `10#` forces base-10 (a zero-padded
+          # component like 08 is never mis-read as octal); refresh tags and skip
+          # any that already exist so a concurrent tag can't collide.
+          git fetch --tags --force origin >/dev/null 2>&1 || true
+          latest=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          latest=${latest:-v0.0.0}
+          IFS=. read -r MA MI PA <<< "${latest#v}"
+          next="v$((10#$MA)).$((10#$MI)).$((10#$PA + 1))"
+          while git rev-parse -q --verify "refs/tags/$next" >/dev/null; do
+            PA=$((10#$PA + 1)); next="v$((10#$MA)).$((10#$MI)).${PA}"
+          done
+          git tag "$next"
+          # Atomic push: commit + tag land together or not at all, so a failure
+          # leaves no partial state and the next run retries cleanly.
+          git push --atomic origin HEAD:main "refs/tags/$next"   # triggers ci.yml -> build + publish
+          echo "Released kai-cli $next"
