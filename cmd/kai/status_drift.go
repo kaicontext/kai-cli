@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -123,4 +124,117 @@ func pinGraphRef(sha string) {
 func gitCmdOutput(args ...string) (string, error) {
 	out, err := exec.Command("git", args...).Output()
 	return strings.TrimSpace(string(out)), err
+}
+
+// syncDriftManifest brings the drift manifest in line with the current
+// graph↔git state. Called after pin sites advance graph_refs (catch-up
+// shrinks the manifest) and by the detailed drift view. Best-effort.
+func syncDriftManifest() {
+	rep := computeDriftReport()
+	if rep == nil {
+		return
+	}
+	if _, err := drift.SyncManifest("", kaiDir, rep); err != nil {
+		debugf("drift manifest sync: %v", err)
+	}
+}
+
+// runDriftDetail is the default `kai shadow drift` view: the relationship,
+// the per-commit drift manifest (files touched, import targets), and the
+// estimated catch-up size.
+func runDriftDetail(w io.Writer) error {
+	rep, err := drift.Compute("", kaiDir)
+	if err != nil {
+		return fmt.Errorf("resolving git state (drift needs git history): %w", err)
+	}
+	man, err := drift.SyncManifest("", kaiDir, rep)
+	if err != nil {
+		return fmt.Errorf("syncing drift manifest: %w", err)
+	}
+
+	fmt.Fprintf(w, "Relationship: %s\n", rep.Relationship)
+	if rep.GraphState != "" {
+		via := rep.GraphRef
+		if via == "" {
+			via = "?"
+		}
+		fmt.Fprintf(w, "Graph state:  %s (via %s)\n", shortPrefix(rep.GraphState), via)
+	}
+	head := shortPrefix(rep.GitHead)
+	if rep.GitRef != "" {
+		head += " (" + rep.GitRef + ")"
+	}
+	fmt.Fprintf(w, "Git HEAD:     %s\n", head)
+
+	switch rep.Relationship {
+	case drift.RelSynced:
+		fmt.Fprintln(w, "\nGraph is in sync with git; nothing to catch up.")
+		return nil
+	case drift.RelUnpinned:
+		fmt.Fprintln(w, "\nNo graph state pinned yet — run 'kai capture' on a commit or 'kai import'.")
+		return nil
+	case drift.RelOrphaned:
+		fmt.Fprintln(w, "\nPinned graph state shares no history with HEAD (history rewrite).")
+		fmt.Fprintln(w, "Re-import from the current line with 'kai import', or 'kai capture' to pin HEAD.")
+		return nil
+	}
+
+	behind, ahead := splitLegs(man)
+	if len(behind) > 0 {
+		totalFiles := 0
+		for _, e := range behind {
+			totalFiles += len(e.Changed)
+		}
+		fmt.Fprintf(w, "\nUnprocessed commits (%d, oldest first; %s to catch up):\n",
+			len(behind), countNoun(totalFiles, "file"))
+		printManifestEntries(w, behind)
+	}
+	if len(ahead) > 0 {
+		fmt.Fprintf(w, "\nSuperseded commits (%d, only in the graph's old line):\n", len(ahead))
+		printManifestEntries(w, ahead)
+	}
+	fmt.Fprintf(w, "\nManifest: %s — %s\n",
+		filepath.Join(kaiDir, drift.ManifestFile), countNoun(len(man.Commits), "commit"))
+	fmt.Fprintln(w, "Run 'kai capture' (or 'kai import' for many commits) to catch up.")
+	return nil
+}
+
+func splitLegs(m *drift.Manifest) (behind, ahead []drift.CommitEntry) {
+	for _, e := range m.Commits {
+		if e.Leg == "ahead" {
+			ahead = append(ahead, e)
+		} else {
+			behind = append(behind, e)
+		}
+	}
+	return behind, ahead
+}
+
+const maxDriftFilesShown = 8
+
+func printManifestEntries(w io.Writer, entries []drift.CommitEntry) {
+	for _, e := range entries {
+		age := ""
+		if e.TimeUnix > 0 {
+			age = "  " + ageString(e.TimeUnix)
+		}
+		note := ""
+		if e.Truncated {
+			note = "  (too large to analyze — conservatively intersects everything)"
+		} else if len(e.ImportTargets) > 0 {
+			note = "  [adds imports into " + strings.Join(e.ImportTargets, ", ") + "]"
+		}
+		fmt.Fprintf(w, "  %s%s  %s%s\n", shortPrefix(e.SHA), age, countNoun(len(e.Changed), "file"), note)
+		for i, cf := range e.Changed {
+			if i == maxDriftFilesShown {
+				fmt.Fprintf(w, "      … and %d more\n", len(e.Changed)-maxDriftFilesShown)
+				break
+			}
+			if cf.OldPath != "" {
+				fmt.Fprintf(w, "      %s %s → %s\n", cf.Status, cf.OldPath, cf.Path)
+			} else {
+				fmt.Fprintf(w, "      %s %s\n", cf.Status, cf.Path)
+			}
+		}
+	}
 }

@@ -3466,8 +3466,10 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 	_ = refMgr.SetWithMeta("git.HEAD", latest.TargetID, ref.KindSnapshot, "", meta)
 
 	// Record the commit as processed in graph_refs so drift classification
-	// (kai status) knows the graph is current as of this commit.
+	// (kai status) knows the graph is current as of this commit, and shrink
+	// the drift manifest accordingly.
 	pinGraphRef(fullSHA)
+	syncDriftManifest()
 	return nil
 }
 
@@ -5742,6 +5744,7 @@ func runGitImport(db *graph.DB) error {
 		if err := graphRefs.Save(kaiDir); err != nil {
 			debugf("git import: saving graph_refs: %v", err)
 		}
+		syncDriftManifest()
 	}
 
 	if !initMode {
@@ -14777,6 +14780,13 @@ func runShadowParity(cmd *cobra.Command, args []string) error {
 }
 
 func runShadowDrift(cmd *cobra.Command, args []string) error {
+	// Default: the git-drift detail view (relationship + per-commit
+	// manifest). Explicit --snap/--git-ref keep the legacy snapshot-content
+	// comparison.
+	if !cmd.Flags().Changed("snap") && !cmd.Flags().Changed("git-ref") {
+		return runDriftDetail(os.Stdout)
+	}
+
 	db, err := openDB()
 	if err != nil {
 		return err
