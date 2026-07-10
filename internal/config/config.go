@@ -43,6 +43,20 @@ type Config struct {
 	// (default) keeps every confirmation prompt. The `--auto` flag
 	// and KAI_AUTO env var override this per run.
 	Autonomy string `yaml:"autonomy"`
+
+	Staleness StalenessConfig `yaml:"staleness"`
+}
+
+// StalenessConfig controls how query commands react to graph↔git drift.
+// Both zero values are meaningful defaults: annotate, never block.
+type StalenessConfig struct {
+	// Strict makes a stale-suspect answer exit non-zero (code 75, the
+	// tripwire convention) even without --strict. A CI knob.
+	Strict bool `yaml:"strict"`
+	// RefuseAfterIntersecting refuses to answer (stale-refused) when at
+	// least this many unprocessed commits intersect a query's subgraph.
+	// 0 = never refuse, annotate only.
+	RefuseAfterIntersecting int `yaml:"refuse_after_intersecting"`
 }
 
 // TriageConfig controls the request-triage step that classifies an
@@ -175,7 +189,7 @@ const (
 	// planner keeps DeepSeek-V4-Pro for its reasoning-heavy exploration
 	// and reroutes only its constrained finalize turn (tui.go:514).
 	// A user who wants a reasoning chat model can set KAI_CHAT_MODEL.
-	defaultChatModel       = "z-ai/glm-5.1"
+	defaultChatModel = "z-ai/glm-5.1"
 	// Executor stays on GLM-5.1. DeepSeek-V4-Pro can silently
 	// die mid-task on multi-file edits — observed 2026-05-25:
 	// model emitted a text-only turn with finish_reason=tool_use
@@ -186,7 +200,7 @@ const (
 	// we either improve the runner's empty-response handling or
 	// fix the DSML leak upstream, executors run on GLM-5.1 where
 	// this failure mode hasn't been observed.
-	defaultAgentModel      = "z-ai/glm-5.1"
+	defaultAgentModel = "z-ai/glm-5.1"
 )
 
 // Default returns the config used when no file is present.

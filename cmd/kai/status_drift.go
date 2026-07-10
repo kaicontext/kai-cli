@@ -3,12 +3,15 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/kaicontext/kai-engine/drift"
+	"github.com/spf13/cobra"
+	"kai/internal/config"
 )
 
 // computeDriftReport resolves the graph↔git relationship for the current
@@ -124,6 +127,93 @@ func pinGraphRef(sha string) {
 func gitCmdOutput(args ...string) (string, error) {
 	out, err := exec.Command("git", args...).Output()
 	return strings.TrimSpace(string(out)), err
+}
+
+// --- per-query staleness (spec step 3) ---
+
+// exitStaleSuspect is the strict-mode exit code for a stale-suspect answer,
+// following the CI tripwire convention (75 = machine-visible "recheck").
+const exitStaleSuspect = 75
+
+var (
+	queryStrictFlag bool
+	queryQuietFlag  bool
+)
+
+// registerStalenessFlags attaches the shared staleness flags to a query
+// command's flag set.
+func registerStalenessFlags(cmds ...*cobra.Command) {
+	for _, c := range cmds {
+		c.Flags().BoolVar(&queryStrictFlag, "strict", false,
+			"Exit 75 when the answer is stale-suspect (graph drift intersects this query)")
+		c.Flags().BoolVarP(&queryQuietFlag, "quiet", "q", false,
+			"Suppress the staleness annotation line")
+	}
+}
+
+// queryStalenessGate classifies this query's answer against graph drift and
+// refuses (per staleness.refuse_after_intersecting, or an orphaned graph)
+// BEFORE the answer is printed. paths is the neighborhood: every
+// repo-relative file that appears in the answer, plus the query target.
+// Returns a nil block when staleness is unmeasurable (no git, unpinned).
+func queryStalenessGate(paths []string) (*drift.Staleness, error) {
+	rep := computeDriftReport()
+	if rep == nil {
+		return nil, nil
+	}
+	man, err := drift.SyncManifest("", kaiDir, rep)
+	if err != nil {
+		man = nil // classification degrades to relationship-only, still honest
+	}
+	cfg, _ := config.Load(kaiDir)
+	st := drift.ClassifyStaleness(rep, man, drift.NeighborhoodFromFiles(paths), cfg.Staleness.RefuseAfterIntersecting)
+	if st != nil && st.Class == drift.StaleRefused {
+		return st, fmt.Errorf("staleness: refused — %s", st.Reason)
+	}
+	return st, nil
+}
+
+// annotateStaleness prints the one-line staleness annotation (stderr, so
+// stdout stays parseable) after the answer, and applies strict-mode exit
+// semantics for stale-suspect. Call as the last statement before return.
+func annotateStaleness(st *drift.Staleness) {
+	if st == nil || st.Class == drift.StaleFresh {
+		return
+	}
+	if !queryQuietFlag {
+		fmt.Fprintln(os.Stderr, stalenessLine(st))
+	}
+	if st.Class == drift.StaleSuspect {
+		strict := queryStrictFlag
+		if !strict {
+			cfg, _ := config.Load(kaiDir)
+			strict = cfg.Staleness.Strict
+		}
+		if strict {
+			os.Exit(exitStaleSuspect)
+		}
+	}
+}
+
+func stalenessLine(st *drift.Staleness) string {
+	switch st.Class {
+	case drift.StaleValid:
+		return fmt.Sprintf("staleness: stale-valid — %s, none intersect this query",
+			countNoun(st.Drift, "unprocessed commit"))
+	case drift.StaleSuspect:
+		shas := make([]string, 0, len(st.Intersecting))
+		for _, h := range st.Intersecting {
+			shas = append(shas, shortPrefix(h.SHA))
+		}
+		verb := "intersect"
+		if len(st.Intersecting) == 1 {
+			verb = "intersects"
+		}
+		return fmt.Sprintf("staleness: stale-suspect — %s %s this query (%s); run 'kai capture' to catch up",
+			countNoun(len(st.Intersecting), "unprocessed commit"), verb, strings.Join(shas, ", "))
+	default:
+		return fmt.Sprintf("staleness: %s", st.Class)
+	}
 }
 
 // syncDriftManifest brings the drift manifest in line with the current

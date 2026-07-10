@@ -3962,6 +3962,7 @@ func init() {
 	queryCmd.AddCommand(queryImpactCmd)
 	queryCallersCmd.Flags().StringVar(&queryFileFlag, "file", "", "File where the symbol is defined (narrows search)")
 	queryImpactCmd.Flags().IntVar(&queryDepthFlag, "depth", 3, "Maximum graph traversal depth")
+	registerStalenessFlags(queryCallersCmd, queryDependentsCmd, queryImpactCmd, testAffectedCmd, blameCmd)
 
 	// CI commands
 	ciCmd.AddCommand(ciPlanCmd)
@@ -7094,8 +7095,22 @@ func runQueryCallers(cmd *cobra.Command, args []string) error {
 		results = append(results, callerEntry{file: callerFile, line: line})
 	}
 
+	// The answer's neighborhood: every caller file plus the queried file.
+	neighborhood := []string{}
+	if queryFileFlag != "" {
+		neighborhood = append(neighborhood, queryFileFlag)
+	}
+	for _, r := range results {
+		neighborhood = append(neighborhood, r.file)
+	}
+	staleness, err := queryStalenessGate(neighborhood)
+	if err != nil {
+		return err
+	}
+
 	if len(results) == 0 {
 		fmt.Printf("No callers found for %q\n", symbolName)
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -7107,6 +7122,7 @@ func runQueryCallers(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s\n", r.file)
 		}
 	}
+	annotateStaleness(staleness)
 	return nil
 }
 
@@ -7138,8 +7154,14 @@ func runQueryDependents(cmd *cobra.Command, args []string) error {
 	}
 	sort.Strings(dependents)
 
+	staleness, err := queryStalenessGate(append([]string{filePath}, dependents...))
+	if err != nil {
+		return err
+	}
+
 	if len(dependents) == 0 {
 		fmt.Printf("No dependents found for %s\n", filePath)
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -7147,6 +7169,7 @@ func runQueryDependents(cmd *cobra.Command, args []string) error {
 	for _, d := range dependents {
 		fmt.Printf("  %s\n", d)
 	}
+	annotateStaleness(staleness)
 	return nil
 }
 
@@ -7226,8 +7249,20 @@ func runQueryImpact(cmd *cobra.Command, args []string) error {
 		return results[i].path < results[j].path
 	})
 
+	// Blast-radius answers are exactly what staleness protects: classify
+	// against the full impact neighborhood before printing.
+	neighborhood := []string{filePath}
+	for _, r := range results {
+		neighborhood = append(neighborhood, r.path)
+	}
+	staleness, err := queryStalenessGate(neighborhood)
+	if err != nil {
+		return err
+	}
+
 	if len(results) == 0 {
 		fmt.Printf("No downstream impact found for %s\n", filePath)
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -7254,6 +7289,7 @@ func runQueryImpact(cmd *cobra.Command, args []string) error {
 			fmt.Printf("    [hop %d] %s\n", r.hop, r.path)
 		}
 	}
+	annotateStaleness(staleness)
 	return nil
 }
 
@@ -7402,13 +7438,6 @@ func runTestAffected(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Output results
-	if len(affectedTests) == 0 {
-		fmt.Println("No affected test files found")
-		fmt.Println("(Make sure you've run 'kai analyze calls @snap:last' to build the call graph)")
-		return nil
-	}
-
 	// Sort for consistent output
 	var tests []string
 	for t := range affectedTests {
@@ -7416,11 +7445,31 @@ func runTestAffected(cmd *cobra.Command, args []string) error {
 	}
 	sort.Strings(tests)
 
+	// Neighborhood: the changed inputs plus every affected test — a stale
+	// answer here means running the wrong (or too few) tests.
+	neighborhood := append([]string{}, tests...)
+	for p := range changedPaths {
+		neighborhood = append(neighborhood, p)
+	}
+	staleness, err := queryStalenessGate(neighborhood)
+	if err != nil {
+		return err
+	}
+
+	// Output results
+	if len(tests) == 0 {
+		fmt.Println("No affected test files found")
+		fmt.Println("(Make sure you've run 'kai analyze calls @snap:last' to build the call graph)")
+		annotateStaleness(staleness)
+		return nil
+	}
+
 	fmt.Printf("Affected test files (%d):\n", len(tests))
 	for _, t := range tests {
 		fmt.Println(t)
 	}
 
+	annotateStaleness(staleness)
 	return nil
 }
 
@@ -11364,14 +11413,25 @@ func runBlame(cmd *cobra.Command, args []string) error {
 	}
 	snapID := result.ID
 
+	staleness, err := queryStalenessGate([]string{filePath})
+	if err != nil {
+		return err
+	}
+
 	if blameJSON {
 		if blameSummary {
 			summary, err := authorship.BlameFileSummary(db, snapID, filePath)
 			if err != nil {
 				return err
 			}
-			data, _ := json.MarshalIndent(summary, "", "  ")
+			// Staleness rides as an extra top-level key; the summary's own
+			// shape is unchanged for existing consumers.
+			data, _ := json.MarshalIndent(struct {
+				*authorship.FileSummary
+				Staleness *drift.Staleness `json:"staleness,omitempty"`
+			}{summary, staleness}, "", "  ")
 			fmt.Println(string(data))
+			annotateStaleness(staleness)
 			return nil
 		}
 		ranges, err := authorship.Blame(db, snapID, filePath)
@@ -11379,10 +11439,12 @@ func runBlame(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		data, _ := json.MarshalIndent(map[string]interface{}{
-			"file":   filePath,
-			"ranges": ranges,
+			"file":      filePath,
+			"ranges":    ranges,
+			"staleness": staleness,
 		}, "", "  ")
 		fmt.Println(string(data))
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -11394,6 +11456,7 @@ func runBlame(cmd *cobra.Command, args []string) error {
 		if summary.TotalLines == 0 {
 			fmt.Printf("%s: no authorship data\n", filePath)
 			fmt.Println("  Record edits with kai_checkpoint, then run 'kai capture'")
+			annotateStaleness(staleness)
 			return nil
 		}
 		fmt.Printf("%s: %.0f%% AI, %.0f%% human (%d lines)\n",
@@ -11403,6 +11466,7 @@ func runBlame(cmd *cobra.Command, args []string) error {
 				fmt.Printf("  %s\n", agent)
 			}
 		}
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -11414,10 +11478,15 @@ func runBlame(cmd *cobra.Command, args []string) error {
 	if len(ranges) == 0 {
 		fmt.Printf("%s: no authorship data\n", filePath)
 		fmt.Println("  Record edits with kai_checkpoint, then run 'kai capture'")
+		annotateStaleness(staleness)
 		return nil
 	}
 
-	return printBlamePretty(filePath, ranges)
+	if err := printBlamePretty(filePath, ranges); err != nil {
+		return err
+	}
+	annotateStaleness(staleness)
+	return nil
 }
 
 // printBlamePretty renders git-blame-style output with colored author badges.
@@ -23466,6 +23535,7 @@ func runPrime(cmd *cobra.Command, args []string) error {
 	buf.WriteString(fmt.Sprintf("# Kai Context: %q\n\n", query))
 
 	charsSoFar := buf.Len()
+	var primedPaths []string
 	for _, fs := range ranked {
 		if charsSoFar >= charBudget {
 			break
@@ -23543,6 +23613,27 @@ func runPrime(cmd *cobra.Command, args []string) error {
 		}
 		buf.WriteString(sectionStr)
 		charsSoFar += len(sectionStr)
+		primedPaths = append(primedPaths, fs.Path)
+	}
+
+	// Staleness rides inside the injected context (outside the char budget:
+	// an agent must never lose the trust signal to truncation) so the agent
+	// reasons WITH drift rather than around it.
+	if st, _ := queryStalenessGate(primedPaths); st != nil && st.Class != drift.StaleFresh {
+		buf.WriteString("## Staleness\n")
+		buf.WriteString(fmt.Sprintf("class: %s · relationship: %s · unprocessed commits: %d\n",
+			st.Class, st.Relationship, st.Drift))
+		if len(st.Intersecting) > 0 {
+			buf.WriteString("This context may be stale — these unprocessed commits touch the files above:\n")
+			for _, h := range st.Intersecting {
+				buf.WriteString(fmt.Sprintf("- %s (%s)\n", shortPrefix(h.SHA), strings.Join(h.Reasons, "; ")))
+			}
+			buf.WriteString("Prefer reading current file contents over trusting the symbol/dependency lists here; suggest 'kai capture' to refresh.\n")
+		}
+		if st.Reason != "" {
+			buf.WriteString(st.Reason + "\n")
+		}
+		buf.WriteString("\n")
 	}
 
 	fmt.Print(buf.String())

@@ -84,6 +84,24 @@ func TestDriftStatusLines(t *testing.T) {
 	}
 }
 
+func TestStalenessLine(t *testing.T) {
+	valid := &drift.Staleness{Class: drift.StaleValid, Relationship: drift.RelBehind, Drift: 3}
+	if got := stalenessLine(valid); !strings.Contains(got, "stale-valid") || !strings.Contains(got, "3 unprocessed commits") {
+		t.Errorf("stale-valid line = %q", got)
+	}
+	suspect := &drift.Staleness{
+		Class: drift.StaleSuspect, Relationship: drift.RelBehind, Drift: 2,
+		Intersecting: []drift.CommitHit{{SHA: strings.Repeat("a", 40)}},
+	}
+	got := stalenessLine(suspect)
+	if !strings.Contains(got, "stale-suspect") || !strings.Contains(got, "aaaaaaaaaaaa") || !strings.Contains(got, "kai capture") {
+		t.Errorf("stale-suspect line = %q", got)
+	}
+	if strings.Contains(got, strings.Repeat("a", 40)) {
+		t.Errorf("full SHA leaked: %q", got)
+	}
+}
+
 func TestAgeString(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
