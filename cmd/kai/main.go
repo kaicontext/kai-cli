@@ -43,6 +43,7 @@ import (
 	"kai/internal/config"
 	semanticdiff "github.com/kaicontext/kai-engine/diff"
 	"github.com/kaicontext/kai-engine/dirio"
+	"github.com/kaicontext/kai-engine/drift"
 	"github.com/kaicontext/kai-engine/explain"
 	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/gitio"
@@ -3463,6 +3464,10 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 	}
 
 	_ = refMgr.SetWithMeta("git.HEAD", latest.TargetID, ref.KindSnapshot, "", meta)
+
+	// Record the commit as processed in graph_refs so drift classification
+	// (kai status) knows the graph is current as of this commit.
+	pinGraphRef(fullSHA)
 	return nil
 }
 
@@ -5673,6 +5678,12 @@ func runGitImport(db *graph.DB) error {
 	creator := snapshot.NewCreator(db, nil)
 	refMgr := ref.NewRefManager(db)
 
+	// Pin every imported commit in graph_refs (batched: one load, one save)
+	// so drift classification can resolve exact-SHA states for the whole
+	// imported range, not just the tip.
+	graphRefs, graphRefsErr := drift.LoadRefs(kaiDir)
+	lastImported := ""
+
 	for i, commitHash := range commits {
 		commitHash = strings.TrimSpace(commitHash)
 		if commitHash == "" {
@@ -5706,11 +5717,31 @@ func runGitImport(db *graph.DB) error {
 		autoRefMgr := ref.NewAutoRefManager(db)
 		autoRefMgr.OnSnapshotCreated(snapshotID)
 
+		if graphRefsErr == nil {
+			graphRefs.Pin("", commitHash, time.Now())
+			lastImported = commitHash
+		}
+
 		// Store commit message for push
 		os.MkdirAll(kaiDir, 0755)
 		os.WriteFile(filepath.Join(kaiDir, "message"), []byte(msg), 0644)
 
 		_ = refMgr
+	}
+
+	if graphRefsErr == nil && lastImported != "" {
+		// Attribute the tip to the branch we're restoring, but only when the
+		// branch actually points at the last imported commit (an import
+		// bounded by --max stops short of nothing; HEAD was the range end).
+		if currentRef != "" && currentRef != "HEAD" {
+			branchRef := "refs/heads/" + currentRef
+			if tip, err := gitCmdOutput("rev-parse", "--verify", "--quiet", branchRef); err == nil && tip == lastImported {
+				graphRefs.Pin(branchRef, lastImported, time.Now())
+			}
+		}
+		if err := graphRefs.Save(kaiDir); err != nil {
+			debugf("git import: saving graph_refs: %v", err)
+		}
 	}
 
 	if !initMode {
@@ -12756,6 +12787,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
+	// Graph↔git drift is reported in both human and JSON output. Cheap by
+	// construction (rev-list/merge-base only, no semantic work) so it can't
+	// blow the status budget.
+	driftReport := computeDriftReport()
+
 	// For JSON output, skip the header info
 	if !statusJSON && !statusNameOnly {
 		fmt.Println("Kai initialized")
@@ -12781,6 +12817,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 		fmt.Printf("Snapshots:  %d\n", len(snapshots))
 		fmt.Printf("Changesets: %d\n", len(changesets))
+		renderDriftStatus(os.Stdout, driftReport)
 		fmt.Println()
 
 		if len(snapshots) > 0 {
@@ -12841,7 +12878,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// Write output
-	if err := status.WriteOutputWithSemantic(os.Stdout, result, semantic, format); err != nil {
+	if err := status.WriteOutputFull(os.Stdout, result, semantic, driftReport, format); err != nil {
 		return err
 	}
 
