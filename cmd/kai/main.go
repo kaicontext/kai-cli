@@ -43,6 +43,7 @@ import (
 	"kai/internal/config"
 	semanticdiff "github.com/kaicontext/kai-engine/diff"
 	"github.com/kaicontext/kai-engine/dirio"
+	"github.com/kaicontext/kai-engine/drift"
 	"github.com/kaicontext/kai-engine/explain"
 	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/gitio"
@@ -352,6 +353,9 @@ Examples:
 		}
 		defer db.Close()
 
+		if importSince != "" {
+			return runImportSince(db, importSince, os.Stdout)
+		}
 		if importAll {
 			importMaxCommits = 999999
 		}
@@ -360,6 +364,7 @@ Examples:
 }
 
 var importMaxCommits = 50
+var importSince string
 
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze",
@@ -2934,6 +2939,34 @@ done
 exit 0
 `
 
+// postRewriteHookScript imports the rewritten commits after a rebase or
+// amend. git invokes post-rewrite with "old-sha new-sha" pairs on stdin;
+// each new commit is imported (idempotent), and the bridge's rewrite
+// detection links the superseded line (F-16) so the graph never silently
+// forks. Without this hook a rebase leaves the graph pinned to orphaned
+// SHAs until the next commit. Only installed when the bridge is enabled.
+const postRewriteHookScript = `#!/bin/sh
+` + kaiHookMarker + ` ` + kaiHookVersion + `
+# Auto-installed by 'kai init --git-bridge'.
+# Best-effort: never blocks git. Remove with: kai hook uninstall
+
+if [ "${KAI_BRIDGE_INPROGRESS:-}" = "1" ]; then
+  exit 0
+fi
+if ! command -v kai >/dev/null 2>&1; then
+  exit 0
+fi
+if [ ! -d .git/kai ] && [ ! -d .kai ]; then
+  exit 0
+fi
+# stdin: one "<old-sha> <new-sha> [extra]" line per rewritten commit.
+while read -r OLD NEW REST; do
+  [ -n "$NEW" ] || continue
+  kai bridge import "$NEW" >/dev/null 2>&1 || true
+done
+exit 0
+`
+
 // runDoctor audits local Kai state and reports findings. With --fix, it
 // applies automatic repairs (currently just hook upgrades). Doctor must
 // never error: every check is independent and logged inline.
@@ -2975,7 +3008,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			checkHook("post-commit", postCommitHookScript)
 			checkHook("post-merge", postMergeHookScript)
 			checkHook("post-checkout", postCheckoutHookScript)
+			checkHook("post-rewrite", postRewriteHookScript)
 		}
+		checkDriftHealth(os.Stdout, ok, warn, bad)
 	} else {
 		fmt.Printf("%s not a git repository (hook checks skipped)\n", warn)
 	}
@@ -3174,6 +3209,7 @@ func selfHealHooks() {
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-commit"), postCommitHookScript)
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-merge"), postMergeHookScript)
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-checkout"), postCheckoutHookScript)
+		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-rewrite"), postRewriteHookScript)
 	}
 }
 
@@ -3463,6 +3499,12 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 	}
 
 	_ = refMgr.SetWithMeta("git.HEAD", latest.TargetID, ref.KindSnapshot, "", meta)
+
+	// Record the commit as processed in graph_refs so drift classification
+	// (kai status) knows the graph is current as of this commit, and shrink
+	// the drift manifest accordingly.
+	pinGraphRef(fullSHA)
+	syncDriftManifest()
 	return nil
 }
 
@@ -3599,6 +3641,7 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 		installOrUpgradeBridgeHook("post-commit", postCommitHookScript)
 		installOrUpgradeBridgeHook("post-merge", postMergeHookScript)
 		installOrUpgradeBridgeHook("post-checkout", postCheckoutHookScript)
+		installOrUpgradeBridgeHook("post-rewrite", postRewriteHookScript)
 	}
 
 	if !initMode {
@@ -3608,26 +3651,32 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 }
 
 func runHookUninstall(cmd *cobra.Command, args []string) error {
-	hookPath := filepath.Join(".git", "hooks", "pre-commit")
-
-	data, err := os.ReadFile(hookPath)
-	if os.IsNotExist(err) {
-		fmt.Println("No pre-commit hook found.")
-		return nil
+	// Every hook kai manages, including the bridge set — the scripts all
+	// say "Remove with: kai hook uninstall", so honor it for all of them.
+	names := []string{"pre-commit", "pre-push", "post-commit", "post-merge", "post-checkout", "post-rewrite"}
+	removed := 0
+	for _, name := range names {
+		path := filepath.Join(".git", "hooks", name)
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(data), kaiHookMarker) {
+			fmt.Printf("Note: %s hook exists but is not managed by Kai — left untouched.\n", name)
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		fmt.Printf("Removed Kai %s hook.\n", name)
+		removed++
 	}
-	if err != nil {
-		return err
+	if removed == 0 {
+		fmt.Println("No Kai-managed hooks found.")
 	}
-
-	if !strings.Contains(string(data), kaiHookMarker) {
-		return fmt.Errorf("pre-commit hook exists but is not managed by Kai")
-	}
-
-	if err := os.Remove(hookPath); err != nil {
-		return err
-	}
-
-	fmt.Println("Removed Kai pre-commit hook.")
 	return nil
 }
 
@@ -3955,6 +4004,7 @@ func init() {
 	queryCmd.AddCommand(queryImpactCmd)
 	queryCallersCmd.Flags().StringVar(&queryFileFlag, "file", "", "File where the symbol is defined (narrows search)")
 	queryImpactCmd.Flags().IntVar(&queryDepthFlag, "depth", 3, "Maximum graph traversal depth")
+	registerStalenessFlags(queryCallersCmd, queryDependentsCmd, queryImpactCmd, testAffectedCmd, blameCmd)
 
 	// CI commands
 	ciCmd.AddCommand(ciPlanCmd)
@@ -4072,6 +4122,7 @@ func init() {
 	importCmd.GroupID = groupStart
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import entire git history")
 	importCmd.Flags().IntVar(&importMaxCommits, "max", 50, "Maximum number of commits to import")
+	importCmd.Flags().StringVar(&importSince, "since", "", "Treat <sha> as the last-processed commit and import everything after it (checkpointed, resumable)")
 
 	// Diff & Review
 	diffCmd.GroupID = groupDiff
@@ -5673,6 +5724,12 @@ func runGitImport(db *graph.DB) error {
 	creator := snapshot.NewCreator(db, nil)
 	refMgr := ref.NewRefManager(db)
 
+	// Pin every imported commit in graph_refs (batched: one load, one save)
+	// so drift classification can resolve exact-SHA states for the whole
+	// imported range, not just the tip.
+	graphRefs, graphRefsErr := drift.LoadRefs(kaiDir)
+	lastImported := ""
+
 	for i, commitHash := range commits {
 		commitHash = strings.TrimSpace(commitHash)
 		if commitHash == "" {
@@ -5706,11 +5763,32 @@ func runGitImport(db *graph.DB) error {
 		autoRefMgr := ref.NewAutoRefManager(db)
 		autoRefMgr.OnSnapshotCreated(snapshotID)
 
+		if graphRefsErr == nil {
+			graphRefs.Pin("", commitHash, time.Now())
+			lastImported = commitHash
+		}
+
 		// Store commit message for push
 		os.MkdirAll(kaiDir, 0755)
 		os.WriteFile(filepath.Join(kaiDir, "message"), []byte(msg), 0644)
 
 		_ = refMgr
+	}
+
+	if graphRefsErr == nil && lastImported != "" {
+		// Attribute the tip to the branch we're restoring, but only when the
+		// branch actually points at the last imported commit (an import
+		// bounded by --max stops short of nothing; HEAD was the range end).
+		if currentRef != "" && currentRef != "HEAD" {
+			branchRef := "refs/heads/" + currentRef
+			if tip, err := gitCmdOutput("rev-parse", "--verify", "--quiet", branchRef); err == nil && tip == lastImported {
+				graphRefs.Pin(branchRef, lastImported, time.Now())
+			}
+		}
+		if err := graphRefs.Save(kaiDir); err != nil {
+			debugf("git import: saving graph_refs: %v", err)
+		}
+		syncDriftManifest()
 	}
 
 	if !initMode {
@@ -7060,8 +7138,22 @@ func runQueryCallers(cmd *cobra.Command, args []string) error {
 		results = append(results, callerEntry{file: callerFile, line: line})
 	}
 
+	// The answer's neighborhood: every caller file plus the queried file.
+	neighborhood := []string{}
+	if queryFileFlag != "" {
+		neighborhood = append(neighborhood, queryFileFlag)
+	}
+	for _, r := range results {
+		neighborhood = append(neighborhood, r.file)
+	}
+	staleness, err := queryStalenessGate(db, neighborhood)
+	if err != nil {
+		return err
+	}
+
 	if len(results) == 0 {
 		fmt.Printf("No callers found for %q\n", symbolName)
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -7073,6 +7165,7 @@ func runQueryCallers(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s\n", r.file)
 		}
 	}
+	annotateStaleness(staleness)
 	return nil
 }
 
@@ -7104,8 +7197,14 @@ func runQueryDependents(cmd *cobra.Command, args []string) error {
 	}
 	sort.Strings(dependents)
 
+	staleness, err := queryStalenessGate(db, append([]string{filePath}, dependents...))
+	if err != nil {
+		return err
+	}
+
 	if len(dependents) == 0 {
 		fmt.Printf("No dependents found for %s\n", filePath)
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -7113,6 +7212,7 @@ func runQueryDependents(cmd *cobra.Command, args []string) error {
 	for _, d := range dependents {
 		fmt.Printf("  %s\n", d)
 	}
+	annotateStaleness(staleness)
 	return nil
 }
 
@@ -7192,8 +7292,20 @@ func runQueryImpact(cmd *cobra.Command, args []string) error {
 		return results[i].path < results[j].path
 	})
 
+	// Blast-radius answers are exactly what staleness protects: classify
+	// against the full impact neighborhood before printing.
+	neighborhood := []string{filePath}
+	for _, r := range results {
+		neighborhood = append(neighborhood, r.path)
+	}
+	staleness, err := queryStalenessGate(db, neighborhood)
+	if err != nil {
+		return err
+	}
+
 	if len(results) == 0 {
 		fmt.Printf("No downstream impact found for %s\n", filePath)
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -7220,6 +7332,7 @@ func runQueryImpact(cmd *cobra.Command, args []string) error {
 			fmt.Printf("    [hop %d] %s\n", r.hop, r.path)
 		}
 	}
+	annotateStaleness(staleness)
 	return nil
 }
 
@@ -7368,13 +7481,6 @@ func runTestAffected(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Output results
-	if len(affectedTests) == 0 {
-		fmt.Println("No affected test files found")
-		fmt.Println("(Make sure you've run 'kai analyze calls @snap:last' to build the call graph)")
-		return nil
-	}
-
 	// Sort for consistent output
 	var tests []string
 	for t := range affectedTests {
@@ -7382,11 +7488,31 @@ func runTestAffected(cmd *cobra.Command, args []string) error {
 	}
 	sort.Strings(tests)
 
+	// Neighborhood: the changed inputs plus every affected test — a stale
+	// answer here means running the wrong (or too few) tests.
+	neighborhood := append([]string{}, tests...)
+	for p := range changedPaths {
+		neighborhood = append(neighborhood, p)
+	}
+	staleness, err := queryStalenessGate(db, neighborhood)
+	if err != nil {
+		return err
+	}
+
+	// Output results
+	if len(tests) == 0 {
+		fmt.Println("No affected test files found")
+		fmt.Println("(Make sure you've run 'kai analyze calls @snap:last' to build the call graph)")
+		annotateStaleness(staleness)
+		return nil
+	}
+
 	fmt.Printf("Affected test files (%d):\n", len(tests))
 	for _, t := range tests {
 		fmt.Println(t)
 	}
 
+	annotateStaleness(staleness)
 	return nil
 }
 
@@ -11330,14 +11456,25 @@ func runBlame(cmd *cobra.Command, args []string) error {
 	}
 	snapID := result.ID
 
+	staleness, err := queryStalenessGate(db, []string{filePath})
+	if err != nil {
+		return err
+	}
+
 	if blameJSON {
 		if blameSummary {
 			summary, err := authorship.BlameFileSummary(db, snapID, filePath)
 			if err != nil {
 				return err
 			}
-			data, _ := json.MarshalIndent(summary, "", "  ")
+			// Staleness rides as an extra top-level key; the summary's own
+			// shape is unchanged for existing consumers.
+			data, _ := json.MarshalIndent(struct {
+				*authorship.FileSummary
+				Staleness *drift.Staleness `json:"staleness,omitempty"`
+			}{summary, staleness}, "", "  ")
 			fmt.Println(string(data))
+			annotateStaleness(staleness)
 			return nil
 		}
 		ranges, err := authorship.Blame(db, snapID, filePath)
@@ -11345,10 +11482,12 @@ func runBlame(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		data, _ := json.MarshalIndent(map[string]interface{}{
-			"file":   filePath,
-			"ranges": ranges,
+			"file":      filePath,
+			"ranges":    ranges,
+			"staleness": staleness,
 		}, "", "  ")
 		fmt.Println(string(data))
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -11360,6 +11499,7 @@ func runBlame(cmd *cobra.Command, args []string) error {
 		if summary.TotalLines == 0 {
 			fmt.Printf("%s: no authorship data\n", filePath)
 			fmt.Println("  Record edits with kai_checkpoint, then run 'kai capture'")
+			annotateStaleness(staleness)
 			return nil
 		}
 		fmt.Printf("%s: %.0f%% AI, %.0f%% human (%d lines)\n",
@@ -11369,6 +11509,7 @@ func runBlame(cmd *cobra.Command, args []string) error {
 				fmt.Printf("  %s\n", agent)
 			}
 		}
+		annotateStaleness(staleness)
 		return nil
 	}
 
@@ -11380,10 +11521,15 @@ func runBlame(cmd *cobra.Command, args []string) error {
 	if len(ranges) == 0 {
 		fmt.Printf("%s: no authorship data\n", filePath)
 		fmt.Println("  Record edits with kai_checkpoint, then run 'kai capture'")
+		annotateStaleness(staleness)
 		return nil
 	}
 
-	return printBlamePretty(filePath, ranges)
+	if err := printBlamePretty(filePath, ranges); err != nil {
+		return err
+	}
+	annotateStaleness(staleness)
+	return nil
 }
 
 // printBlamePretty renders git-blame-style output with colored author badges.
@@ -12756,6 +12902,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
+	// Graph↔git drift is reported in both human and JSON output. Cheap by
+	// construction (rev-list/merge-base only, no semantic work) so it can't
+	// blow the status budget.
+	driftReport := computeDriftReport()
+
 	// For JSON output, skip the header info
 	if !statusJSON && !statusNameOnly {
 		fmt.Println("Kai initialized")
@@ -12781,6 +12932,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 		fmt.Printf("Snapshots:  %d\n", len(snapshots))
 		fmt.Printf("Changesets: %d\n", len(changesets))
+		renderDriftStatus(os.Stdout, driftReport)
 		fmt.Println()
 
 		if len(snapshots) > 0 {
@@ -12841,7 +12993,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// Write output
-	if err := status.WriteOutputWithSemantic(os.Stdout, result, semantic, format); err != nil {
+	if err := status.WriteOutputFull(os.Stdout, result, semantic, driftReport, format); err != nil {
 		return err
 	}
 
@@ -14740,6 +14892,13 @@ func runShadowParity(cmd *cobra.Command, args []string) error {
 }
 
 func runShadowDrift(cmd *cobra.Command, args []string) error {
+	// Default: the git-drift detail view (relationship + per-commit
+	// manifest). Explicit --snap/--git-ref keep the legacy snapshot-content
+	// comparison.
+	if !cmd.Flags().Changed("snap") && !cmd.Flags().Changed("git-ref") {
+		return runDriftDetail(os.Stdout)
+	}
+
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -23419,6 +23578,7 @@ func runPrime(cmd *cobra.Command, args []string) error {
 	buf.WriteString(fmt.Sprintf("# Kai Context: %q\n\n", query))
 
 	charsSoFar := buf.Len()
+	var primedPaths []string
 	for _, fs := range ranked {
 		if charsSoFar >= charBudget {
 			break
@@ -23496,6 +23656,27 @@ func runPrime(cmd *cobra.Command, args []string) error {
 		}
 		buf.WriteString(sectionStr)
 		charsSoFar += len(sectionStr)
+		primedPaths = append(primedPaths, fs.Path)
+	}
+
+	// Staleness rides inside the injected context (outside the char budget:
+	// an agent must never lose the trust signal to truncation) so the agent
+	// reasons WITH drift rather than around it.
+	if st, _ := queryStalenessGate(db, primedPaths); st != nil && st.Class != drift.StaleFresh {
+		buf.WriteString("## Staleness\n")
+		buf.WriteString(fmt.Sprintf("class: %s · relationship: %s · unprocessed commits: %d\n",
+			st.Class, st.Relationship, st.Drift))
+		if len(st.Intersecting) > 0 {
+			buf.WriteString("This context may be stale — these unprocessed commits touch the files above:\n")
+			for _, h := range st.Intersecting {
+				buf.WriteString(fmt.Sprintf("- %s (%s)\n", shortPrefix(h.SHA), strings.Join(h.Reasons, "; ")))
+			}
+			buf.WriteString("Prefer reading current file contents over trusting the symbol/dependency lists here; suggest 'kai capture' to refresh.\n")
+		}
+		if st.Reason != "" {
+			buf.WriteString(st.Reason + "\n")
+		}
+		buf.WriteString("\n")
 	}
 
 	fmt.Print(buf.String())
