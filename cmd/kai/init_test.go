@@ -60,6 +60,10 @@ func TestRunInitAlreadyInitialized(t *testing.T) {
 	initForce = false
 	defer func() { initForce = oldInitForce }()
 
+	oldNoRemote := initNoRemote
+	initNoRemote = true
+	defer func() { initNoRemote = oldNoRemote }()
+
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)

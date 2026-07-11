@@ -45,6 +45,18 @@ type Config struct {
 	Autonomy string `yaml:"autonomy"`
 
 	Staleness StalenessConfig `yaml:"staleness"`
+	Bridge    BridgeConfig    `yaml:"bridge"`
+}
+
+// BridgeConfig controls the kai↔git bridge directions independently.
+type BridgeConfig struct {
+	// AutoImport gates the git→kai direction: the post-commit/merge/
+	// checkout/rewrite hooks importing commits as snapshots. Default true
+	// (via Default()) — this direction never writes to git and is what
+	// keeps the graph from drifting. Set `bridge.auto_import: false` to
+	// opt out. The kai→git direction (milestones become commits) is
+	// separate and stays opt-in via `kai init --git-bridge`.
+	AutoImport bool `yaml:"auto_import"`
 }
 
 // StalenessConfig controls how query commands react to graph↔git drift.
@@ -239,6 +251,9 @@ func Default() Config {
 		},
 		Staleness: StalenessConfig{
 			InlineBudgetMS: 2000,
+		},
+		Bridge: BridgeConfig{
+			AutoImport: true,
 		},
 	}
 }
