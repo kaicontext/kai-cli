@@ -404,6 +404,12 @@ func TestRunInit_CreatesKaiDirectory(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldWd)
 
+	// Local graph only — a logged-in developer's suite run must never
+	// sign up repos on kaicontext.com.
+	oldNoRemote := initNoRemote
+	initNoRemote = true
+	defer func() { initNoRemote = oldNoRemote }()
+
 	// Run init
 	err := runInit(initCmd, nil)
 	if err != nil {
@@ -448,6 +454,10 @@ func TestRunInit_Idempotent(t *testing.T) {
 	oldWd, _ := os.Getwd()
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldWd)
+
+	oldNoRemote := initNoRemote
+	initNoRemote = true
+	defer func() { initNoRemote = oldNoRemote }()
 
 	// Run init twice
 	if err := runInit(initCmd, nil); err != nil {

@@ -71,6 +71,7 @@ func TestHookScripts_AllContainReEntrancyGuard(t *testing.T) {
 		"postCommit":   postCommitHookScript,
 		"postMerge":    postMergeHookScript,
 		"postCheckout": postCheckoutHookScript,
+		"postRewrite":  postRewriteHookScript,
 	}
 	for name, s := range scripts {
 		if !strings.Contains(s, `"${KAI_BRIDGE_INPROGRESS:-}" = "1"`) {
@@ -90,6 +91,7 @@ func TestHookScripts_AllTaggedWithCurrentVersion(t *testing.T) {
 		"postCommit":   postCommitHookScript,
 		"postMerge":    postMergeHookScript,
 		"postCheckout": postCheckoutHookScript,
+		"postRewrite":  postRewriteHookScript,
 	} {
 		if !strings.Contains(s, tag) {
 			t.Errorf("%s hook missing version tag %q", name, tag)
@@ -198,10 +200,15 @@ func setupBridgeRepo(t *testing.T) {
 	}
 }
 
-func TestBridgeImport_NoOpWhenBridgeDisabled(t *testing.T) {
+func TestBridgeImport_NoOpWhenBothDirectionsOff(t *testing.T) {
 	setupBridgeRepo(t)
-	// Remove sentinel: disabled
+	// The import runs by default (bridge.auto_import) even without the
+	// milestone sentinel — turning it off requires BOTH: no sentinel AND
+	// an explicit auto_import opt-out.
 	if err := os.Remove(filepath.Join(".kai", "bridge-enabled")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".kai", "config.yaml"), []byte("bridge:\n  auto_import: false\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	sha := gitHeadSHA(t)
@@ -212,6 +219,22 @@ func TestBridgeImport_NoOpWhenBridgeDisabled(t *testing.T) {
 	// create a DB file or any refs.
 	if hasAnyGitRef(t) {
 		t.Fatal("bridge import wrote git.* refs while disabled")
+	}
+}
+
+func TestBridgeImport_RunsByDefaultWithoutSentinel(t *testing.T) {
+	setupBridgeRepo(t)
+	// No sentinel, no config: auto_import defaults on, so the import
+	// proceeds — this is what keeps the graph from drifting by default.
+	if err := os.Remove(filepath.Join(".kai", "bridge-enabled")); err != nil {
+		t.Fatal(err)
+	}
+	sha := gitHeadSHA(t)
+	if err := runBridgeImport(nil, []string{sha}); err != nil {
+		t.Fatalf("import returned error: %v", err)
+	}
+	if !hasAnyGitRef(t) {
+		t.Fatal("default auto_import should have imported the commit")
 	}
 }
 
@@ -310,9 +333,10 @@ func TestBridgeImport_HandlesUnknownSHA(t *testing.T) {
 	}
 }
 
-func TestHookInstall_SkipsPostCommitWhenBridgeDisabled(t *testing.T) {
+func TestHookInstall_InstallsImportHooksByDefault(t *testing.T) {
 	chdirTemp(t)
-	// git repo present, but no bridge sentinel.
+	// git repo present, no bridge sentinel, no config: the git→kai import
+	// hooks install by default.
 	if err := os.MkdirAll(filepath.Join(".git", "hooks"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -321,8 +345,31 @@ func TestHookInstall_SkipsPostCommitWhenBridgeDisabled(t *testing.T) {
 	if err := runHookInstall(nil, nil); err != nil {
 		t.Fatalf("hook install: %v", err)
 	}
+	for _, name := range []string{"pre-commit", "post-commit", "post-merge", "post-checkout", "post-rewrite"} {
+		if _, err := os.Stat(filepath.Join(".git", "hooks", name)); err != nil {
+			t.Errorf("%s hook was not installed by default", name)
+		}
+	}
+}
+
+func TestHookInstall_SkipsImportHooksWhenAutoImportOff(t *testing.T) {
+	chdirTemp(t)
+	if err := os.MkdirAll(filepath.Join(".git", "hooks"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(".kai", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".kai", "config.yaml"), []byte("bridge:\n  auto_import: false\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	initMode = true
+	defer func() { initMode = false }()
+	if err := runHookInstall(nil, nil); err != nil {
+		t.Fatalf("hook install: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(".git", "hooks", "post-commit")); err == nil {
-		t.Fatal("post-commit hook was installed even though bridge is disabled")
+		t.Fatal("post-commit hook installed despite bridge.auto_import: false")
 	}
 	// pre-commit should still be installed.
 	if _, err := os.Stat(filepath.Join(".git", "hooks", "pre-commit")); err != nil {

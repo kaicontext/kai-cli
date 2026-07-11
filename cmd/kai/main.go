@@ -2798,7 +2798,7 @@ out-of-date kai-managed git hooks).`,
 }
 
 const kaiHookMarker = "# kai-managed-hook"
-const kaiHookVersion = "v5"
+const kaiHookVersion = "v6"
 
 // All hook scripts early-exit when KAI_BRIDGE_INPROGRESS=1. Set by kai itself
 // when it is the one driving the git operation (e.g. milestone→commit bridge),
@@ -2859,13 +2859,16 @@ fi
 exit 0
 `
 
-// postCommitHookScript imports each new git commit as a kai snapshot. Only
-// installed when the kai↔git bridge is enabled (kai init --git-bridge).
-// Idempotent via content-addressing; skips commits that carry a Kai-Snapshot:
-// trailer (they came from kai's own milestone→commit path).
+// postCommitHookScript imports each new git commit as a kai snapshot.
+// Installed by default (git→kai direction; opt out with
+// `bridge.auto_import: false`). Idempotent via content-addressing; skips
+// commits that carry a Kai-Snapshot: trailer (they came from kai's own
+// milestone→commit path). The import runs in the background so it adds
+// nothing to `git commit` latency — a lost import self-heals via the watch
+// daemon or inline catch-up.
 const postCommitHookScript = `#!/bin/sh
 ` + kaiHookMarker + ` ` + kaiHookVersion + `
-# Auto-installed by 'kai init --git-bridge'.
+# Auto-installed by 'kai init'.
 # Best-effort: never blocks git. Remove with: kai hook uninstall
 
 if [ "${KAI_BRIDGE_INPROGRESS:-}" = "1" ]; then
@@ -2878,16 +2881,17 @@ if [ ! -d .git/kai ] && [ ! -d .kai ]; then
   exit 0
 fi
 SHA=$(git rev-parse HEAD 2>/dev/null) || exit 0
-kai bridge import "$SHA" >/dev/null 2>&1 || true
+( kai bridge import "$SHA" >/dev/null 2>&1 || true ) &
 exit 0
 `
 
 // postMergeHookScript imports any new commits brought in by a merge or
-// pull (fast-forward or otherwise). Only installed when the bridge is
-// enabled. Uses ORIG_HEAD..HEAD to walk just the new commits.
+// pull (fast-forward or otherwise). Installed by default (git→kai
+// direction). Uses ORIG_HEAD..HEAD to walk just the new commits, serially
+// but in a background subshell so git returns immediately.
 const postMergeHookScript = `#!/bin/sh
 ` + kaiHookMarker + ` ` + kaiHookVersion + `
-# Auto-installed by 'kai init --git-bridge'.
+# Auto-installed by 'kai init'.
 # Best-effort: never blocks git. Remove with: kai hook uninstall
 
 if [ "${KAI_BRIDGE_INPROGRESS:-}" = "1" ]; then
@@ -2901,18 +2905,19 @@ if [ ! -d .git/kai ] && [ ! -d .kai ]; then
 fi
 # Walk new commits (oldest first) and import each. ORIG_HEAD is set by
 # merge/pull to the old HEAD.
-git rev-list --reverse ORIG_HEAD..HEAD 2>/dev/null | while read -r SHA; do
+( git rev-list --reverse ORIG_HEAD..HEAD 2>/dev/null | while read -r SHA; do
   kai bridge import "$SHA" >/dev/null 2>&1 || true
-done
+done ) &
 exit 0
 `
 
 // postCheckoutHookScript imports any new commits after a branch switch
-// that brings in history the working copy hadn't seen. $1 = previous HEAD,
-// $2 = new HEAD, $3 = 1 when switching branches (0 for file checkout).
+// that brings in history the working copy hadn't seen. Installed by
+// default (git→kai direction). $1 = previous HEAD, $2 = new HEAD,
+// $3 = 1 when switching branches (0 for file checkout).
 const postCheckoutHookScript = `#!/bin/sh
 ` + kaiHookMarker + ` ` + kaiHookVersion + `
-# Auto-installed by 'kai init --git-bridge'.
+# Auto-installed by 'kai init'.
 # Best-effort: never blocks git. Remove with: kai hook uninstall
 
 if [ "${KAI_BRIDGE_INPROGRESS:-}" = "1" ]; then
@@ -2933,9 +2938,9 @@ NEW="$2"
 if [ "$PREV" = "$NEW" ]; then
   exit 0
 fi
-git rev-list --reverse "$PREV".."$NEW" 2>/dev/null | while read -r SHA; do
+( git rev-list --reverse "$PREV".."$NEW" 2>/dev/null | while read -r SHA; do
   kai bridge import "$SHA" >/dev/null 2>&1 || true
-done
+done ) &
 exit 0
 `
 
@@ -2944,10 +2949,10 @@ exit 0
 // each new commit is imported (idempotent), and the bridge's rewrite
 // detection links the superseded line (F-16) so the graph never silently
 // forks. Without this hook a rebase leaves the graph pinned to orphaned
-// SHAs until the next commit. Only installed when the bridge is enabled.
+// SHAs until the next commit. Installed by default (git→kai direction).
 const postRewriteHookScript = `#!/bin/sh
 ` + kaiHookMarker + ` ` + kaiHookVersion + `
-# Auto-installed by 'kai init --git-bridge'.
+# Auto-installed by 'kai init'.
 # Best-effort: never blocks git. Remove with: kai hook uninstall
 
 if [ "${KAI_BRIDGE_INPROGRESS:-}" = "1" ]; then
@@ -2960,10 +2965,13 @@ if [ ! -d .git/kai ] && [ ! -d .kai ]; then
   exit 0
 fi
 # stdin: one "<old-sha> <new-sha> [extra]" line per rewritten commit.
-while read -r OLD NEW REST; do
+# Buffer stdin before backgrounding — git closes the pipe when the hook
+# exits, so the subshell must not read from it after that.
+PAIRS=$(cat)
+( printf '%s\n' "$PAIRS" | while read -r OLD NEW REST; do
   [ -n "$NEW" ] || continue
   kai bridge import "$NEW" >/dev/null 2>&1 || true
-done
+done ) &
 exit 0
 `
 
@@ -3004,7 +3012,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Printf("%s git repository detected\n", ok)
 		checkHook("pre-commit", preCommitHookScript)
 		checkHook("pre-push", prePushHookScript)
-		if bridgeEnabled() {
+		if bridgeEnabled() || autoImportEnabled() {
 			checkHook("post-commit", postCommitHookScript)
 			checkHook("post-merge", postMergeHookScript)
 			checkHook("post-checkout", postCheckoutHookScript)
@@ -3205,7 +3213,7 @@ func selfHealHooks() {
 	}
 	upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "pre-commit"), preCommitHookScript)
 	upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "pre-push"), prePushHookScript)
-	if bridgeEnabled() {
+	if bridgeEnabled() || autoImportEnabled() {
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-commit"), postCommitHookScript)
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-merge"), postMergeHookScript)
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-checkout"), postCheckoutHookScript)
@@ -3216,6 +3224,19 @@ func selfHealHooks() {
 // bridgeEnabled reports whether the kai↔git bridge is turned on for this
 // repo. Presence of <kaiDir>/bridge-enabled is the sentinel; the file is
 // written by 'kai init --git-bridge' (or 'kai bridge enable', future).
+// autoImportEnabled reports whether the git→kai import direction is on:
+// the post-commit/merge/checkout/rewrite hooks importing commits as
+// snapshots. Default true (config `bridge.auto_import`) — this direction
+// never writes to git and is what keeps the graph from drifting. Distinct
+// from bridgeEnabled(), which gates the kai→git milestone direction.
+func autoImportEnabled() bool {
+	cfg, err := config.Load(kaiDir)
+	if err != nil {
+		return true // a malformed config must not silently stop drift healing
+	}
+	return cfg.Bridge.AutoImport
+}
+
 func bridgeEnabled() bool {
 	_, err := os.Stat(filepath.Join(kaiDir, "bridge-enabled"))
 	return err == nil
@@ -3401,8 +3422,8 @@ func gitHistoryRewritten(dir, prevSHA, newSHA string) bool {
 }
 
 func runBridgeImport(cmd *cobra.Command, args []string) error {
-	if !bridgeEnabled() {
-		// Hook may have been installed manually; be a no-op instead of loud.
+	if !bridgeEnabled() && !autoImportEnabled() {
+		// Hook present but both directions off; be a no-op instead of loud.
 		return nil
 	}
 	sha := strings.TrimSpace(args[0])
@@ -3636,8 +3657,9 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Bridge hooks — only when the kai↔git bridge is enabled for this repo.
-	if bridgeEnabled() {
+	// Import hooks — on by default (bridge.auto_import); the git→kai
+	// direction only. They also serve the opt-in milestone bridge.
+	if bridgeEnabled() || autoImportEnabled() {
 		installOrUpgradeBridgeHook("post-commit", postCommitHookScript)
 		installOrUpgradeBridgeHook("post-merge", postMergeHookScript)
 		installOrUpgradeBridgeHook("post-checkout", postCheckoutHookScript)
@@ -4101,7 +4123,7 @@ func init() {
 	initCmd.GroupID = groupStart
 	captureCmd.GroupID = groupStart
 	initCmd.Flags().BoolVar(&initExplain, "explain", false, "Show detailed explanation of what this command does")
-	initCmd.Flags().BoolVar(&initGitBridge, "git-bridge", false, "Enable the kai↔git bridge (installs post-commit hook; kai milestones become git commits)")
+	initCmd.Flags().BoolVar(&initGitBridge, "git-bridge", false, "Enable the kai→git direction of the bridge: kai milestones become git commits (the git→kai import hooks are installed by default; opt out with bridge.auto_import: false)")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Re-run initialization even if kai is already set up in this directory")
 	initCmd.Flags().BoolVar(&initAssumeYes, "yes", false, "Non-interactive: auto-select the personal org and link an existing repo (also implied when stdin isn't a TTY)")
 	initCmd.Flags().StringVar(&initOrg, "org", "", "Org slug to initialize under (default: your personal org; also via KAI_ORG)")

@@ -54,6 +54,7 @@ planner:
 			Enabled: true, // yaml didn't set it → default applies
 		},
 		Staleness: Default().Staleness, // yaml didn't set it → default applies
+		Bridge:    Default().Bridge,   // yaml didn't set it → default applies
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("unexpected config:\n got: %+v\nwant: %+v", cfg, want)
