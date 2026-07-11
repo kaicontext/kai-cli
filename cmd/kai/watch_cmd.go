@@ -112,6 +112,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	}
 
 	if watchOnce {
+		driftCatchUpPass(os.Stdout)
 		cr, err := runStructuralPass(context.Background(), store, wd)
 		if err != nil {
 			return err
@@ -250,6 +251,11 @@ func runWatch(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}()
+
+	// Continuous graph↔git catch-up: watches .git HEAD/refs (plus a slow
+	// poll backstop) and converges the graph as commits land, so queries
+	// stop paying the inline catch-up cost while the daemon runs.
+	go watchGitState(stop, wd, os.Stdout)
 
 	fmt.Println("kai watch · deterministic daemon live (Ctrl-C to stop)")
 	fire() // initial pass so status is populated immediately
