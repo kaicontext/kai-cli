@@ -231,6 +231,79 @@ func stalenessLine(st *drift.Staleness) string {
 	}
 }
 
+// checkDriftHealth is the `kai doctor` drift section: the graph↔git
+// relationship, graph_refs readability, and manifest consistency with the
+// current state. With --fix, a stale or corrupt manifest is rebuilt (it is
+// pure cache); graph_refs is never auto-modified — pins are assertions,
+// and doctor only reports on them.
+func checkDriftHealth(w io.Writer, ok, warn, bad string) {
+	// graph_refs readability first: a corrupt record makes every other
+	// drift signal a lie.
+	if _, err := drift.LoadRefs(kaiDir); err != nil {
+		fmt.Fprintf(w, "%s graph refs (%s): unreadable: %v\n", bad, drift.RefsFile, err)
+		fmt.Fprintf(w, "      Pins can be rebuilt: remove the file, then 'kai import --since <last-good-sha>'.\n")
+		return
+	}
+
+	rep := computeDriftReport()
+	if rep == nil {
+		return // unborn HEAD; nothing to check
+	}
+	switch rep.Relationship {
+	case drift.RelSynced:
+		fmt.Fprintf(w, "%s graph drift: in sync with git HEAD (%s)\n", ok, shortPrefix(rep.GitHead))
+	case drift.RelUnpinned:
+		fmt.Fprintf(w, "%s graph drift: not pinned to a git commit yet ('kai capture' or 'kai import' will pin)\n", warn)
+	case drift.RelBehind:
+		fmt.Fprintf(w, "%s graph drift: %s behind git HEAD ('kai import --since %s' to catch up)\n",
+			warn, countNoun(rep.Behind, "commit"), shortPrefix(rep.GraphState))
+	case drift.RelAhead:
+		fmt.Fprintf(w, "%s graph drift: graph is ahead of git HEAD (older commit checked out) — queries answer from the matching state\n", warn)
+	case drift.RelDiverged:
+		fmt.Fprintf(w, "%s graph drift: diverged (history rewritten): %s unprocessed, %s superseded ('kai capture' to process the current line)\n",
+			warn, countNoun(rep.Behind, "commit"), countNoun(rep.Ahead, "commit"))
+	case drift.RelOrphaned:
+		fmt.Fprintf(w, "%s graph drift: pinned state shares no history with git HEAD — re-import with 'kai import'\n", bad)
+	}
+
+	// Manifest consistency: the manifest is keyed to (graphState, gitHead);
+	// a mismatch means it describes a drift range that no longer exists
+	// (e.g. a rebase mid-drift with hooks missing). Safe to rebuild — it's
+	// derived state.
+	man, err := drift.LoadManifest(kaiDir)
+	switch {
+	case err != nil:
+		if doctorFix {
+			syncDriftManifest()
+			fmt.Fprintf(w, "%s drift manifest: was corrupt, rebuilt\n", ok)
+		} else {
+			fmt.Fprintf(w, "%s drift manifest: corrupt (%v) — 'kai doctor --fix' rebuilds it\n", bad, err)
+		}
+	case man.GitHead == "" && man.GraphState == "" && len(man.Commits) == 0:
+		// Never written — normal for a repo that hasn't drifted yet.
+		if rep.Relationship == drift.RelBehind || rep.Relationship == drift.RelDiverged {
+			if doctorFix {
+				syncDriftManifest()
+				fmt.Fprintf(w, "%s drift manifest: built for the current drift range\n", ok)
+			} else {
+				fmt.Fprintf(w, "%s drift manifest: not yet computed for the current drift — 'kai doctor --fix' builds it\n", warn)
+			}
+		} else {
+			fmt.Fprintf(w, "%s drift manifest: empty (no drift recorded)\n", ok)
+		}
+	case man.GitHead != rep.GitHead || man.GraphState != rep.GraphState:
+		if doctorFix {
+			syncDriftManifest()
+			fmt.Fprintf(w, "%s drift manifest: was stale, resynced to current state\n", ok)
+		} else {
+			fmt.Fprintf(w, "%s drift manifest: stale (describes %s..%s, not the current state) — 'kai doctor --fix' resyncs\n",
+				warn, shortPrefix(man.GraphState), shortPrefix(man.GitHead))
+		}
+	default:
+		fmt.Fprintf(w, "%s drift manifest: consistent with graph refs (%s)\n", ok, countNoun(len(man.Commits), "tracked commit"))
+	}
+}
+
 // syncDriftManifest brings the drift manifest in line with the current
 // graph↔git state. Called after pin sites advance graph_refs (catch-up
 // shrinks the manifest) and by the detailed drift view. Best-effort.

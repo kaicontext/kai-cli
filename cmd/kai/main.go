@@ -2939,6 +2939,34 @@ done
 exit 0
 `
 
+// postRewriteHookScript imports the rewritten commits after a rebase or
+// amend. git invokes post-rewrite with "old-sha new-sha" pairs on stdin;
+// each new commit is imported (idempotent), and the bridge's rewrite
+// detection links the superseded line (F-16) so the graph never silently
+// forks. Without this hook a rebase leaves the graph pinned to orphaned
+// SHAs until the next commit. Only installed when the bridge is enabled.
+const postRewriteHookScript = `#!/bin/sh
+` + kaiHookMarker + ` ` + kaiHookVersion + `
+# Auto-installed by 'kai init --git-bridge'.
+# Best-effort: never blocks git. Remove with: kai hook uninstall
+
+if [ "${KAI_BRIDGE_INPROGRESS:-}" = "1" ]; then
+  exit 0
+fi
+if ! command -v kai >/dev/null 2>&1; then
+  exit 0
+fi
+if [ ! -d .git/kai ] && [ ! -d .kai ]; then
+  exit 0
+fi
+# stdin: one "<old-sha> <new-sha> [extra]" line per rewritten commit.
+while read -r OLD NEW REST; do
+  [ -n "$NEW" ] || continue
+  kai bridge import "$NEW" >/dev/null 2>&1 || true
+done
+exit 0
+`
+
 // runDoctor audits local Kai state and reports findings. With --fix, it
 // applies automatic repairs (currently just hook upgrades). Doctor must
 // never error: every check is independent and logged inline.
@@ -2980,7 +3008,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			checkHook("post-commit", postCommitHookScript)
 			checkHook("post-merge", postMergeHookScript)
 			checkHook("post-checkout", postCheckoutHookScript)
+			checkHook("post-rewrite", postRewriteHookScript)
 		}
+		checkDriftHealth(os.Stdout, ok, warn, bad)
 	} else {
 		fmt.Printf("%s not a git repository (hook checks skipped)\n", warn)
 	}
@@ -3179,6 +3209,7 @@ func selfHealHooks() {
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-commit"), postCommitHookScript)
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-merge"), postMergeHookScript)
 		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-checkout"), postCheckoutHookScript)
+		upgradeIfOldKaiHook(filepath.Join(".git", "hooks", "post-rewrite"), postRewriteHookScript)
 	}
 }
 
@@ -3610,6 +3641,7 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 		installOrUpgradeBridgeHook("post-commit", postCommitHookScript)
 		installOrUpgradeBridgeHook("post-merge", postMergeHookScript)
 		installOrUpgradeBridgeHook("post-checkout", postCheckoutHookScript)
+		installOrUpgradeBridgeHook("post-rewrite", postRewriteHookScript)
 	}
 
 	if !initMode {
@@ -3619,26 +3651,32 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 }
 
 func runHookUninstall(cmd *cobra.Command, args []string) error {
-	hookPath := filepath.Join(".git", "hooks", "pre-commit")
-
-	data, err := os.ReadFile(hookPath)
-	if os.IsNotExist(err) {
-		fmt.Println("No pre-commit hook found.")
-		return nil
+	// Every hook kai manages, including the bridge set — the scripts all
+	// say "Remove with: kai hook uninstall", so honor it for all of them.
+	names := []string{"pre-commit", "pre-push", "post-commit", "post-merge", "post-checkout", "post-rewrite"}
+	removed := 0
+	for _, name := range names {
+		path := filepath.Join(".git", "hooks", name)
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(data), kaiHookMarker) {
+			fmt.Printf("Note: %s hook exists but is not managed by Kai — left untouched.\n", name)
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		fmt.Printf("Removed Kai %s hook.\n", name)
+		removed++
 	}
-	if err != nil {
-		return err
+	if removed == 0 {
+		fmt.Println("No Kai-managed hooks found.")
 	}
-
-	if !strings.Contains(string(data), kaiHookMarker) {
-		return fmt.Errorf("pre-commit hook exists but is not managed by Kai")
-	}
-
-	if err := os.Remove(hookPath); err != nil {
-		return err
-	}
-
-	fmt.Println("Removed Kai pre-commit hook.")
 	return nil
 }
 
