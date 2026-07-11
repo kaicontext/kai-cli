@@ -371,9 +371,9 @@ func TestShortID(t *testing.T) {
 // TestCommandFlags tests that commands have expected flags
 func TestCommandFlags(t *testing.T) {
 	tests := []struct {
-		cmd      *cobra.Command
-		flags    []string
-		cmdName  string
+		cmd     *cobra.Command
+		flags   []string
+		cmdName string
 	}{
 		{snapshotCreateCmd, []string{"repo", "dir", "message"}, "snapshot create"},
 		{statusCmd, []string{"dir", "against", "name-only", "json", "semantic"}, "status"},
@@ -494,8 +494,8 @@ func TestCommandHelp(t *testing.T) {
 func TestSubcommandArgs(t *testing.T) {
 	// Commands that require exact args
 	exactArgsCommands := []struct {
-		cmd   *cobra.Command
-		args  int
+		cmd  *cobra.Command
+		args int
 	}{
 		{analyzeSymbolsCmd, 1},
 		{changesetCreateCmd, 2},
@@ -742,11 +742,11 @@ func TestFlagsHaveDefaults(t *testing.T) {
 // TestShowUnifiedDiff tests the pure Go unified diff implementation
 func TestShowUnifiedDiff(t *testing.T) {
 	tests := []struct {
-		name     string
-		before   string
-		after    string
-		wantAdd  bool
-		wantDel  bool
+		name    string
+		before  string
+		after   string
+		wantAdd bool
+		wantDel bool
 	}{
 		{
 			name:    "single line addition",
