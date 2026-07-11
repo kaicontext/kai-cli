@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kaicontext/kai-engine/drift"
+	"github.com/kaicontext/kai-engine/graph"
 	"github.com/spf13/cobra"
 	"kai/internal/config"
 )
@@ -156,16 +157,30 @@ func registerStalenessFlags(cmds ...*cobra.Command) {
 // BEFORE the answer is printed. paths is the neighborhood: every
 // repo-relative file that appears in the answer, plus the query target.
 // Returns a nil block when staleness is unmeasurable (no git, unpinned).
-func queryStalenessGate(paths []string) (*drift.Staleness, error) {
+//
+// When the graph is behind and staleness.inline_budget_ms > 0, drift is
+// caught up inline first — checkpointed, oldest-first, bounded by the time
+// budget — so small drift vanishes instead of being annotated. Whatever
+// remains after the budget is classified honestly. Diverged graphs are
+// never caught up inline: a history rewrite deserves an explicit action.
+func queryStalenessGate(db *graph.DB, paths []string) (*drift.Staleness, error) {
 	rep := computeDriftReport()
 	if rep == nil {
 		return nil, nil
+	}
+	cfg, _ := config.Load(kaiDir)
+	if db != nil && rep.Relationship == drift.RelBehind && cfg.Staleness.InlineBudgetMS > 0 {
+		budget := time.Duration(cfg.Staleness.InlineBudgetMS) * time.Millisecond
+		if res, err := catchUpDrift(db, budget, nil); err != nil {
+			debugf("inline catch-up: %v", err)
+		} else if res.Processed > 0 {
+			rep = computeDriftReport()
+		}
 	}
 	man, err := drift.SyncManifest("", kaiDir, rep)
 	if err != nil {
 		man = nil // classification degrades to relationship-only, still honest
 	}
-	cfg, _ := config.Load(kaiDir)
 	st := drift.ClassifyStaleness(rep, man, drift.NeighborhoodFromFiles(paths), cfg.Staleness.RefuseAfterIntersecting)
 	if st != nil && st.Class == drift.StaleRefused {
 		return st, fmt.Errorf("staleness: refused — %s", st.Reason)

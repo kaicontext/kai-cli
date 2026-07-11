@@ -48,7 +48,8 @@ type Config struct {
 }
 
 // StalenessConfig controls how query commands react to graph↔git drift.
-// Both zero values are meaningful defaults: annotate, never block.
+// The zero values of Strict and RefuseAfterIntersecting are meaningful
+// defaults: annotate, never block.
 type StalenessConfig struct {
 	// Strict makes a stale-suspect answer exit non-zero (code 75, the
 	// tripwire convention) even without --strict. A CI knob.
@@ -57,6 +58,14 @@ type StalenessConfig struct {
 	// least this many unprocessed commits intersect a query's subgraph.
 	// 0 = never refuse, annotate only.
 	RefuseAfterIntersecting int `yaml:"refuse_after_intersecting"`
+	// InlineBudgetMS is the time budget for inline catch-up on the query
+	// path: when the graph is behind, queries process drift commits
+	// oldest-first until the budget runs out, then answer from the last
+	// completed checkpoint with an honest annotation. A time budget, not
+	// a commit count — commit cost varies too much for a count to be a
+	// meaningful knob. Default 2000 via Default(); explicit 0 disables
+	// inline catch-up.
+	InlineBudgetMS int `yaml:"inline_budget_ms"`
 }
 
 // TriageConfig controls the request-triage step that classifies an
@@ -227,6 +236,9 @@ func Default() Config {
 		},
 		Triage: TriageConfig{
 			Enabled: true,
+		},
+		Staleness: StalenessConfig{
+			InlineBudgetMS: 2000,
 		},
 	}
 }

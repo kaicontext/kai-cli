@@ -353,6 +353,9 @@ Examples:
 		}
 		defer db.Close()
 
+		if importSince != "" {
+			return runImportSince(db, importSince, os.Stdout)
+		}
 		if importAll {
 			importMaxCommits = 999999
 		}
@@ -361,6 +364,7 @@ Examples:
 }
 
 var importMaxCommits = 50
+var importSince string
 
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze",
@@ -4080,6 +4084,7 @@ func init() {
 	importCmd.GroupID = groupStart
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import entire git history")
 	importCmd.Flags().IntVar(&importMaxCommits, "max", 50, "Maximum number of commits to import")
+	importCmd.Flags().StringVar(&importSince, "since", "", "Treat <sha> as the last-processed commit and import everything after it (checkpointed, resumable)")
 
 	// Diff & Review
 	diffCmd.GroupID = groupDiff
@@ -7103,7 +7108,7 @@ func runQueryCallers(cmd *cobra.Command, args []string) error {
 	for _, r := range results {
 		neighborhood = append(neighborhood, r.file)
 	}
-	staleness, err := queryStalenessGate(neighborhood)
+	staleness, err := queryStalenessGate(db, neighborhood)
 	if err != nil {
 		return err
 	}
@@ -7154,7 +7159,7 @@ func runQueryDependents(cmd *cobra.Command, args []string) error {
 	}
 	sort.Strings(dependents)
 
-	staleness, err := queryStalenessGate(append([]string{filePath}, dependents...))
+	staleness, err := queryStalenessGate(db, append([]string{filePath}, dependents...))
 	if err != nil {
 		return err
 	}
@@ -7255,7 +7260,7 @@ func runQueryImpact(cmd *cobra.Command, args []string) error {
 	for _, r := range results {
 		neighborhood = append(neighborhood, r.path)
 	}
-	staleness, err := queryStalenessGate(neighborhood)
+	staleness, err := queryStalenessGate(db, neighborhood)
 	if err != nil {
 		return err
 	}
@@ -7451,7 +7456,7 @@ func runTestAffected(cmd *cobra.Command, args []string) error {
 	for p := range changedPaths {
 		neighborhood = append(neighborhood, p)
 	}
-	staleness, err := queryStalenessGate(neighborhood)
+	staleness, err := queryStalenessGate(db, neighborhood)
 	if err != nil {
 		return err
 	}
@@ -11413,7 +11418,7 @@ func runBlame(cmd *cobra.Command, args []string) error {
 	}
 	snapID := result.ID
 
-	staleness, err := queryStalenessGate([]string{filePath})
+	staleness, err := queryStalenessGate(db, []string{filePath})
 	if err != nil {
 		return err
 	}
@@ -23619,7 +23624,7 @@ func runPrime(cmd *cobra.Command, args []string) error {
 	// Staleness rides inside the injected context (outside the char budget:
 	// an agent must never lose the trust signal to truncation) so the agent
 	// reasons WITH drift rather than around it.
-	if st, _ := queryStalenessGate(primedPaths); st != nil && st.Class != drift.StaleFresh {
+	if st, _ := queryStalenessGate(db, primedPaths); st != nil && st.Class != drift.StaleFresh {
 		buf.WriteString("## Staleness\n")
 		buf.WriteString(fmt.Sprintf("class: %s · relationship: %s · unprocessed commits: %d\n",
 			st.Class, st.Relationship, st.Drift))
