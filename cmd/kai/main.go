@@ -20988,6 +20988,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		latestVersion := strings.TrimPrefix(releaseInfo.TagName, "v")
 		if latestVersion == Version {
 			fmt.Printf("Already on the latest version (%s)\n", Version)
+			// kit releases on ITS OWN version line (kai-tui), so a
+			// current launcher says nothing about kit. This early
+			// return used to skip the kit refresh at the bottom of
+			// this function entirely — `kai update` on a current
+			// launcher left a stale kit in place with no hint
+			// (2026-07-14 fresh-install dogfood: launcher 0.35.1,
+			// kit stuck one release behind).
+			refreshKit(cmd)
 			return nil
 		}
 		fmt.Printf("Latest version:  %s\n", latestVersion)
@@ -21092,16 +21100,22 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	fmt.Println("Updated successfully!")
 	fmt.Println("Run 'kai --version' to verify.")
 
-	// Also refresh the managed kit binary so it stays in sync with kai.
-	// Best-effort: a kit refresh failure is a warning, not a fatal error.
-	fmt.Println("Refreshing kit...")
+	refreshKit(cmd)
+	return nil
+}
+
+// refreshKit re-downloads the managed kit binary so it stays in sync
+// with kai. Best-effort: a kit refresh failure is a warning, not a
+// fatal error. Called on EVERY `kai update` path — including
+// "launcher already latest" — because kit versions independently.
+func refreshKit(cmd *cobra.Command) {
+	fmt.Println("Refreshing kit (TUI agent)...")
 	l := kitlauncher.Default()
 	if _, err := l.Refresh(cmd.Context()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: kit refresh failed (%v) — run `kai code` to retry\n", err)
-	} else {
-		fmt.Println("kit refreshed.")
+		return
 	}
-	return nil
+	fmt.Println("kit refreshed to the latest release.")
 }
 
 // ========== Shadow Run Implementation ==========
