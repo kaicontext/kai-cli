@@ -1,0 +1,12 @@
+# Per-Dockerfile ignore (BuildKit) — paths relative to the build context root
+# (the workspace dir holding kai-cli/ kai-core/ kai-engine/). The Dockerfile
+# COPYs only those three module dirs, so just prune heavy siblings + non-source
+# weight from the context upload. (No `*` whitelist — it can strip the local
+# module contents and make the replace/workspace build fetch the pinned tag.)
+kai-tui/
+kai-server/
+old-kai/
+bench/
+**/.git
+**/node_modules
+**/testdata
