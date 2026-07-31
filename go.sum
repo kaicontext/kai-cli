@@ -111,6 +111,10 @@ github.com/kaicontext/kai-core v0.1.0 h1:jDnRes5rSNtXUPJ7+K510SLUTpqGbIoff4eNhcc
 github.com/kaicontext/kai-core v0.1.0/go.mod h1:N46/skG6wLkqDUarqnu9VamofK3rgLVA3sfsd6ltfIg=
 github.com/kaicontext/kai-engine v0.6.4 h1:k7uffJAG6Zqdelndv25dTKLAce2C7yV2rv1cAT0hSX4=
 github.com/kaicontext/kai-engine v0.6.4/go.mod h1:a7vLmfPifbByHuIy9npyThoEM4L7s3bHgb6eBEM1+x0=
+github.com/kaicontext/kai-engine v0.6.5-0.20260730235345-df0f00ccef9b h1:TfNwUh1YWqS49Zz7HSDv7bi+ipVOUZ32KpTI+9sXwHA=
+github.com/kaicontext/kai-engine v0.6.5-0.20260730235345-df0f00ccef9b/go.mod h1:9/NGcS0pyBvkweuafe8zZozETV2qVxXbNh6u2jMtBJs=
+github.com/kaicontext/kai-engine v0.6.5-0.20260731100821-d24f147081be h1:xtyyZzdCswyb1KhjWdh2h2/IAs+Pb7iBQPUSsYAzTVo=
+github.com/kaicontext/kai-engine v0.6.5-0.20260731100821-d24f147081be/go.mod h1:9/NGcS0pyBvkweuafe8zZozETV2qVxXbNh6u2jMtBJs=
 github.com/kevinburke/ssh_config v1.2.0 h1:x584FjTGwHzMwvHx18PXxbBVzfnxogHaAReU4gf13a4=
 github.com/kevinburke/ssh_config v1.2.0/go.mod h1:CT57kijsi8u/K/BOFA39wgDQJ9CxiF4nAY/ojJ6r6mM=
 github.com/klauspost/compress v1.18.6 h1:2jupLlAwFm95+YDR+NwD2MEfFO9d4z4Prjl1XXDjuao=
