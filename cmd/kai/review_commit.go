@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -137,6 +139,19 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	}
 
 	risks, match, note := rcParseReviewOutput(raw)
+	if match == finding.MatchUnknown {
+		// The review itself ran — this is the closing block, not a failed review.
+		// Say so on stderr with the raw tail, because the finding records only
+		// "unknown" and the console renders that as "no contract resolved for this
+		// change". Without this line the failure is invisible: the job exits 0, the
+		// log shows a clean run, and the amber badge is the only symptom. The tail
+		// is what distinguishes a reviewer that stated no verdict from one whose
+		// verdict this parser could not read, and it is the signal for how often
+		// the closing block drifts.
+		fmt.Fprintf(os.Stderr,
+			"  ⚠ no INTENT_MATCH verdict could be read from the reviewer's closing block — recording intent=unknown\n"+
+				"    reviewer's closing text: %s\n", rcOneLine(rcTail(raw, 400), 400))
+	}
 	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
 
 	// Blast radius: walk the captured graph outward from the changed files so the
@@ -303,32 +318,169 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	return strings.TrimSpace(res.FinalText), nil
 }
 
+// rcVerdictSynonyms is the closed set of verdict spellings this parser accepts.
+// Every entry appears VERBATIM in the prompt this command sends (rcReviewSystem)
+// or in the finding.Match enum it maps onto — nothing is here on the theory that
+// a model "might" say it.
+//
+// That rule excludes two spellings kai-engine's judgeIntent happens to accept,
+// "match" and "diverge": neither appears in any prompt in this codebase, so they
+// are that parser's own defensive guesses, and inheriting them would launder a
+// guess into a justification. The two parsers never read the same text anyway —
+// judgeIntent prompts for JSON "matches|partial|diverges", this one prompts for
+// "INTENT_MATCH: verified|partial|diverges" — so mirroring it was never required
+// for correctness.
+//
+// Growing this list is allowed, but only from evidence: review-commit logs the
+// reviewer's raw closing text whenever the verdict is unreadable (see
+// verdictRead). Add a spelling when a real run produces it, not before.
+var rcVerdictSynonyms = map[string]finding.Match{
+	// finding.MatchVerified + rcReviewSystem: "INTENT_MATCH: verified|partial|diverges"
+	"verified": finding.MatchVerified,
+	// rcReviewSystem glosses the same verdict as "'verified' (matches)", so the
+	// model is shown both words for one meaning — this is the spelling that was
+	// observed being dropped.
+	"matches": finding.MatchVerified,
+	// finding.MatchPartial + rcReviewSystem's literal block.
+	"partial": finding.MatchPartial,
+	// finding.MatchDiverges + rcReviewSystem's literal block.
+	"diverges": finding.MatchDiverges,
+}
+
+// rcStripDecoration removes the markdown a model wraps around a block it was told
+// to emit verbatim — "**INTENT_MATCH:** verified" and "`INTENT_MATCH:` verified"
+// both have to reach the same parse as the bare form. Only * and ` are removed:
+// stripping _ would break the INTENT_MATCH key itself and mangle snake_case
+// identifiers in the note.
+func rcStripDecoration(s string) string {
+	return strings.TrimSpace(strings.NewReplacer("*", "", "`", "").Replace(s))
+}
+
+// rcOpener returns the run of markdown a line opens with ("**", "`"), or "" for
+// an undecorated line.
+func rcOpener(s string) string {
+	t := strings.TrimSpace(s)
+	i := 0
+	for i < len(t) && (t[i] == '*' || t[i] == '`') {
+		i++
+	}
+	return t[:i]
+}
+
+// rcUnwrap removes the wrapper the model put around a line, and NOTHING else.
+// Only the exact token the line opened with is removed, and only from the ends:
+// "**NOTE:** the fix matches `handleFoo`" must yield a note that still ends in a
+// backtick, while "**NOTE: mostly good**" must not keep its closing "**".
+//
+// rcStripDecoration is right for the verdict, which is matched word by word, but
+// wrong for prose. Blanket-stripping turns a note's `a*b` into "ab" and deletes
+// the backticks around `os.Getenv`; trimming any trailing run eats the closing
+// backtick of a note that legitimately ends in `code`. Both rewrite the
+// reviewer's assessment on its way to the console, which is why this matches the
+// opener instead of guessing.
+func rcUnwrap(s, opener string) string {
+	v := strings.TrimSpace(s)
+	if opener == "" {
+		return v
+	}
+	v = strings.TrimSpace(strings.TrimPrefix(v, opener))
+	return strings.TrimSpace(strings.TrimSuffix(v, opener))
+}
+
+// rcVerdictWords returns the lowercased alphabetic words of s, so punctuation the
+// model appends ("verified.", "verified — no gaps") can't hide the verdict.
+func rcVerdictWords(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(rcStripDecoration(s)), func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+}
+
+// rcVerdictFromValue maps the text following "INTENT_MATCH:" onto a Match, using
+// the FIRST word so a trailing justification still resolves ("verified — no
+// material gaps"). Only the first word: it is the one the prompt asks for, and
+// reading the rest turns ordinary justification prose into a verdict —
+// "diverges — the code no longer matches the stated intent" names two verdicts
+// and means one. Reading only the first word is also what makes "not verified"
+// unreadable rather than verified, since the negation is the first word and no
+// synonym is.
+func rcVerdictFromValue(v string) (finding.Match, bool) {
+	for _, w := range rcVerdictWords(v) {
+		m, ok := rcVerdictSynonyms[w]
+		return m, ok
+	}
+	return "", false
+}
+
+// rcParseReviewOutput extracts the FINDINGS lines, INTENT_MATCH and NOTE from the
+// reviewer's final text. match is MatchUnknown when no verdict could be read —
+// whether because the reviewer stated none, because what it stated was
+// unreadable, or because it stated two that disagree. The caller cannot tell
+// those apart from match alone and does not need to: it logs the raw closing
+// text, which shows which happened.
 func rcParseReviewOutput(raw string) (risks []string, match finding.Match, note string) {
 	match = finding.MatchUnknown
+	var stated finding.Match
+	conflict := false
 	inFindings := false
 	for _, line := range strings.Split(raw, "\n") {
 		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		opener := rcOpener(t)
+		bare := rcUnwrap(t, opener)
+		key := strings.ToUpper(rcStripDecoration(t))
 		switch {
-		case strings.EqualFold(t, "FINDINGS:"):
+		case key == "FINDINGS:":
+			// A second header starts the list over. The prompt says to finish with
+			// this block and nothing after it, so the last one is the real one —
+			// and a reviewer that quotes an EXAMPLE block earlier in its reasoning
+			// (this command's own tests are full of them) would otherwise have the
+			// quoted bullets stored as defects it never reported. Observed: a real
+			// run recorded 3 findings, 2 of them quoted test fixtures.
 			inFindings = true
-		case strings.HasPrefix(strings.ToUpper(t), "INTENT_MATCH:"):
+			risks = nil
+		case strings.HasPrefix(key, "INTENT_MATCH:"):
 			inFindings = false
-			switch strings.ToLower(strings.TrimSpace(t[len("INTENT_MATCH:"):])) {
-			case "verified":
-				match = finding.MatchVerified
-			case "partial":
-				match = finding.MatchPartial
-			case "diverges":
-				match = finding.MatchDiverges
+			if i := strings.Index(t, ":"); i >= 0 {
+				if m, ok := rcVerdictFromValue(t[i+1:]); ok {
+					// Two verdict lines that disagree are not a verdict. The model
+					// quoting the block back ("`INTENT_MATCH: diverges`" as an
+					// example) or correcting a draft it already emitted would
+					// otherwise have whichever line came last recorded as fact,
+					// making the result depend on emission order alone.
+					if stated != "" && m != stated {
+						conflict = true
+					}
+					stated = m
+				}
 			}
-		case strings.HasPrefix(strings.ToUpper(t), "NOTE:"):
+		case strings.HasPrefix(key, "NOTE:"):
 			inFindings = false
-			note = strings.TrimSpace(t[len("NOTE:"):])
-		case inFindings && strings.HasPrefix(t, "-"):
-			if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); item != "" {
+			if i := strings.Index(t, ":"); i >= 0 {
+				note = rcUnwrap(t[i+1:], opener)
+			}
+		// The bullet is tested AFTER unwrapping, like every other key on this
+		// switch: a model that wraps a finding in bold ("**- [security] …**") is
+		// doing the same thing it does to INTENT_MATCH, and matching the raw line
+		// dropped that finding on the floor — a clean review with a real defect
+		// silently missing from it.
+		case inFindings && strings.HasPrefix(bare, "-"):
+			if item := strings.TrimSpace(strings.TrimPrefix(bare, "-")); item != "" {
 				risks = append(risks, item)
 			}
+		default:
+			// The list ends at the first line that is not a bullet. Without this,
+			// a closing block the model spelled differently leaves the parser
+			// inside FINDINGS and its trailing prose is stored as a defect.
+			inFindings = false
 		}
+	}
+	if !conflict {
+		match = stated
+	}
+	if match == "" {
+		match = finding.MatchUnknown
 	}
 	return risks, match, note
 }
@@ -473,6 +625,22 @@ func rcShort(hash string) string {
 		return hash[:12]
 	}
 	return hash
+}
+
+// rcTail returns the last n bytes of s, on a rune boundary — the closing block is
+// what the verdict parser reads, so it is what a failure log needs to show.
+func rcTail(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	t := s[len(s)-n:]
+	for len(t) > 0 && !utf8.RuneStart(t[0]) {
+		t = t[1:]
+	}
+	return t
 }
 
 func rcOneLine(s string, n int) string {
