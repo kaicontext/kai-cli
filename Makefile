@@ -28,25 +28,35 @@ ifeq ($(GO_BIN),)
 	GO_BIN := $(shell go env GOPATH)/bin
 endif
 
+# Nearest git tag (stripped of the leading "v", matching ci.yml) so dev
+# builds report a real version instead of the stale main.Version default;
+# falls back to that default outside a tagged checkout. Release CI still
+# overrides via its own -ldflags.
+VERSION ?= $(patsubst v%,%,$(shell git describe --tags --abbrev=0 2>/dev/null))
+LDFLAGS := $(if $(VERSION),-X main.Version=$(VERSION))
+
 build:
-	CGO_ENABLED=1 go build -o $(KAI_BIN) ./cmd/kai
+	CGO_ENABLED=1 go build -ldflags="$(LDFLAGS)" -o $(KAI_BIN) ./cmd/kai
 	@$(MAKE) -s _sign FILE=$(KAI_BIN)
 
 install:
-	CGO_ENABLED=1 go install ./cmd/kai
+	CGO_ENABLED=1 go install -ldflags="$(LDFLAGS)" ./cmd/kai
 	@$(MAKE) -s _sign FILE=$(GO_BIN)/kai
 	@$(MAKE) -s _mirror
 
-# _mirror copies the freshly-signed kai into the project-local path
-# the user's PATH resolves. Uses `install` (BSD) which does an atomic
-# create+rename — replacing in place would truncate the destination
-# inode and SIGKILL any running kai that holds mmap'd pages from it.
-# -m 755 keeps the executable bit. (The old unversioned
-# /Users/jacobschatz/projects/kai/kai-cli tree was removed; this repo
-# at kai/kai-cli is canonical.)
+# _mirror copies the freshly-signed kai into the paths the user's PATH
+# resolves. Uses `install` (BSD) which does an atomic create+rename —
+# replacing in place would truncate the destination inode and SIGKILL
+# any running kai that holds mmap'd pages from it. -m 755 keeps the
+# executable bit. Destinations are $HOME-relative so the mirror works
+# on any machine (the old hardcoded /Users/jacobschatz path silently
+# skipped the copy everywhere else — same fix kai-tui's Makefile got).
+# (Skipped silently if the dest dir doesn't exist.)
 _mirror:
 	@for dst in \
-		/Users/jacobschatz/projects/kai/kai/kai-cli/kai; do \
+		$$HOME/.kai/bin/kai \
+		$$HOME/kai/kai-cli/kai \
+		$$HOME/bin/kai; do \
 		if [ -d "$$(dirname $$dst)" ]; then \
 			install -m 755 $(GO_BIN)/kai "$$dst"; \
 			codesign --force --sign - "$$dst" 2>/dev/null | grep -v 'replacing' || true; \

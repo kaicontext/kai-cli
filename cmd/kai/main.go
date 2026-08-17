@@ -3719,7 +3719,8 @@ func init() {
 		// replaces this process — killing the backgroundUpdateCheck goroutine
 		// mid-write and bleeding the update notice into kit's first frame.
 		// Skip both for code; kit owns the terminal from here.
-		if cmd != codeCmd {
+		// `kai do` execs the same way and gets the same skip.
+		if cmd != codeCmd && cmd != doCmd {
 			printUpdateNotice()
 			backgroundUpdateCheck()
 		}
@@ -4139,6 +4140,11 @@ func init() {
 	// native-TUI command); it must be registered exactly once.
 	codeCmd.GroupID = groupStart
 	rootCmd.AddCommand(codeCmd)
+
+	// `kai do` — Jeff, the outer agent (kit-in-kai handoff like code;
+	// declared in do.go).
+	doCmd.GroupID = groupStart
+	rootCmd.AddCommand(doCmd)
 
 	rootCmd.AddCommand(importCmd)
 	importCmd.GroupID = groupStart

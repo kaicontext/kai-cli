@@ -660,9 +660,16 @@ func (r *REPL) handleGateReviewKey(key string) (bool, tea.Cmd) {
 		return false, nil
 	}
 	if r.gateReview.loading {
-		// While the LLM call is in flight, only allow [q] to bail.
-		if key == "q" || key == "esc" {
+		// While the LLM call is in flight, only [q] bails. esc is
+		// swallowed with a hint: users press it to "leave" a diff dump
+		// or a spinner they perceive as a mode, and don't expect it to
+		// cancel the whole review (2026-08-05 dogfood).
+		switch key {
+		case "q":
 			r.exitGateReview("review canceled")
+			return true, nil
+		case "esc":
+			r.write(styleDim.Render("(review in progress — press q to cancel it)"))
 			return true, nil
 		}
 		return false, nil
@@ -710,8 +717,17 @@ func (r *REPL) handleGateReviewKey(key string) (bool, tea.Cmd) {
 		r.armGateReviewSpinner()
 		r.write(styleDim.Render(fmt.Sprintf("→ fix agent: addressing %d issue(s)…", len(st.result.Issues))))
 		return true, tea.Batch(runGateReviewFix(r.services, snap, st.result.Issues, st.idx), r.spinner.Tick)
-	case "q", "esc":
+	case "q":
 		r.exitGateReview("review exited")
+		return true, nil
+	case "esc":
+		// esc is NOT a quit alias: after a [d]iff dump users press esc
+		// to "exit diff mode" — but the diff is inline scrollback and
+		// they never left the prompt. Aliasing esc to quit here threw
+		// away an in-flight review (2026-08-05 dogfood). Re-anchor the
+		// menu instead; only [q] cancels.
+		r.write(styleDim.Render("  (you're still at the review prompt — nothing to exit)"))
+		r.write(styleDim.Render("  [a]pprove  [r]eject  [s]kip  [d]iff  [f]ix  [q]uit"))
 		return true, nil
 	}
 	return false, nil
