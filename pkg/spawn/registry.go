@@ -32,7 +32,31 @@ type Entry struct {
 	SyncMode       string `json:"sync_mode"`
 	CopySource     string `json:"copy_source,omitempty"`
 	CreatedAt      string `json:"created_at"`
+
+	// OwnerPID and Status make a spawn's integrate lifecycle
+	// crash-visible. The orchestrator holds an agent's edits in the
+	// spawn dir until the integrate phase absorbs them into main; if
+	// the process dies in between (SIGINT from Jeff's Interrupt,
+	// SIGKILL, panic, OOM) that work is stranded on disk with nothing
+	// recording that it was ever owed to main. Stamping the owning pid
+	// and a status lets a later run in the same repo recognize the
+	// entry as orphaned — owner gone, never integrated — and absorb it
+	// instead of silently losing it. Both are omitempty so entries
+	// written by older binaries stay valid and simply read as
+	// StatusUnknown.
+	OwnerPID int    `json:"owner_pid,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
+
+// Spawn lifecycle statuses. An entry with no Status was written by a
+// binary predating this field; it is deliberately NOT treated as
+// orphaned, since we cannot tell whether its work was already
+// absorbed and re-absorbing would resurrect landed edits.
+const (
+	StatusUnknown    = ""           // legacy entry — never reconciled
+	StatusActive     = "active"     // owner is running, integrate still owed
+	StatusIntegrated = "integrated" // absorb completed; nothing owed
+)
 
 // Registry is the on-disk shape of ~/.kai/spawned.json.
 type Registry struct {
@@ -145,6 +169,28 @@ func RemoveByPath(p string) error {
 		}
 		r.Spawned = out
 		return save(path, r)
+	})
+}
+
+// UpdateByPath applies fn to the entry whose Path matches, under the
+// exclusive lock, and persists the result. The read-modify-write must
+// happen inside one lock hold: the orchestrator stamps entries from a
+// process that runs concurrently with other kai invocations, and a
+// Load/mutate/Add sequence would lose a peer's write. A path with no
+// entry is not an error — the spawn may already have been despawned.
+func UpdateByPath(p string, fn func(*Entry)) error {
+	return withLock(func(path string) error {
+		r, err := loadFromPath(path)
+		if err != nil {
+			return err
+		}
+		for i := range r.Spawned {
+			if r.Spawned[i].Path == p {
+				fn(&r.Spawned[i])
+				return save(path, r)
+			}
+		}
+		return nil
 	})
 }
 
