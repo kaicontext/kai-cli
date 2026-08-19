@@ -90,6 +90,78 @@ var ciPolicyFile = filepath.Join(kaiDir, "rules", "ci-policy.yaml")
 // -ldflags "-X main.Version=<tag>" (see .github/workflows/ci.yml).
 var Version = "0.34.5"
 
+// GitSHA is the commit this binary was built from, injected by the
+// Makefile. Empty or "unknown" means a release build: the release
+// pipeline does not set it.
+//
+// It exists because a locally-built binary and a released one can
+// report the SAME version — the tag names the last release, not what is
+// in the working tree. Without this, `kai --version` cannot distinguish
+// a build carrying unreleased fixes from the release that lacks them,
+// and `kai update` silently replaces one with the other.
+var GitSHA = ""
+
+// lastJSONLine returns the final line of output, so a leading
+// "Update available: ..." banner cannot break the parse.
+func lastJSONLine(out []byte) []byte {
+	lines := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
+	return lines[len(lines)-1]
+}
+
+// kitIsDevBuild reports whether the installed kit was built from source.
+//
+// Asked by running `kit version`: kit stamps its own commit into that
+// string the same way kai now does, so a "+<sha>" marks a local build.
+// Failing to answer is treated as "not a dev build" — the refresh is
+// the long-standing default and should not be blocked by a probe that
+// could not run.
+func kitIsDevBuild() bool {
+	bin, err := exec.LookPath("kit")
+	if err != nil {
+		return false
+	}
+	out, err := exec.Command(bin, "version", "--json").Output()
+	if err != nil {
+		return false
+	}
+	var v struct {
+		Version string `json:"version"`
+		GitSHA  string `json:"git_sha"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(lastJSONLine(out)), &v) != nil {
+		return false
+	}
+	// A dirty tree is unambiguous on its own.
+	if strings.Contains(v.GitSHA, "dirty") {
+		return true
+	}
+	// Otherwise compare against what the launcher recorded installing.
+	// `make install` swaps the binary without touching that sidecar, so
+	// a disagreement means the kit on disk is not the one the launcher
+	// downloaded. A missing record means the launcher never installed
+	// one, which is equally not-ours-to-replace.
+	rec := kitlauncher.Default().RecordedVersion()
+	if rec == "" {
+		return true
+	}
+	return !strings.Contains(rec, v.Version)
+}
+
+// isDevBuild reports whether this binary came from a local build rather
+// than a release.
+func isDevBuild() bool {
+	return GitSHA != "" && GitSHA != "unknown"
+}
+
+// versionString is what the user sees: the plain version for a release,
+// and version+sha for a local build, so the two are never confusable.
+func versionString() string {
+	if isDevBuild() {
+		return Version + "+" + GitSHA
+	}
+	return Version
+}
+
 // verbose enables debug output when --verbose/-v flag or KAI_VERBOSE env var is set
 var verbose bool
 var authLoginToken string
@@ -181,7 +253,7 @@ var rootCmd = &cobra.Command{
 	Use:     "kai",
 	Short:   "Kai - semantic, intent-based version control",
 	Long:    `Kai is a local CLI that creates semantic snapshots from Git refs, computes changesets, classifies change types, and generates intent sentences.`,
-	Version: Version,
+	Version: versionString(),
 	// Bare `kai` prints help. The interactive coding experience is
 	// launched explicitly via `kai code`, which resolves (and
 	// self-installs) the managed `kit` binary and hands off to it
@@ -2398,7 +2470,7 @@ var versionCmd = &cobra.Command{
 			fmt.Println(base)
 			return
 		}
-		fmt.Println("kai " + Version)
+		fmt.Println("kai " + versionString())
 	},
 }
 
@@ -4236,6 +4308,7 @@ func init() {
 	rootCmd.AddCommand(cloneCmd)
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().Bool("check", false, "Check for updates without installing")
+	updateCmd.Flags().Bool("force", false, "Replace a source-built kai with the released binary (reverts unmerged changes)")
 
 	liveCmd.GroupID = groupRemote
 	liveCmd.AddCommand(liveStatusCmd)
@@ -21073,6 +21146,26 @@ func runCIValidatePlan(cmd *cobra.Command, args []string) error {
 // runUpdate downloads and installs the latest kai binary from GitHub releases.
 func runUpdate(cmd *cobra.Command, args []string) error {
 	checkOnly, _ := cmd.Flags().GetBool("check")
+	updateForce, _ := cmd.Flags().GetBool("force")
+
+	// Refuse to overwrite a local build unless told to.
+	//
+	// A source build and a release can report the same version — the tag
+	// names the last release, not what is in the tree — so downloading
+	// over one reverts every unreleased change with nothing on screen to
+	// say so. The failure is invisible in the worst way: the version
+	// number afterwards is identical, so a fix that was working simply
+	// stops, and looks like it never worked.
+	if isDevBuild() && !checkOnly && !updateForce {
+		fmt.Printf("Refusing to update: this kai was built from source (%s).\n\n", versionString())
+		fmt.Println("  A release binary can carry the same version number as your build")
+		fmt.Println("  while lacking whatever is not merged yet, so this would revert")
+		fmt.Println("  those changes silently.")
+		fmt.Println()
+		fmt.Println("  To refresh from source:  cd <kai-cli> && make install")
+		fmt.Println("  To replace it anyway:    kai update --force")
+		return nil
+	}
 
 	// Determine OS and architecture
 	goos := runtime.GOOS
@@ -21082,7 +21175,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	// GitHub releases URL
 	downloadURL := fmt.Sprintf("https://github.com/kaicontext/kai-cli/releases/latest/download/%s.gz", binaryName)
 
-	fmt.Printf("Current version: %s\n", Version)
+	fmt.Printf("Current version: %s\n", versionString())
 
 	// Check latest version from GitHub API
 	latestResp, err := http.Get("https://api.github.com/repos/kaicontext/kai-cli/releases/latest")
@@ -21104,7 +21197,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			// launcher left a stale kit in place with no hint
 			// (2026-07-14 fresh-install dogfood: launcher 0.35.1,
 			// kit stuck one release behind).
-			refreshKit(cmd)
+			refreshKit(cmd, checkOnly)
 			return nil
 		}
 		fmt.Printf("Latest version:  %s\n", latestVersion)
@@ -21209,7 +21302,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	fmt.Println("Updated successfully!")
 	fmt.Println("Run 'kai --version' to verify.")
 
-	refreshKit(cmd)
+	refreshKit(cmd, checkOnly)
 	return nil
 }
 
@@ -21217,7 +21310,29 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 // with kai. Best-effort: a kit refresh failure is a warning, not a
 // fatal error. Called on EVERY `kai update` path — including
 // "launcher already latest" — because kit versions independently.
-func refreshKit(cmd *cobra.Command) {
+//
+// Refuses two cases, both of which used to overwrite silently:
+//
+//   - checkOnly. `kai update --check` documents itself as "check for
+//     updates without installing", and it installed. Observed
+//     2026-08-19: --check replaced a source-built kit carrying
+//     unreleased work with the release, and because kit's version had
+//     not changed the output said 0.33.154 before and after.
+//
+//   - a source-built kit. Same reasoning as the kai guard above: a
+//     release can share the version number of a local build while
+//     lacking whatever is unmerged, so replacing one with the other
+//     reverts work with nothing on screen to show it.
+func refreshKit(cmd *cobra.Command, checkOnly bool) {
+	if checkOnly {
+		fmt.Println("(--check: not refreshing kit)")
+		return
+	}
+	if kitIsDevBuild() {
+		fmt.Println("Skipping kit refresh: kit was built from source.")
+		fmt.Println("  Refresh it with: cd <kai-tui> && make install")
+		return
+	}
 	fmt.Println("Refreshing kit (TUI agent)...")
 	l := kitlauncher.Default()
 	if _, err := l.Refresh(cmd.Context()); err != nil {

@@ -257,6 +257,16 @@ func (l *Launcher) resolveKitPath() (string, error) {
 // Returns "" when absent or unreadable — which, under a pin, reads as stale
 // and triggers a one-time upgrade (e.g. a kit placed by the old install.sh
 // that wrote no sidecar).
+// RecordedVersion is the version the launcher itself last installed,
+// read from the sidecar it writes beside the managed binary.
+//
+// Its use is telling a launcher-managed kit from one put there by
+// something else: `make install` replaces the binary without touching
+// this file, so a mismatch against what `kit version` reports means the
+// binary on disk is not the one the launcher downloaded — and
+// overwriting it would discard whatever that build carried.
+func (l *Launcher) RecordedVersion() string { return l.installedVersion() }
+
 func (l *Launcher) installedVersion() string {
 	b, err := os.ReadFile(filepath.Join(l.BinDir, versionFileName))
 	if err != nil {
