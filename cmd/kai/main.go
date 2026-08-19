@@ -36,11 +36,9 @@ import (
 	"github.com/kaicontext/kai-core/diff"
 	"github.com/kaicontext/kai-core/merge"
 
-	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/ai"
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/classify"
-	"kai/internal/config"
 	semanticdiff "github.com/kaicontext/kai-engine/diff"
 	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/drift"
@@ -54,6 +52,7 @@ import (
 	"github.com/kaicontext/kai-engine/module"
 	"github.com/kaicontext/kai-engine/parse"
 	"github.com/kaicontext/kai-engine/projects"
+	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/review"
@@ -61,10 +60,11 @@ import (
 	"github.com/kaicontext/kai-engine/snapshot"
 	"github.com/kaicontext/kai-engine/status"
 	"github.com/kaicontext/kai-engine/telemetry"
-	tuierrors "kai/internal/tui/errors"
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
+	"kai/internal/config"
 	"kai/internal/kitlauncher"
+	tuierrors "kai/internal/tui/errors"
 	spawnpkg "kai/pkg/spawn"
 )
 
@@ -15538,6 +15538,30 @@ func interactivePushOnboarding(remoteName string) (*remote.Client, error) {
 // Creating a ref that doesn't exist remotely, or re-pushing the value already
 // there, is always fine. Otherwise the push is rejected unless the remote head
 // is exactly what we last synced (a true fast-forward from our base).
+// guardedByFastForward reports whether the F-13 guard applies to a ref.
+//
+// The guard exists to stop a contended push silently clobbering another
+// user's work. That is the right thing to protect for snap.latest,
+// which records what somebody MADE: overwriting it loses a snapshot.
+//
+// cs.latest is not that. It means "the newest changeset in this repo,
+// from any source", carries no ancestry, and its history is the
+// append-only log beside it. Crucially the SERVER advances it too —
+// every SSH git-receive-pack force-sets it
+// (kailab/sshserver/receive_pack.go) — so the tracking ref this guard
+// compares against goes stale through no action of the user's. Once
+// that happens the guard fires on every subsequent push, forever, and
+// since the pre-push hook runs `kai push` to trigger CI, CI silently
+// stops firing on ordinary git pushes for that repo.
+//
+// Both remedies it offers make it worse: `kai pull --force`
+// materializes the remote snapshot over the working tree, and
+// `kai push --force` overwrites the remote. Guarding a derived pointer
+// buys nothing and costs the CI trigger, so it is excluded.
+func guardedByFastForward(name string) bool {
+	return name == "snap.latest"
+}
+
 func isNonFastForwardPush(remoteTarget, trackedTarget, newTarget []byte) bool {
 	if len(remoteTarget) == 0 {
 		return false // not on the remote yet — creating it is fine
@@ -16380,7 +16404,7 @@ func runPush(cmd *cobra.Command, args []string) error {
 	// it can be unit-tested without a live remote.
 	if !pushForce {
 		for _, r := range validRefs {
-			if r.Name != "snap.latest" && r.Name != "cs.latest" {
+			if !guardedByFastForward(r.Name) {
 				continue
 			}
 			remoteRef, _ := client.GetRef(r.Name)
