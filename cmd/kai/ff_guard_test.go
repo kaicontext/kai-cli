@@ -54,3 +54,36 @@ func TestNeverSyncedIsNotDivergence(t *testing.T) {
 		t.Error("a remote matching our baseline is a fast-forward and must be allowed")
 	}
 }
+
+// TestFirstSyncIsNotDivergence pins the deadlock this closes.
+//
+// Both guards keyed off the remote-tracking ref, and neither could run
+// without it: push refused because it was absent, pull refused because
+// it was absent, and it only appears after one of them succeeds. Each
+// error recommended the other. A clone that had never synced therefore
+// could never start syncing — the state every repo lands in when its
+// tips are published by GitHub ingest rather than by a client push.
+//
+// isFastForwardPull still answers false with no baseline, because with
+// no baseline nothing can be proved. What changed is that pull treats
+// that answer as "this is a first sync" rather than "you have
+// diverged", and preserves the displaced head before advancing.
+func TestFirstSyncIsNotDivergence(t *testing.T) {
+	local, remote := []byte{1}, []byte{2}
+
+	if isFastForwardPull(local, nil, remote) {
+		t.Error("with no baseline nothing is provable — this must not report a clean fast-forward")
+	}
+	// An empty clone was always allowed and must stay allowed.
+	if !isFastForwardPull(nil, nil, remote) {
+		t.Error("a clone with no local head has nothing to lose and must pull freely")
+	}
+	// A real divergence still aborts.
+	if isFastForwardPull(local, []byte{3}, remote) {
+		t.Error("a local head past its baseline is a genuine divergence")
+	}
+	// Caught up with the baseline: a clean fast-forward.
+	if !isFastForwardPull(local, local, remote) {
+		t.Error("a local head equal to its baseline is exactly the catch-up case")
+	}
+}

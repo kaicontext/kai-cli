@@ -17111,9 +17111,35 @@ func runPull(cmd *cobra.Command, args []string) error {
 		if tracked, _ := refMgr.Get("remote/origin/snap.latest"); tracked != nil {
 			trackedTarget = tracked.TargetID
 		}
-		if !isFastForwardPull(localRef.TargetID, trackedTarget, snapRef.Target) {
-			// Local has snapshots beyond what we last synced; pulling would
-			// orphan them. Make the user reconcile explicitly.
+		if len(trackedTarget) == 0 {
+			// FIRST SYNC. There is no baseline, so nothing can be proved
+			// either way — and refusing here was a dead end rather than a
+			// safeguard: push refuses without a tracking ref, pull refused
+			// without a tracking ref, and the ref only appears after one of
+			// them succeeds. Both errors pointed at the other, so a clone
+			// that had never synced could never start. Every repo whose
+			// tips are published by GitHub ingest lands in exactly that
+			// state.
+			//
+			// Establishing the baseline is what pull is FOR, so it goes
+			// ahead — but never at the cost of the local tip. The displaced
+			// head is saved under snap.prepull.<ts> first, which keeps it
+			// reachable in the graph and recoverable by name. Nothing is
+			// deleted: the snapshots themselves live in the object store
+			// regardless, and only the pointer moves.
+			stamp := time.Now().UTC().Format("20060102T150405")
+			keep := fmt.Sprintf("snap.prepull.%s", stamp)
+			if err := refMgr.Set(keep, localRef.TargetID, ref.KindSnapshot); err != nil {
+				return fmt.Errorf("preserving local head before first sync: %w", err)
+			}
+			fmt.Printf("  First sync: no baseline yet, so local snap.latest (%s) is kept as %s\n",
+				localDigest[:12], keep)
+			fmt.Printf("  Advancing to the remote head (%s); recover the old tip any time with that ref.\n",
+				remoteDigest[:12])
+		} else if !isFastForwardPull(localRef.TargetID, trackedTarget, snapRef.Target) {
+			// A real divergence: we DO have a baseline and our head has
+			// moved past it. Pulling would orphan that work, so the user
+			// reconciles explicitly.
 			fmt.Printf("  Warning: local snap.latest (%s) differs from remote (%s)\n",
 				localDigest[:12], remoteDigest[:12])
 			fmt.Println("  You have unpushed local snapshots that will become orphaned.")
