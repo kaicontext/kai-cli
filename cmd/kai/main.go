@@ -16491,6 +16491,23 @@ func runPush(cmd *cobra.Command, args []string) error {
 			}
 			if isNonFastForwardPush(remoteTarget, trackedTarget, r.TargetID) {
 				fmt.Fprintf(os.Stderr, "\r\033[K")
+				// Two different situations reach this point and they
+				// need different advice. Reporting both as "advanced
+				// since you last synced" is wrong for the second: a
+				// clone that has NEVER synced has not diverged, it
+				// simply has no basis for comparison, and telling
+				// someone their push conflicts when they have never
+				// pushed sends them looking for a conflict that does
+				// not exist.
+				if len(trackedTarget) == 0 {
+					return fmt.Errorf(
+						"push rejected: this clone has never synced with the remote, so there is no way to tell whether your %s (%s) or the remote's (%s) is newer.\n"+
+							"  Run 'kai pull' once to establish the baseline — after that, pushes are compared against it normally.\n"+
+							"  Or 'kai push --force' if you know your local snapshot is the one to keep.",
+						r.Name,
+						hex.EncodeToString(r.TargetID)[:12],
+						hex.EncodeToString(remoteTarget)[:12])
+				}
 				return fmt.Errorf(
 					"push rejected: remote %s has advanced to %s since you last synced — your push is not a fast-forward.\n"+
 						"  Run 'kai pull' to reconcile, or 'kai push --force' to overwrite the remote.",

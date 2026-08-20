@@ -28,3 +28,29 @@ func TestGuardedByFastForward(t *testing.T) {
 		}
 	}
 }
+
+// TestNeverSyncedIsNotDivergence pins the distinction the F-13 message
+// used to blur.
+//
+// isNonFastForwardPush returns true when the tracking ref is absent —
+// not because anything diverged, but because there is nothing to
+// compare against. Reporting that as "the remote has advanced since you
+// last synced" is false for a clone that has never synced, and it sends
+// the reader hunting for a conflict that does not exist. The refusal is
+// right; only the explanation was wrong.
+func TestNeverSyncedIsNotDivergence(t *testing.T) {
+	local, remote := []byte{1}, []byte{2}
+
+	// Never synced: no tracking ref.
+	if !isNonFastForwardPush(remote, nil, local) {
+		t.Error("a push with no tracking ref should still be refused — there is no basis to judge it")
+	}
+	// Synced, and the remote moved: a real divergence.
+	if !isNonFastForwardPush(remote, []byte{3}, local) {
+		t.Error("a remote that moved past our baseline is a real divergence")
+	}
+	// Synced and unchanged: allowed.
+	if isNonFastForwardPush(remote, remote, local) {
+		t.Error("a remote matching our baseline is a fast-forward and must be allowed")
+	}
+}
