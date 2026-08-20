@@ -17113,30 +17113,43 @@ func runPull(cmd *cobra.Command, args []string) error {
 		}
 		if len(trackedTarget) == 0 {
 			// FIRST SYNC. There is no baseline, so nothing can be proved
-			// either way — and refusing here was a dead end rather than a
-			// safeguard: push refuses without a tracking ref, pull refused
-			// without a tracking ref, and the ref only appears after one of
-			// them succeeds. Both errors pointed at the other, so a clone
-			// that had never synced could never start. Every repo whose
-			// tips are published by GitHub ingest lands in exactly that
-			// state.
+			// either way — and refusing outright was a dead end rather
+			// than a safeguard: push refuses without a tracking ref, pull
+			// refused without a tracking ref, and the ref only appears
+			// after one of them succeeds. Both errors pointed at the
+			// other, so a clone that had never synced could never start.
+			// Every repo whose tips are published by GitHub ingest lands
+			// in exactly that state.
 			//
-			// Establishing the baseline is what pull is FOR, so it goes
-			// ahead — but never at the cost of the local tip. The displaced
-			// head is saved under snap.prepull.<ts> first, which keeps it
-			// reachable in the graph and recoverable by name. Nothing is
-			// deleted: the snapshots themselves live in the object store
-			// regardless, and only the pointer moves.
-			stamp := time.Now().UTC().Format("20060102T150405")
-			keep := fmt.Sprintf("snap.prepull.%s", stamp)
-			if err := refMgr.Set(keep, localRef.TargetID, ref.KindSnapshot); err != nil {
-				return fmt.Errorf("preserving local head before first sync: %w", err)
+			// What breaks the deadlock is the BASELINE, and nothing else.
+			// Recording it is safe; advancing the tip and writing the
+			// remote's files over the working tree is a separate act with
+			// a separate cost, and doing both here would replace a dead
+			// end with a destructive default — on a first sync the remote
+			// may well be OLDER, and materializing it silently reverts
+			// local work. (Observed: a first sync rewrote 11 files and
+			// removed ~2900 lines of that day's work; recoverable only
+			// because the tree happened to be committed.)
+			//
+			// So: record the baseline, leave the tip and the files alone,
+			// and hand the decision back. With a baseline in place both
+			// verbs work normally — push keeps local, pull --force takes
+			// the remote — and each says plainly what it will do.
+			if err := refMgr.Set("remote/origin/snap.latest", snapRef.Target, ref.KindSnapshot); err != nil {
+				return fmt.Errorf("recording sync baseline: %w", err)
 			}
-			fmt.Printf("  First sync: no baseline yet, so local snap.latest (%s) is kept as %s\n",
-				localDigest[:12], keep)
-			fmt.Printf("  Advancing to the remote head (%s); recover the old tip any time with that ref.\n",
-				remoteDigest[:12])
-		} else if !isFastForwardPull(localRef.TargetID, trackedTarget, snapRef.Target) {
+			fmt.Printf("  First sync: recorded the remote head (%s) as this clone's baseline.\n", remoteDigest[:12])
+			fmt.Println("  Your snapshot and working tree are untouched — on a first sync there is no")
+			fmt.Println("  way to tell which side is newer, so neither is assumed.")
+			fmt.Println()
+			fmt.Printf("  Local snap.latest:  %s\n", localDigest[:12])
+			fmt.Printf("  Remote snap.latest: %s\n", remoteDigest[:12])
+			fmt.Println()
+			fmt.Println("  To keep YOUR snapshot:   kai push")
+			fmt.Println("  To take the REMOTE's:    kai pull --force   (overwrites files that differ)")
+			return nil
+		}
+		if !isFastForwardPull(localRef.TargetID, trackedTarget, snapRef.Target) {
 			// A real divergence: we DO have a baseline and our head has
 			// moved past it. Pulling would orphan that work, so the user
 			// reconciles explicitly.
