@@ -16636,8 +16636,18 @@ func runPush(cmd *cobra.Command, args []string) error {
 		debugf("Pushing %d edges...", len(edgesToPush))
 		result, err := client.PushEdges(edgesToPush)
 		if err != nil {
-			// Don't fail the push if edge push fails - edges are supplementary
-			debugf("edge push warning: %v", err)
+			// Edges are supplementary, so a failure here doesn't fail the
+			// push — but it must be visible. This warning used to be
+			// debugf-only, so a store whose edges timed out printed a clean
+			// "Pushed to origin." while shipping an incomplete graph, and a
+			// re-push says "Already up to date" rather than retrying. Match
+			// the edgeReadErr warning above.
+			landed := 0
+			if result != nil {
+				landed = result.Inserted
+			}
+			fmt.Fprintf(os.Stderr, "\n\033[Kwarning: pushed %d of %d graph edges (%v); the remote graph is incomplete — a plain re-push reports \"Already up to date\", so retry with: kai push --force\n",
+				landed, len(edgesToPush), err)
 		} else {
 			debugf("%d edges inserted", result.Inserted)
 		}

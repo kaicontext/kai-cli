@@ -12,16 +12,16 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kaicontext/kai-engine/agent"
-	"github.com/kaicontext/kai-engine/provider"
-	"github.com/kaicontext/kai-engine/session"
-	"kai/internal/config"
 	"github.com/kaicontext/kai-engine/gatereview"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/projects"
+	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/safetygate"
+	"github.com/kaicontext/kai-engine/session"
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
+	"kai/internal/config"
 )
 
 // `kai gate` is the human-facing surface for the safety gate's hold
@@ -216,24 +216,13 @@ func runGateList(cmd *cobra.Command, args []string) error {
 	showProj := len(set.Projects()) > 1
 	for _, r := range rows {
 		n := r.node
-		v, _ := n.Payload["gateVerdict"].(string)
-		blast, _ := n.Payload["gateBlastRadius"].(float64)
-		from, _ := n.Payload["integratedFrom"].(string)
-		createdMs, _ := n.Payload["createdAt"].(float64)
-		fromShort := from
-		if len(fromShort) > 12 {
-			fromShort = fromShort[:12]
-		}
-		ts := ""
-		if createdMs > 0 {
-			ts = time.UnixMilli(int64(createdMs)).Format("2006-01-02 15:04:05")
-		}
+		v, agent, age, blast := heldRowFields(n)
 		if showProj {
-			fmt.Printf("  [%s]  %s  %-6s  blast=%-4d  ws=%s  %s\n",
-				r.project, util.BytesToHex(n.ID)[:12], strings.ToUpper(v), int(blast), fromShort, ts)
+			fmt.Printf("  [%s]  %s  %-6s  blast=%-3d  %-28s  %s\n",
+				r.project, util.BytesToHex(n.ID)[:12], v, blast, agent, age)
 		} else {
-			fmt.Printf("  %s  %-6s  blast=%-4d  ws=%s  %s\n",
-				util.BytesToHex(n.ID)[:12], strings.ToUpper(v), int(blast), fromShort, ts)
+			fmt.Printf("  %s  %-6s  blast=%-3d  %-28s  %s\n",
+				util.BytesToHex(n.ID)[:12], v, blast, agent, age)
 		}
 	}
 	fmt.Println("\nRun `kai gate show <id>` to inspect, `kai gate approve <id>` to publish.")
@@ -291,20 +280,9 @@ func runGateListSingle() error {
 	}
 	fmt.Printf("%d integration(s) held:\n\n", len(held))
 	for _, n := range held {
-		v, _ := n.Payload["gateVerdict"].(string)
-		blast, _ := n.Payload["gateBlastRadius"].(float64)
-		from, _ := n.Payload["integratedFrom"].(string)
-		createdMs, _ := n.Payload["createdAt"].(float64)
-		fromShort := from
-		if len(fromShort) > 12 {
-			fromShort = fromShort[:12]
-		}
-		ts := ""
-		if createdMs > 0 {
-			ts = time.UnixMilli(int64(createdMs)).Format("2006-01-02 15:04:05")
-		}
-		fmt.Printf("  %s  %-6s  blast=%-4d  ws=%s  %s\n",
-			util.BytesToHex(n.ID)[:12], strings.ToUpper(v), int(blast), fromShort, ts)
+		v, agent, age, blast := heldRowFields(n)
+		fmt.Printf("  %s  %-6s  blast=%-3d  %-28s  %s\n",
+			util.BytesToHex(n.ID)[:12], v, blast, agent, age)
 	}
 	fmt.Println("\nRun `kai gate show <id>` to inspect, `kai gate approve <id>` to publish.")
 	return nil
@@ -675,11 +653,11 @@ func runGateFix(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := agent.Options{
-		Projects:          set,
-		Workspace:         primary.Path,
+		Projects:     set,
+		Workspace:    primary.Path,
 		Provider:     prov,
 		Model:        fixModel,
-		Graph:             asGraphDB(db),
+		Graph:        asGraphDB(db),
 		EnableBash:   true,
 		BashAllow:    cfg.Agent.BashAllow,
 		SessionStore: asGraphDB(db),
@@ -852,4 +830,46 @@ func resolveSnapshotByPrefixAcrossProjects(prefix string) (*graph.DB, *graph.Nod
 	}
 	set.Close()
 	return nil, nil, fmt.Errorf("no snapshot matches prefix %q", strings.ToLower(strings.TrimSpace(prefix)))
+}
+
+// heldRowFields pulls the columns `kai gate list` shows for one held
+// integration. The agent name is the point: without it every row is a
+// pair of opaque digests, so finding your own hold means running
+// `kai gate show` on all of them — an outer agent burned eight calls
+// doing exactly that to identify the one its own run had just created.
+// The age comes from the node's CreatedAt; the old code read
+// Payload["createdAt"], which snapshots do not carry, so the timestamp
+// column rendered empty on every row.
+func heldRowFields(n *graph.Node) (verdict, agent, age string, blast int) {
+	verdict, _ = n.Payload["gateVerdict"].(string)
+	verdict = strings.ToUpper(verdict)
+	b, _ := n.Payload["gateBlastRadius"].(float64)
+	blast = int(b)
+	agent, _ = n.Payload["orchestratorAgent"].(string)
+	if agent == "" {
+		agent = "?"
+	}
+	if len(agent) > 28 {
+		agent = agent[:27] + "\u2026"
+	}
+	age = "?"
+	if n.CreatedAt > 0 {
+		age = humanAge(time.Since(time.UnixMilli(n.CreatedAt)))
+	}
+	return verdict, agent, age, blast
+}
+
+// humanAge renders a duration the way a person reads a backlog: how
+// stale is this, not when exactly did it happen.
+func humanAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
