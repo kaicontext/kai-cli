@@ -3,8 +3,13 @@ package main
 import "testing"
 
 // Regression tests for the F-13 fast-forward guard: kai push must refuse to
-// overwrite a remote snap.latest/cs.latest that advanced since we last synced,
-// instead of silently clobbering another user's snapshot.
+// overwrite a remote snap.latest that advanced since we last synced, instead of
+// silently clobbering another user's snapshot.
+//
+// cs.latest used to be covered here too and no longer is — the server advances
+// that one itself, so guarding it fired forever and took the CI trigger with it.
+// See guardedByFastForward, which decides WHICH refs reach this function; the
+// decision below is only about HOW it judges them.
 func TestIsNonFastForwardPush(t *testing.T) {
 	base := []byte("BASE") // the snapshot two users cloned from
 	s1 := []byte("S1")     // user 1's snapshot (lands on the remote first)

@@ -36,11 +36,9 @@ import (
 	"github.com/kaicontext/kai-core/diff"
 	"github.com/kaicontext/kai-core/merge"
 
-	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/ai"
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/classify"
-	"kai/internal/config"
 	semanticdiff "github.com/kaicontext/kai-engine/diff"
 	"github.com/kaicontext/kai-engine/dirio"
 	"github.com/kaicontext/kai-engine/drift"
@@ -54,6 +52,7 @@ import (
 	"github.com/kaicontext/kai-engine/module"
 	"github.com/kaicontext/kai-engine/parse"
 	"github.com/kaicontext/kai-engine/projects"
+	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/review"
@@ -61,10 +60,11 @@ import (
 	"github.com/kaicontext/kai-engine/snapshot"
 	"github.com/kaicontext/kai-engine/status"
 	"github.com/kaicontext/kai-engine/telemetry"
-	tuierrors "kai/internal/tui/errors"
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
+	"kai/internal/config"
 	"kai/internal/kitlauncher"
+	tuierrors "kai/internal/tui/errors"
 	spawnpkg "kai/pkg/spawn"
 )
 
@@ -89,6 +89,78 @@ var ciPolicyFile = filepath.Join(kaiDir, "rules", "ci-policy.yaml")
 // Version is the current kai CLI default; release builds override it via
 // -ldflags "-X main.Version=<tag>" (see .github/workflows/ci.yml).
 var Version = "0.34.5"
+
+// GitSHA is the commit this binary was built from, injected by the
+// Makefile. Empty or "unknown" means a release build: the release
+// pipeline does not set it.
+//
+// It exists because a locally-built binary and a released one can
+// report the SAME version — the tag names the last release, not what is
+// in the working tree. Without this, `kai --version` cannot distinguish
+// a build carrying unreleased fixes from the release that lacks them,
+// and `kai update` silently replaces one with the other.
+var GitSHA = ""
+
+// lastJSONLine returns the final line of output, so a leading
+// "Update available: ..." banner cannot break the parse.
+func lastJSONLine(out []byte) []byte {
+	lines := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
+	return lines[len(lines)-1]
+}
+
+// kitIsDevBuild reports whether the installed kit was built from source.
+//
+// Asked by running `kit version`: kit stamps its own commit into that
+// string the same way kai now does, so a "+<sha>" marks a local build.
+// Failing to answer is treated as "not a dev build" — the refresh is
+// the long-standing default and should not be blocked by a probe that
+// could not run.
+func kitIsDevBuild() bool {
+	bin, err := exec.LookPath("kit")
+	if err != nil {
+		return false
+	}
+	out, err := exec.Command(bin, "version", "--json").Output()
+	if err != nil {
+		return false
+	}
+	var v struct {
+		Version string `json:"version"`
+		GitSHA  string `json:"git_sha"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(lastJSONLine(out)), &v) != nil {
+		return false
+	}
+	// A dirty tree is unambiguous on its own.
+	if strings.Contains(v.GitSHA, "dirty") {
+		return true
+	}
+	// Otherwise compare against what the launcher recorded installing.
+	// `make install` swaps the binary without touching that sidecar, so
+	// a disagreement means the kit on disk is not the one the launcher
+	// downloaded. A missing record means the launcher never installed
+	// one, which is equally not-ours-to-replace.
+	rec := kitlauncher.Default().RecordedVersion()
+	if rec == "" {
+		return true
+	}
+	return !strings.Contains(rec, v.Version)
+}
+
+// isDevBuild reports whether this binary came from a local build rather
+// than a release.
+func isDevBuild() bool {
+	return GitSHA != "" && GitSHA != "unknown"
+}
+
+// versionString is what the user sees: the plain version for a release,
+// and version+sha for a local build, so the two are never confusable.
+func versionString() string {
+	if isDevBuild() {
+		return Version + "+" + GitSHA
+	}
+	return Version
+}
 
 // verbose enables debug output when --verbose/-v flag or KAI_VERBOSE env var is set
 var verbose bool
@@ -181,7 +253,7 @@ var rootCmd = &cobra.Command{
 	Use:     "kai",
 	Short:   "Kai - semantic, intent-based version control",
 	Long:    `Kai is a local CLI that creates semantic snapshots from Git refs, computes changesets, classifies change types, and generates intent sentences.`,
-	Version: Version,
+	Version: versionString(),
 	// Bare `kai` prints help. The interactive coding experience is
 	// launched explicitly via `kai code`, which resolves (and
 	// self-installs) the managed `kit` binary and hands off to it
@@ -2398,7 +2470,7 @@ var versionCmd = &cobra.Command{
 			fmt.Println(base)
 			return
 		}
-		fmt.Println("kai " + Version)
+		fmt.Println("kai " + versionString())
 	},
 }
 
@@ -4236,6 +4308,7 @@ func init() {
 	rootCmd.AddCommand(cloneCmd)
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().Bool("check", false, "Check for updates without installing")
+	updateCmd.Flags().Bool("force", false, "Replace a source-built kai with the released binary (reverts unmerged changes)")
 
 	liveCmd.GroupID = groupRemote
 	liveCmd.AddCommand(liveStatusCmd)
@@ -15538,6 +15611,30 @@ func interactivePushOnboarding(remoteName string) (*remote.Client, error) {
 // Creating a ref that doesn't exist remotely, or re-pushing the value already
 // there, is always fine. Otherwise the push is rejected unless the remote head
 // is exactly what we last synced (a true fast-forward from our base).
+// guardedByFastForward reports whether the F-13 guard applies to a ref.
+//
+// The guard exists to stop a contended push silently clobbering another
+// user's work. That is the right thing to protect for snap.latest,
+// which records what somebody MADE: overwriting it loses a snapshot.
+//
+// cs.latest is not that. It means "the newest changeset in this repo,
+// from any source", carries no ancestry, and its history is the
+// append-only log beside it. Crucially the SERVER advances it too —
+// every SSH git-receive-pack force-sets it
+// (kailab/sshserver/receive_pack.go) — so the tracking ref this guard
+// compares against goes stale through no action of the user's. Once
+// that happens the guard fires on every subsequent push, forever, and
+// since the pre-push hook runs `kai push` to trigger CI, CI silently
+// stops firing on ordinary git pushes for that repo.
+//
+// Both remedies it offers make it worse: `kai pull --force`
+// materializes the remote snapshot over the working tree, and
+// `kai push --force` overwrites the remote. Guarding a derived pointer
+// buys nothing and costs the CI trigger, so it is excluded.
+func guardedByFastForward(name string) bool {
+	return name == "snap.latest"
+}
+
 func isNonFastForwardPush(remoteTarget, trackedTarget, newTarget []byte) bool {
 	if len(remoteTarget) == 0 {
 		return false // not on the remote yet — creating it is fine
@@ -16380,7 +16477,7 @@ func runPush(cmd *cobra.Command, args []string) error {
 	// it can be unit-tested without a live remote.
 	if !pushForce {
 		for _, r := range validRefs {
-			if r.Name != "snap.latest" && r.Name != "cs.latest" {
+			if !guardedByFastForward(r.Name) {
 				continue
 			}
 			remoteRef, _ := client.GetRef(r.Name)
@@ -16394,6 +16491,23 @@ func runPush(cmd *cobra.Command, args []string) error {
 			}
 			if isNonFastForwardPush(remoteTarget, trackedTarget, r.TargetID) {
 				fmt.Fprintf(os.Stderr, "\r\033[K")
+				// Two different situations reach this point and they
+				// need different advice. Reporting both as "advanced
+				// since you last synced" is wrong for the second: a
+				// clone that has NEVER synced has not diverged, it
+				// simply has no basis for comparison, and telling
+				// someone their push conflicts when they have never
+				// pushed sends them looking for a conflict that does
+				// not exist.
+				if len(trackedTarget) == 0 {
+					return fmt.Errorf(
+						"push rejected: this clone has never synced with the remote, so there is no way to tell whether your %s (%s) or the remote's (%s) is newer.\n"+
+							"  Run 'kai pull' once to establish the baseline — after that, pushes are compared against it normally.\n"+
+							"  Or 'kai push --force' if you know your local snapshot is the one to keep.",
+						r.Name,
+						hex.EncodeToString(r.TargetID)[:12],
+						hex.EncodeToString(remoteTarget)[:12])
+				}
 				return fmt.Errorf(
 					"push rejected: remote %s has advanced to %s since you last synced — your push is not a fast-forward.\n"+
 						"  Run 'kai pull' to reconcile, or 'kai push --force' to overwrite the remote.",
@@ -16997,9 +17111,48 @@ func runPull(cmd *cobra.Command, args []string) error {
 		if tracked, _ := refMgr.Get("remote/origin/snap.latest"); tracked != nil {
 			trackedTarget = tracked.TargetID
 		}
+		if len(trackedTarget) == 0 {
+			// FIRST SYNC. There is no baseline, so nothing can be proved
+			// either way — and refusing outright was a dead end rather
+			// than a safeguard: push refuses without a tracking ref, pull
+			// refused without a tracking ref, and the ref only appears
+			// after one of them succeeds. Both errors pointed at the
+			// other, so a clone that had never synced could never start.
+			// Every repo whose tips are published by GitHub ingest lands
+			// in exactly that state.
+			//
+			// What breaks the deadlock is the BASELINE, and nothing else.
+			// Recording it is safe; advancing the tip and writing the
+			// remote's files over the working tree is a separate act with
+			// a separate cost, and doing both here would replace a dead
+			// end with a destructive default — on a first sync the remote
+			// may well be OLDER, and materializing it silently reverts
+			// local work. (Observed: a first sync rewrote 11 files and
+			// removed ~2900 lines of that day's work; recoverable only
+			// because the tree happened to be committed.)
+			//
+			// So: record the baseline, leave the tip and the files alone,
+			// and hand the decision back. With a baseline in place both
+			// verbs work normally — push keeps local, pull --force takes
+			// the remote — and each says plainly what it will do.
+			if err := refMgr.Set("remote/origin/snap.latest", snapRef.Target, ref.KindSnapshot); err != nil {
+				return fmt.Errorf("recording sync baseline: %w", err)
+			}
+			fmt.Printf("  First sync: recorded the remote head (%s) as this clone's baseline.\n", remoteDigest[:12])
+			fmt.Println("  Your snapshot and working tree are untouched — on a first sync there is no")
+			fmt.Println("  way to tell which side is newer, so neither is assumed.")
+			fmt.Println()
+			fmt.Printf("  Local snap.latest:  %s\n", localDigest[:12])
+			fmt.Printf("  Remote snap.latest: %s\n", remoteDigest[:12])
+			fmt.Println()
+			fmt.Println("  To keep YOUR snapshot:   kai push")
+			fmt.Println("  To take the REMOTE's:    kai pull --force   (overwrites files that differ)")
+			return nil
+		}
 		if !isFastForwardPull(localRef.TargetID, trackedTarget, snapRef.Target) {
-			// Local has snapshots beyond what we last synced; pulling would
-			// orphan them. Make the user reconcile explicitly.
+			// A real divergence: we DO have a baseline and our head has
+			// moved past it. Pulling would orphan that work, so the user
+			// reconciles explicitly.
 			fmt.Printf("  Warning: local snap.latest (%s) differs from remote (%s)\n",
 				localDigest[:12], remoteDigest[:12])
 			fmt.Println("  You have unpushed local snapshots that will become orphaned.")
@@ -21049,6 +21202,26 @@ func runCIValidatePlan(cmd *cobra.Command, args []string) error {
 // runUpdate downloads and installs the latest kai binary from GitHub releases.
 func runUpdate(cmd *cobra.Command, args []string) error {
 	checkOnly, _ := cmd.Flags().GetBool("check")
+	updateForce, _ := cmd.Flags().GetBool("force")
+
+	// Refuse to overwrite a local build unless told to.
+	//
+	// A source build and a release can report the same version — the tag
+	// names the last release, not what is in the tree — so downloading
+	// over one reverts every unreleased change with nothing on screen to
+	// say so. The failure is invisible in the worst way: the version
+	// number afterwards is identical, so a fix that was working simply
+	// stops, and looks like it never worked.
+	if isDevBuild() && !checkOnly && !updateForce {
+		fmt.Printf("Refusing to update: this kai was built from source (%s).\n\n", versionString())
+		fmt.Println("  A release binary can carry the same version number as your build")
+		fmt.Println("  while lacking whatever is not merged yet, so this would revert")
+		fmt.Println("  those changes silently.")
+		fmt.Println()
+		fmt.Println("  To refresh from source:  cd <kai-cli> && make install")
+		fmt.Println("  To replace it anyway:    kai update --force")
+		return nil
+	}
 
 	// Determine OS and architecture
 	goos := runtime.GOOS
@@ -21058,7 +21231,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	// GitHub releases URL
 	downloadURL := fmt.Sprintf("https://github.com/kaicontext/kai-cli/releases/latest/download/%s.gz", binaryName)
 
-	fmt.Printf("Current version: %s\n", Version)
+	fmt.Printf("Current version: %s\n", versionString())
 
 	// Check latest version from GitHub API
 	latestResp, err := http.Get("https://api.github.com/repos/kaicontext/kai-cli/releases/latest")
@@ -21080,7 +21253,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			// launcher left a stale kit in place with no hint
 			// (2026-07-14 fresh-install dogfood: launcher 0.35.1,
 			// kit stuck one release behind).
-			refreshKit(cmd)
+			refreshKit(cmd, checkOnly)
 			return nil
 		}
 		fmt.Printf("Latest version:  %s\n", latestVersion)
@@ -21185,7 +21358,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	fmt.Println("Updated successfully!")
 	fmt.Println("Run 'kai --version' to verify.")
 
-	refreshKit(cmd)
+	refreshKit(cmd, checkOnly)
 	return nil
 }
 
@@ -21193,7 +21366,29 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 // with kai. Best-effort: a kit refresh failure is a warning, not a
 // fatal error. Called on EVERY `kai update` path — including
 // "launcher already latest" — because kit versions independently.
-func refreshKit(cmd *cobra.Command) {
+//
+// Refuses two cases, both of which used to overwrite silently:
+//
+//   - checkOnly. `kai update --check` documents itself as "check for
+//     updates without installing", and it installed. Observed
+//     2026-08-19: --check replaced a source-built kit carrying
+//     unreleased work with the release, and because kit's version had
+//     not changed the output said 0.33.154 before and after.
+//
+//   - a source-built kit. Same reasoning as the kai guard above: a
+//     release can share the version number of a local build while
+//     lacking whatever is unmerged, so replacing one with the other
+//     reverts work with nothing on screen to show it.
+func refreshKit(cmd *cobra.Command, checkOnly bool) {
+	if checkOnly {
+		fmt.Println("(--check: not refreshing kit)")
+		return
+	}
+	if kitIsDevBuild() {
+		fmt.Println("Skipping kit refresh: kit was built from source.")
+		fmt.Println("  Refresh it with: cd <kai-tui> && make install")
+		return
+	}
 	fmt.Println("Refreshing kit (TUI agent)...")
 	l := kitlauncher.Default()
 	if _, err := l.Refresh(cmd.Context()); err != nil {

@@ -33,7 +33,21 @@ endif
 # falls back to that default outside a tagged checkout. Release CI still
 # overrides via its own -ldflags.
 VERSION ?= $(patsubst v%,%,$(shell git describe --tags --abbrev=0 2>/dev/null))
-LDFLAGS := $(if $(VERSION),-X main.Version=$(VERSION))
+
+# GIT_SHA marks a build as local. A binary built from source and a
+# release binary can carry the SAME version number while behaving
+# differently — the tag names the last release, not what is in the tree —
+# and `kai update` will happily replace the former with the latter, with
+# nothing on screen to show that anything changed. Stamping the commit
+# (and .dirty when the tree or the linked kai-engine has uncommitted
+# changes) is what makes a dev build identifiable, and is what lets
+# `kai update` refuse to clobber one. Mirrors kai-tui's Makefile.
+GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)
+DIRTY := $(shell (git status --porcelain 2>/dev/null; git -C ../kai-engine status --porcelain 2>/dev/null) | head -1)
+ifneq ($(strip $(DIRTY)),)
+GIT_SHA := $(GIT_SHA).dirty.$(shell date +%m%d-%H%M)
+endif
+LDFLAGS := $(if $(VERSION),-X main.Version=$(VERSION)) -X main.GitSHA=$(GIT_SHA)
 
 build:
 	CGO_ENABLED=1 go build -ldflags="$(LDFLAGS)" -o $(KAI_BIN) ./cmd/kai
