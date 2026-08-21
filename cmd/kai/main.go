@@ -175,7 +175,15 @@ type updateCheck struct {
 }
 
 // printUpdateNotice reads the cached update check and prints a notice if a newer version exists.
+//
+// KAI_NO_UPDATE_NOTICE silences it, same as kit: a parent that merges
+// this stderr into its own output (the desktop app, kit invoking kai as
+// a subprocess) turns the banner into the first line of every failure
+// message, burying the real error.
 func printUpdateNotice() {
+	if os.Getenv("KAI_NO_UPDATE_NOTICE") != "" {
+		return
+	}
 	data, err := os.ReadFile(updateCheckFile)
 	if err != nil {
 		return
