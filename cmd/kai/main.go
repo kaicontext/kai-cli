@@ -21241,6 +21241,24 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Refuse to self-update from inside an app bundle, force or not.
+	//
+	// The desktop app ships this binary in Kai.app/Contents/Resources.
+	// Replacing it in place is a write into a codesigned .app — macOS
+	// answers with an App Management permission prompt attributed to
+	// the app, and "succeeding" would break the bundle's signature and
+	// desync the CLI from the app that carries it. Bundled copies are
+	// updated by app releases, nothing else.
+	if self, err := os.Executable(); err == nil && !checkOnly {
+		if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil && strings.Contains(resolved, ".app/Contents/") {
+			fmt.Printf("Refusing to update: this kai is bundled inside an app (%s).\n\n", resolved)
+			fmt.Println("  Bundled copies are replaced by app updates — update the app instead.")
+			fmt.Println("  A standalone kai can be installed with:")
+			fmt.Println("    curl -sSL https://get.kaicontext.com | sh")
+			return nil
+		}
+	}
+
 	// Determine OS and architecture
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
