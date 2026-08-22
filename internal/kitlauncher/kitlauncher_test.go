@@ -770,3 +770,29 @@ func TestRun_ReinstallsWhenStale(t *testing.T) {
 		t.Errorf("sidecar after update = %q, want 9.9.9", string(bytes.TrimSpace(v)))
 	}
 }
+
+// KAI_KIT_BIN outranks the managed copy: the desktop's bundled pair
+// must actually be a pair. Broken values error loudly.
+func TestResolveKitPath_EnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	kit := filepath.Join(dir, "kit-override")
+	if err := os.WriteFile(kit, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A managed copy exists too — the override must still win.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, kitBinaryName), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAI_KIT_BIN", kit)
+	l := &Launcher{BinDir: bin}
+	got, err := l.resolveKitPath()
+	if err != nil || got != kit {
+		t.Fatalf("override lost: %q %v", got, err)
+	}
+
+	t.Setenv("KAI_KIT_BIN", filepath.Join(dir, "missing"))
+	if _, err := l.resolveKitPath(); err == nil {
+		t.Fatal("a broken override must error, not fall back")
+	}
+}

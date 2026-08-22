@@ -225,6 +225,21 @@ func (l *Launcher) Run(ctx context.Context, args []string) (int, error) {
 // ("needs repair"), never silently skipped. A total miss is the typed
 // ErrKitNotFound with an empty path, which is the install trigger.
 func (l *Launcher) resolveKitPath() (string, error) {
+	// An explicit override outranks everything. The desktop app ships
+	// kai+kit as a matched pair and points this at its bundled kit —
+	// before the override existed, a months-old managed copy in
+	// ~/.kai/bin silently won over the pair (2026-08-22: every robot
+	// dispatch with a new model slug 400'd at the wrong endpoint,
+	// because the stale kit predated the routing that understands
+	// them). Set-but-broken is a loud error, not a silent fallback:
+	// whoever set it meant it.
+	if p := os.Getenv("KAI_KIT_BIN"); p != "" {
+		info, err := os.Stat(p)
+		if err != nil || info.IsDir() || info.Mode().Perm()&0o100 == 0 {
+			return "", fmt.Errorf("KAI_KIT_BIN=%s: not an executable kit binary", p)
+		}
+		return p, nil
+	}
 	managed := filepath.Join(l.BinDir, kitBinaryName)
 	if info, err := os.Stat(managed); err == nil {
 		if info.IsDir() {
