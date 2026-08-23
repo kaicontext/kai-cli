@@ -4588,9 +4588,16 @@ var skipModulesFile bool
 var initExplain bool
 var initGitBridge bool
 var initForce bool
+
 var initAssumeYes bool
 var initOrg string
 var initEmail string
+
+// initNoRemote: local-only init. Pre-existing user flag; kai spawn now
+// ALSO passes it for every ephemeral workspace — the auto-repo path
+// used to name a server repo after each /tmp spawn dir and create it
+// (kai-correction-<nano> × 2,470 by the time anyone looked,
+// 2026-08-23).
 var initNoRemote bool
 
 // initOrgOverride returns an explicit org slug from --org or KAI_ORG, else "".

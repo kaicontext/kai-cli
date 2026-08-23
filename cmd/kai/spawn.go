@@ -473,7 +473,12 @@ func materializeFirst(srcRepo, dst, snapHex, wsName, agentName string, rem *remo
 	// happens to contain. Without --force, every spawn from a repo
 	// whose source includes kai.projects.yaml fails preflight with a
 	// confusing "refusing to init" error (May 2026 dogfood case).
-	if err := runIn(dst, "init", "--force"); err != nil {
+	// --no-remote: an ephemeral spawn workspace must NOT create a
+	// server repo named after its /tmp directory — that minted one org
+	// repo per orchestrator task (kai-correction-<nano>, 2,470 of them
+	// by the time it was noticed). Remote config, when syncing is
+	// wanted, is copied from the parent below.
+	if err := runIn(dst, "init", "--force", "--no-remote"); err != nil {
 		return fmt.Errorf("kai init: %w", err)
 	}
 	// Disconnect --sync none spawns from live sync. Otherwise step 6
