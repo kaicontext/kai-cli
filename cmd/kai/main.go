@@ -3277,7 +3277,7 @@ func checkHook(hookName, currentScript string) {
 				fmt.Printf("  ✗ %s hook: install FAILED: %v\n", hookName, err)
 				return
 			}
-			if err := os.WriteFile(path, []byte(currentScript), 0755); err != nil {
+			if err := writeHookAtomic(path, currentScript); err != nil {
 				fmt.Printf("  ✗ %s hook: install FAILED: %v\n", hookName, err)
 				return
 			}
@@ -3298,7 +3298,7 @@ func checkHook(hookName, currentScript string) {
 		return
 	}
 	if doctorFix {
-		if err := os.WriteFile(path, []byte(currentScript), 0755); err != nil {
+		if err := writeHookAtomic(path, currentScript); err != nil {
 			fmt.Printf("  ✗ %s hook: stale kai-managed hook, upgrade FAILED: %v\n", hookName, err)
 			return
 		}
@@ -3656,7 +3656,7 @@ func installOrUpgradeBridgeHook(hookName, script string) {
 			}
 			return
 		}
-		if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		if err := writeHookAtomic(path, script); err != nil {
 			if !initMode {
 				fmt.Printf("Warning: could not upgrade %s hook: %v\n", hookName, err)
 			}
@@ -3667,7 +3667,7 @@ func installOrUpgradeBridgeHook(hookName, script string) {
 		}
 		return
 	}
-	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+	if err := writeHookAtomic(path, script); err != nil {
 		if !initMode {
 			fmt.Printf("Warning: could not install %s hook: %v\n", hookName, err)
 		}
@@ -3693,8 +3693,24 @@ func upgradeIfOldKaiHook(path, newScript string) {
 	if strings.Contains(s, currentTag) {
 		return // already current
 	}
-	_ = os.WriteFile(path, []byte(newScript), 0755)
+	_ = writeHookAtomic(path, newScript)
 }
+// writeHookAtomic replaces a git hook via temp-file + rename. A plain
+// os.WriteFile TRUNCATES in place — and a hook can be rewritten while
+// a shell is still executing it (the background `kai push` this very
+// hook spawns runs the upgrade path). Shells read scripts
+// incrementally, so an in-place truncate makes the running shell
+// execute garbage from the middle of the new bytes ("line 26: l:
+// command not found", 2026-08-23). rename() swaps the inode; the
+// running shell keeps the old one to its end.
+func writeHookAtomic(path, script string) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(script), 0755); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 
 func runHookInstall(cmd *cobra.Command, args []string) error {
 	hookPath := filepath.Join(".git", "hooks", "pre-commit")
@@ -3719,7 +3735,7 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			// Always upgrade kai-managed hooks to the current safe version.
-			if err := os.WriteFile(hookPath, []byte(preCommitHookScript), 0755); err != nil {
+			if err := writeHookAtomic(hookPath, preCommitHookScript); err != nil {
 				if !initMode {
 					fmt.Printf("Warning: could not upgrade pre-commit hook: %v\n", err)
 				}
@@ -3728,7 +3744,7 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 			}
 		}
 	} else {
-		if err := os.WriteFile(hookPath, []byte(preCommitHookScript), 0755); err != nil {
+		if err := writeHookAtomic(hookPath, preCommitHookScript); err != nil {
 			return fmt.Errorf("writing pre-commit hook: %w", err)
 		}
 		if !initMode {
@@ -3744,7 +3760,7 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 				fmt.Println("Note: pre-push hook already exists (not managed by Kai). Skipping.")
 			}
 		} else {
-			if err := os.WriteFile(pushHookPath, []byte(prePushHookScript), 0755); err != nil {
+			if err := writeHookAtomic(pushHookPath, prePushHookScript); err != nil {
 				if !initMode {
 					fmt.Printf("Warning: could not upgrade pre-push hook: %v\n", err)
 				}
@@ -3753,7 +3769,7 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 			}
 		}
 	} else {
-		if err := os.WriteFile(pushHookPath, []byte(prePushHookScript), 0755); err != nil {
+		if err := writeHookAtomic(pushHookPath, prePushHookScript); err != nil {
 			if !initMode {
 				fmt.Printf("Warning: could not install pre-push hook: %v\n", err)
 			}
@@ -6089,7 +6105,7 @@ func installGitHook() error {
 # Captures a semantic snapshot with the commit message
 kai capture -m "$(git log -1 --format=%s)" 2>/dev/null &
 `
-	if err := os.WriteFile(hookPath, []byte(hook), 0755); err != nil {
+	if err := writeHookAtomic(hookPath, hook); err != nil {
 		return err
 	}
 	return nil
