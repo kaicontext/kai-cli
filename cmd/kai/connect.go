@@ -26,7 +26,7 @@ var connectDisconnect bool
 
 var connectCmd = &cobra.Command{
 	Use:   "connect [provider]",
-	Short: "Connect external services (gmail) to your Kai account",
+	Short: "Connect external services (gmail, calendar) to your Kai account",
 	Long: `Link an external service so Kai's chat and robot can use it as data.
 
 With no provider, lists every connector and its status.
@@ -34,6 +34,7 @@ With no provider, lists every connector and its status.
 Examples:
   kai connect                      # list connectors
   kai connect gmail                # link Gmail (opens browser consent)
+  kai connect calendar             # link Google Calendar
   kai connect gmail --disconnect   # revoke the link`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runConnect,
