@@ -2878,7 +2878,7 @@ out-of-date kai-managed git hooks).`,
 }
 
 const kaiHookMarker = "# kai-managed-hook"
-const kaiHookVersion = "v6"
+const kaiHookVersion = "v7"
 
 // All hook scripts early-exit when KAI_BRIDGE_INPROGRESS=1. Set by kai itself
 // when it is the one driving the git operation (e.g. milestone→commit bridge),
@@ -2911,12 +2911,19 @@ exit 0
 `
 
 // prePushHookScript is the same defensive shape as preCommitHookScript.
+// v7: `kai push` runs in the BACKGROUND so `git push` returns immediately —
+// a graph sync of any size adds zero latency to git. Output lands in
+// <kai-dir>/push.log; a failure is announced on the controlling terminal
+// (best-effort, /dev/tty) since git has long since returned. A pid-checked
+// lock prevents concurrent pushes from piling up: while one background sync
+// is in flight, later git pushes skip theirs — the next push (or a manual
+// `kai push`) re-syncs, and the incremental edge watermark makes that cheap.
 const prePushHookScript = `#!/bin/sh
 ` + kaiHookMarker + ` ` + kaiHookVersion + `
 # Auto-installed by 'kai init' / 'kai hook install'.
-# Never blocks git push (always exits 0). But unlike older versions it
-# does NOT swallow 'kai push' output: a failed CI trigger is printed so
-# you find out immediately, instead of CI going silently dark for days.
+# Never blocks git push (always exits 0). v7 runs 'kai push' in the
+# background — git returns immediately; sync/CI-trigger output goes to
+# <kai-dir>/push.log and failures are announced on the terminal.
 # Remove with: kai hook uninstall
 
 if [ "${KAI_BRIDGE_INPROGRESS:-}" = "1" ]; then
@@ -2925,17 +2932,35 @@ fi
 if ! command -v kai >/dev/null 2>&1; then
   exit 0
 fi
-if [ ! -d .git/kai ] && [ ! -d .kai ]; then
+if [ -d .kai ]; then
+  KAI_HOOK_DIR=.kai
+elif [ -d .git/kai ]; then
+  KAI_HOOK_DIR=.git/kai
+else
   exit 0
 fi
-# Quiet on success, loud on failure — never block the git push.
-if out=$(kai push 2>&1); then
-  :
-else
-  printf 'kai: CI trigger FAILED — git push succeeded, but CI was NOT triggered.\n' >&2
-  printf '%s\n' "$out" | sed 's/^/     /' >&2
-  printf "     run 'kai doctor' to diagnose, then 'kai push' again. (git push not blocked)\n" >&2
+
+LOCK="$KAI_HOOK_DIR/push.lock"
+# Reap a stale lock left by a killed background push; skip if one is live.
+if [ -d "$LOCK" ]; then
+  LOCK_PID=$(cat "$LOCK/pid" 2>/dev/null)
+  if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+    exit 0
+  fi
+  rm -rf "$LOCK"
 fi
+mkdir "$LOCK" 2>/dev/null || exit 0
+
+# Background the sync. Redirect all fds so git does not wait on the child.
+(
+  if kai push > "$KAI_HOOK_DIR/push.log" 2>&1; then
+    :
+  else
+    { printf 'kai: background push/CI trigger FAILED — see %s (git push was not affected; run kai push to retry)\n' "$KAI_HOOK_DIR/push.log" > /dev/tty; } 2>/dev/null || true
+  fi
+  rm -rf "$LOCK"
+) < /dev/null > /dev/null 2>&1 &
+echo $! > "$LOCK/pid" 2>/dev/null || true
 exit 0
 `
 
@@ -16594,71 +16619,83 @@ func runPush(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Push the FULL edge set for the pushed graph.
+	// Push the edge DELTA since the last successful push to this remote.
 	//
 	// Kai is a graph database: an edge is an object that belongs on the wire, just
-	// like a node. We push every edge whose source is a node in the closure we just
-	// sent — every edge type (DEFINES_IN, HAS_FILE, CALLS, IMPORTS, MODIFIES, …) and
-	// every context — so the remote graph is object-for-object identical to local.
+	// like a node — every edge type (DEFINES_IN, HAS_FILE, CALLS, IMPORTS,
+	// MODIFIES, …) and every context, so the remote graph is object-for-object
+	// identical to local.
 	//
-	// (Previously this only sent IMPORTS/TESTS/CALLS scoped to snapshots, which
-	// silently dropped DEFINES_IN, HAS_FILE and the rest — the remote ended up with
-	// all nodes but zero edges.)
-	var edgesToPush []remote.EdgeData
-	edgeSeen := make(map[string]bool)
-	var edgeReadErr error
-	for _, d := range allDigests {
-		fromEdges, err := db.GetAllEdgesFrom(d)
-		if err != nil {
-			// The local edges table was already read for the closure above, so a
-			// failure here is unexpected. Surface it (once, below) rather than
-			// silently shipping an incomplete graph — but don't abort the push,
-			// whose objects and refs already landed and whose edges are
-			// supplementary (PushEdges failures are likewise non-fatal).
-			edgeReadErr = err
-			continue
-		}
-		for _, edge := range fromEdges {
-			key := hex.EncodeToString(edge.Src) + "|" + string(edge.Type) + "|" +
-				hex.EncodeToString(edge.Dst) + "|" + hex.EncodeToString(edge.At)
-			if edgeSeen[key] {
-				continue
+	// Historically this re-sent the FULL edge set on every push. The edges table
+	// only grows, so on a long-lived store that meant ~316k edges = 159 sequential
+	// 2000-edge batches ≈ 7 minutes riding the git pre-push hook, re-paid on every
+	// push. The table is append-only (INSERT OR IGNORE, never REPLACE/VACUUM), so
+	// rowids are stable and a per-remote rowid high-water mark identifies exactly
+	// the edges this remote has never been offered. The watermark only advances
+	// past batches the server acknowledged, so a failed or killed push resumes
+	// where it left off on the next run. `kai push --force` ignores the watermark
+	// and resends everything (repair path, e.g. after a server-side wipe).
+	edgeWatermarkPath := filepath.Join(kaiDir, "edges-pushed."+remoteName)
+	var edgeWatermark int64
+	if !pushForce {
+		if b, err := os.ReadFile(edgeWatermarkPath); err == nil {
+			if v, perr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); perr == nil && v > 0 {
+				edgeWatermark = v
 			}
-			edgeSeen[key] = true
-			edgesToPush = append(edgesToPush, remote.EdgeData{
-				Src:  hex.EncodeToString(edge.Src),
-				Type: string(edge.Type),
-				Dst:  hex.EncodeToString(edge.Dst),
-				At:   hex.EncodeToString(edge.At),
-			})
 		}
 	}
+	if edgeWatermark > 0 {
+		// A watermark above MAX(rowid) means the edges table was rebuilt (e.g. a
+		// schema migration renumbered rowids); the mark is meaningless — resend all.
+		if maxRowid, err := db.MaxEdgeRowid(); err == nil && edgeWatermark > maxRowid {
+			debugf("push: edge watermark %d exceeds max rowid %d — table rebuilt, resending all edges", edgeWatermark, maxRowid)
+			edgeWatermark = 0
+		}
+	}
+	newEdges, edgeRowids, edgeReadErr := db.GetEdgesAfterRowid(edgeWatermark)
 	if edgeReadErr != nil {
-		fmt.Fprintf(os.Stderr, "\nwarning: some local edges could not be read (%v); the pushed graph may be missing edges\n", edgeReadErr)
+		// Don't abort the push, whose objects and refs already landed and whose
+		// edges are supplementary (PushEdges failures are likewise non-fatal) —
+		// but surface it rather than silently shipping an incomplete graph.
+		fmt.Fprintf(os.Stderr, "\nwarning: local edges could not be read (%v); the pushed graph may be missing edges\n", edgeReadErr)
+	}
+	var edgesToPush []remote.EdgeData
+	for _, edge := range newEdges {
+		edgesToPush = append(edgesToPush, remote.EdgeData{
+			Src:  hex.EncodeToString(edge.Src),
+			Type: string(edge.Type),
+			Dst:  hex.EncodeToString(edge.Dst),
+			At:   hex.EncodeToString(edge.At),
+		})
 	}
 
 	if len(edgesToPush) > 0 {
 		if !initMode {
 			fmt.Fprintf(os.Stderr, "\rPushing to %s... %d edges", remoteName, len(edgesToPush))
 		}
-		debugf("Pushing %d edges...", len(edgesToPush))
+		debugf("Pushing %d edges (rowid > %d)...", len(edgesToPush), edgeWatermark)
 		result, err := client.PushEdges(edgesToPush)
+		if result != nil && result.Sent > 0 {
+			// Advance the watermark past exactly the edges the server
+			// acknowledged — on success that is all of them.
+			_ = os.WriteFile(edgeWatermarkPath, []byte(strconv.FormatInt(edgeRowids[result.Sent-1], 10)), 0644)
+		}
 		if err != nil {
 			// Edges are supplementary, so a failure here doesn't fail the
 			// push — but it must be visible. This warning used to be
 			// debugf-only, so a store whose edges timed out printed a clean
-			// "Pushed to origin." while shipping an incomplete graph, and a
-			// re-push says "Already up to date" rather than retrying. Match
-			// the edgeReadErr warning above.
+			// "Pushed to origin." while shipping an incomplete graph.
 			landed := 0
 			if result != nil {
 				landed = result.Inserted
 			}
-			fmt.Fprintf(os.Stderr, "\n\033[Kwarning: pushed %d of %d graph edges (%v); the remote graph is incomplete — a plain re-push reports \"Already up to date\", so retry with: kai push --force\n",
+			fmt.Fprintf(os.Stderr, "\n\033[Kwarning: pushed %d of %d graph edges (%v); the remote graph is incomplete — re-run 'kai push' to send the remaining edges\n",
 				landed, len(edgesToPush), err)
 		} else {
 			debugf("%d edges inserted", result.Inserted)
 		}
+	} else {
+		debugf("push: edges already up to date (watermark %d)", edgeWatermark)
 	}
 
 	// Push authorship data for all snapshots being pushed
