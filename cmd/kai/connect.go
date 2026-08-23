@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,7 +23,10 @@ import (
 // server observes the grant complete. The same endpoints back the
 // desktop's Connectors UI — this is just the terminal door to them.
 
-var connectDisconnect bool
+var (
+	connectDisconnect bool
+	connectAccount    string
+)
 
 var connectCmd = &cobra.Command{
 	Use:   "connect [provider]",
@@ -35,13 +39,15 @@ Examples:
   kai connect                      # list connectors
   kai connect gmail                # link Gmail (opens browser consent)
   kai connect calendar             # link Google Calendar
-  kai connect gmail --disconnect   # revoke the link`,
+  kai connect gmail                # link another Gmail account (they accumulate)
+  kai connect gmail --disconnect --account you@work.com   # revoke one account`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runConnect,
 }
 
 func init() {
 	connectCmd.Flags().BoolVar(&connectDisconnect, "disconnect", false, "revoke the provider's link instead of creating one")
+	connectCmd.Flags().StringVar(&connectAccount, "account", "", "which linked account (email) — required for --disconnect when several are linked")
 	rootCmd.AddCommand(connectCmd)
 }
 
@@ -73,10 +79,18 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 	provider := strings.ToLower(args[0])
 	if connectDisconnect {
-		if _, err := connectorAPI(base, token, http.MethodDelete, "/api/v1/connectors/"+provider, nil); err != nil {
+		path := "/api/v1/connectors/" + provider
+		if connectAccount != "" {
+			path += "?account=" + url.QueryEscape(connectAccount)
+		}
+		if _, err := connectorAPI(base, token, http.MethodDelete, path, nil); err != nil {
 			return err
 		}
-		fmt.Printf("✓ %s disconnected\n", provider)
+		if connectAccount != "" {
+			fmt.Printf("✓ %s (%s) disconnected\n", provider, connectAccount)
+		} else {
+			fmt.Printf("✓ %s disconnected\n", provider)
+		}
 		return nil
 	}
 
@@ -88,6 +102,9 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if consentURL == "" {
 		return fmt.Errorf("server started the connection but returned no consent URL")
 	}
+	// The id names THIS link — the poll must watch it specifically, or
+	// an already-connected older account answers for the new one.
+	linkID, _ := resp["id"].(string)
 
 	fmt.Printf("Opening browser to authorize %s…\n", provider)
 	fmt.Printf("If it doesn't open, visit:\n  %s\n\n", consentURL)
@@ -98,7 +115,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	for time.Now().Before(deadline) {
 		time.Sleep(connectPollInterval)
 		fmt.Print(".")
-		status, email := connectorStatus(base, token, provider)
+		status, email := connectorStatus(base, token, provider, linkID)
 		switch status {
 		case "active":
 			fmt.Println()
@@ -144,7 +161,7 @@ func connectList(base, token string) error {
 
 // connectorStatus returns ("", "") on any polling error — transient
 // network noise during the wait loop must not abort the flow.
-func connectorStatus(base, token, provider string) (status, email string) {
+func connectorStatus(base, token, provider, id string) (status, email string) {
 	resp, err := connectorAPI(base, token, http.MethodGet, "/api/v1/connectors", nil)
 	if err != nil {
 		return "", ""
@@ -152,11 +169,15 @@ func connectorStatus(base, token, provider string) (status, email string) {
 	rows, _ := resp["connectors"].([]any)
 	for _, it := range rows {
 		m, _ := it.(map[string]any)
-		if p, _ := m["provider"].(string); p == provider {
-			status, _ = m["status"].(string)
-			email, _ = m["email"].(string)
-			return status, email
+		if p, _ := m["provider"].(string); p != provider {
+			continue
 		}
+		if rid, _ := m["id"].(string); id != "" && rid != id {
+			continue
+		}
+		status, _ = m["status"].(string)
+		email, _ = m["email"].(string)
+		return status, email
 	}
 	return "", ""
 }
