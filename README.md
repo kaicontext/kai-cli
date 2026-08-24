@@ -266,3 +266,4 @@ See [LICENSE](LICENSE).
 
 - [Slack](https://join.slack.com/t/kailayer/shared_invite/zt-3q8ulczwl-vkZ05GQH~kwudonmH53hGg)
 - [Contributing guidelines](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
