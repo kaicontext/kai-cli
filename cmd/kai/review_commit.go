@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -63,6 +64,19 @@ const rcReviewSystem = "You are a rigorous, READ-ONLY code reviewer. You are giv
 	"NOTE: <one sentence overall assessment>"
 
 const rcMaxAuthorContextBytes = 8 * 1024
+
+// Review time contract. The reviewer rides the shared agent runner, which has
+// grown outer-agent (Jeff) machinery with no bound that applies to a ReadOnly
+// run — its coding-run guards are all skipped, leaving MaxTurns and the CI
+// step's 30-minute timeout as the only limits. A review is worth ~5 minutes of
+// agent time; a run still going past that is thrashing, not reviewing.
+// rcReviewHardDeadline backstops a hung provider call that never reaches a
+// turn boundary (the soft budget is only enforced between turns).
+const (
+	rcReviewSoftBudget    = 5 * time.Minute
+	rcReviewSoftExtension = 2 * time.Minute // granted at most twice → 9m ceiling
+	rcReviewHardDeadline  = 12 * time.Minute
+)
 
 var (
 	reviewCommitFormat string
@@ -120,10 +134,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "kai review-commit %s · %s\n", rcShort(hash), subject)
 	fmt.Fprintf(os.Stderr, "  reconstructing intent (model %s)…\n", model)
+	phase := time.Now()
 	intent, err := rcInferIntent(ctx, prov, model, subject, body, diff)
 	if err != nil {
 		return fmt.Errorf("infer intent: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "  timing: intent=%s\n", time.Since(phase).Round(time.Second))
 
 	authorContext := subject
 	if strings.TrimSpace(body) != "" {
@@ -131,10 +147,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
+	phase = time.Now()
 	raw, err := rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff)
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
 
 	risks, match, note := rcParseReviewOutput(raw)
 	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
@@ -280,6 +298,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	}
 	prompt := "System: " + rcReviewSystem + "\n\n" + user.String()
 
+	ctx, cancel := context.WithTimeout(ctx, rcReviewHardDeadline)
+	defer cancel()
+
 	res, err := agent.Run(ctx, agent.Options{
 		Projects:   set,
 		Workspace:  primary.Path,
@@ -290,6 +311,12 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		EnableBash: false,
 		MaxTurns:   20,
 		Prompt:     prompt,
+
+		// The review's time contract: without this a ReadOnly run has no
+		// wall-clock bound at all (the runner's coding-run guards are skipped
+		// for ReadOnly) and slow harness turns stack up to the CI step timeout.
+		SoftTimeBudget:          rcReviewSoftBudget,
+		SoftTimeBudgetExtension: rcReviewSoftExtension,
 		Hooks: agent.Hooks{
 			OnToolCall: func(name, inputJSON string) {
 				fmt.Fprintf(os.Stderr, "  → %s %s\n", name, rcOneLine(inputJSON, 90))
