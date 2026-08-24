@@ -2878,7 +2878,13 @@ out-of-date kai-managed git hooks).`,
 }
 
 const kaiHookMarker = "# kai-managed-hook"
-const kaiHookVersion = "v7"
+
+// kaiHookVersion MUST stay in lockstep with cmd/kit/main.go in kai-tui —
+// upgradeIfOldKaiHook in each binary rewrites any hook whose version marker
+// differs, so a mismatch makes the two fight and downgrade each other.
+// v8: pre-push appends timestamped entries to push.log (rotating at ~512KB)
+// instead of truncating, and `kai push` maintains push-failed.json.
+const kaiHookVersion = "v8"
 
 // All hook scripts early-exit when KAI_BRIDGE_INPROGRESS=1. Set by kai itself
 // when it is the one driving the git operation (e.g. milestone→commit bridge),
@@ -2921,7 +2927,7 @@ exit 0
 const prePushHookScript = `#!/bin/sh
 ` + kaiHookMarker + ` ` + kaiHookVersion + `
 # Auto-installed by 'kai init' / 'kai hook install'.
-# Never blocks git push (always exits 0). v7 runs 'kai push' in the
+# Never blocks git push (always exits 0). v8 runs 'kai push' in the
 # background — git returns immediately; sync/CI-trigger output goes to
 # <kai-dir>/push.log and failures are announced on the terminal.
 # Remove with: kai hook uninstall
@@ -2951,12 +2957,25 @@ if [ -d "$LOCK" ]; then
 fi
 mkdir "$LOCK" 2>/dev/null || exit 0
 
+# v8: APPEND to push.log with a timestamp per run instead of truncating.
+# The v7 truncate-per-run log meant a wedged repo kept only its newest
+# failure — no way to see when pushes started failing. Rotate once past
+# ~512KB so the log stays bounded.
+PUSH_LOG="$KAI_HOOK_DIR/push.log"
+if [ -f "$PUSH_LOG" ] && [ "$(wc -c < "$PUSH_LOG" 2>/dev/null || echo 0)" -gt 524288 ]; then
+  mv "$PUSH_LOG" "$PUSH_LOG.1" 2>/dev/null || true
+fi
+
 # Background the sync. Redirect all fds so git does not wait on the child.
+# 'kai push' itself maintains <kai-dir>/push-failed.json (cleared on success),
+# which 'kai status' renders — so a failing sync is visible later, not only
+# in the /dev/tty one-liner below that nobody may be watching.
 (
-  if kai push > "$KAI_HOOK_DIR/push.log" 2>&1; then
+  printf '\n=== kai push (pre-push hook) %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" >> "$PUSH_LOG" 2>/dev/null || true
+  if kai push >> "$PUSH_LOG" 2>&1; then
     :
   else
-    { printf 'kai: background push/CI trigger FAILED — see %s (git push was not affected; run kai push to retry)\n' "$KAI_HOOK_DIR/push.log" > /dev/tty; } 2>/dev/null || true
+    { printf 'kai: background push/CI trigger FAILED — see %s (git push was not affected; run kai push to retry)\n' "$PUSH_LOG" > /dev/tty; } 2>/dev/null || true
   fi
   rm -rf "$LOCK"
 ) < /dev/null > /dev/null 2>&1 &
@@ -4499,6 +4518,12 @@ func init() {
 }
 
 func main() {
+	// Clone-gap tripwire: a repo with the tracked .kai.yaml marker but no
+	// local kai state is registered but not syncing. Warn on every command
+	// except init itself (which is the fix) so the gap can't stay silent.
+	if len(os.Args) < 2 || os.Args[1] != "init" {
+		warnIfRegisteredButUninitialized()
+	}
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -4605,7 +4630,100 @@ func initOrgOverride() string {
 	if strings.TrimSpace(initOrg) != "" {
 		return strings.TrimSpace(initOrg)
 	}
-	return strings.TrimSpace(os.Getenv("KAI_ORG"))
+	if v := strings.TrimSpace(os.Getenv("KAI_ORG")); v != "" {
+		return v
+	}
+	// Fall back to the tracked registration marker (.kai.yaml): a fresh clone
+	// of a registered repo carries the org it belongs to, so `kai init` in it
+	// re-links to the same org/repo without --org.
+	if m := readRepoRegistrationMarker(); m != nil {
+		return m.Org
+	}
+	return ""
+}
+
+// repoRegistrationMarkerFile is TRACKED repo state (committed to git), unlike
+// everything under .kai/. It exists because .kai and .git/hooks don't survive
+// `git clone`: three of our own repos were re-cloned in July 2026 and silently
+// dropped out of the kai bridge for five weeks — no local state, no hooks, no
+// error, while the server-side repo froze at its last pre-clone push. The
+// marker is how a fresh clone knows this repo is registered on a kai remote:
+// `kai init` reads it to re-link to the same org/repo, and every kai command
+// warns when the marker is present but local kai state is missing.
+const repoRegistrationMarkerFile = ".kai.yaml"
+
+type repoRegistrationMarker struct {
+	Remote string `yaml:"remote"` // server URL, e.g. https://atlas.kaicontext.com
+	Org    string `yaml:"org"`    // org slug (server tenant)
+	Repo   string `yaml:"repo"`   // repo name under the org
+}
+
+// readRepoRegistrationMarker loads .kai.yaml from the git repo root (or cwd
+// outside git). Returns nil when absent or unparseable — the marker is a hint,
+// never a hard dependency.
+func readRepoRegistrationMarker() *repoRegistrationMarker {
+	root := gitRepoRootOrCwd()
+	data, err := os.ReadFile(filepath.Join(root, repoRegistrationMarkerFile))
+	if err != nil {
+		return nil
+	}
+	var m repoRegistrationMarker
+	if yaml.Unmarshal(data, &m) != nil || m.Repo == "" || m.Org == "" {
+		return nil
+	}
+	return &m
+}
+
+// writeRepoRegistrationMarker records the registration in .kai.yaml at the git
+// root. Only rewrites on content change so repeated inits don't dirty the tree.
+func writeRepoRegistrationMarker(serverURL, org, repo string) {
+	root := gitRepoRootOrCwd()
+	path := filepath.Join(root, repoRegistrationMarkerFile)
+	content := fmt.Sprintf(`# kai repo registration — tracked (commit this file) so a fresh clone knows
+# this repo lives on a kai remote. Local kai state (.kai/, git hooks) does not
+# survive 'git clone'; with this marker, kai detects the gap and 'kai init'
+# re-links to the same org/repo automatically.
+remote: %s
+org: %s
+repo: %s
+`, serverURL, org, repo)
+	if prev, err := os.ReadFile(path); err == nil && string(prev) == content {
+		return
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		debugf("writing %s: %v", repoRegistrationMarkerFile, err)
+	}
+}
+
+// gitRepoRootOrCwd returns the git worktree root, or "." outside a git repo.
+func gitRepoRootOrCwd() string {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return "."
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return "."
+	}
+	return root
+}
+
+// warnIfRegisteredButUninitialized is the clone-gap tripwire: a repo carrying
+// the tracked .kai.yaml marker but no local kai state is a registered repo
+// that stopped syncing (almost always a fresh clone). Say so, loudly, on every
+// kai invocation until it's fixed — the failure this replaces was five silent
+// weeks of a repo not pushing.
+func warnIfRegisteredButUninitialized() {
+	if _, err := os.Stat(kaiDir); err == nil {
+		return // initialized — nothing to warn about
+	}
+	m := readRepoRegistrationMarker()
+	if m == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%s this clone of %s/%s is registered on %s but has no local kai state (fresh clone?)\n",
+		cRed("kai:"), m.Org, m.Repo, m.Remote)
+	fmt.Fprintf(os.Stderr, "     run %s to re-link it (restores hooks and resumes syncing)\n", cBold("kai init"))
 }
 
 func findOrgBySlug(orgs []remote.OrgInfo, slug string) *remote.OrgInfo {
@@ -5549,6 +5667,12 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 		// Create or select repo for current directory
 		if selectedOrg != nil {
 			projectName := remote.DetectProjectName()
+			// A tracked registration marker (.kai.yaml) pins the repo name a
+			// clone should re-link to — the directory name is only a guess
+			// (checkouts get renamed; the marker records what the repo IS).
+			if m := readRepoRegistrationMarker(); m != nil && m.Org == selectedOrg.Slug && m.Repo != "" {
+				projectName = m.Repo
+			}
 
 			// Check if a repo with this name already exists
 			repoExists := false
@@ -5602,6 +5726,11 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 				if err := remote.SetRemote("origin", remoteEntry); err != nil {
 					debugf("setting remote: %v", err)
 				}
+
+				// Record the registration in the TRACKED marker so a future
+				// fresh clone of this repo knows to re-link (see
+				// repoRegistrationMarkerFile).
+				writeRepoRegistrationMarker(serverURL, selectedOrg.Slug, projectName)
 
 				// Push the semantic graph automatically
 				stop := spinner("Pushing to kaicontext.com")
@@ -13053,6 +13182,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// A failing background sync outranks everything below: the server-side
+	// graph (and everything reading it — CI triggers, the repo page) is stale
+	// until a push lands, and the v7+ hook fails silently by design.
+	warnIfPushesFailing(os.Stdout)
+
 	// Verification surface first (Horizon 1): contracts + structural verdicts,
 	// then the working-tree diff below.
 	renderVerificationStatus(os.Stdout)
@@ -15691,6 +15825,12 @@ func guardedByFastForward(name string) bool {
 	return name == "snap.latest"
 }
 
+// serverIngestActor is the ref actor kailab's GitHub ingest writes
+// (ingestActor in kailab/api/ingest_github.go). A guarded ref whose remote
+// value carries this actor was published by the server, not pushed by a user,
+// so overwriting it loses nothing a client made.
+const serverIngestActor = "github-ingest"
+
 func isNonFastForwardPush(remoteTarget, trackedTarget, newTarget []byte) bool {
 	if len(remoteTarget) == 0 {
 		return false // not on the remote yet — creating it is fine
@@ -15778,7 +15918,72 @@ func materializeWorkingTree(db *graph.DB, head []byte, worktreeRoot string) (int
 	return result.FilesWritten, nil
 }
 
+// pushFailedMarkerFile records that pushes to the remote are failing, so the
+// failure is visible OUTSIDE the moment it happens. The v7+ pre-push hook runs
+// `kai push` in the background: its error goes to push.log and a /dev/tty
+// one-liner nobody is watching, which is how a repo once sat wedged for days
+// (non-fast-forward against a server-published tip) while every git push
+// "succeeded". The marker survives until a push succeeds; `kai status` renders
+// it, so the next look at the repo says pushes are failing and since when.
+const pushFailedMarkerFile = "push-failed.json"
+
+type pushFailedMarker struct {
+	FirstFailedAt time.Time `json:"first_failed_at"`
+	LastFailedAt  time.Time `json:"last_failed_at"`
+	LastError     string    `json:"last_error"`
+}
+
+// recordPushOutcome maintains the push-failed marker: cleared on success,
+// written (preserving the first-failure time) on failure. Best-effort — a
+// marker I/O problem must never change the push's own result.
+func recordPushOutcome(pushErr error) {
+	path := filepath.Join(kaiDir, pushFailedMarkerFile)
+	if pushErr == nil {
+		os.Remove(path)
+		return
+	}
+	m := pushFailedMarker{FirstFailedAt: time.Now()}
+	if data, err := os.ReadFile(path); err == nil {
+		var prev pushFailedMarker
+		if json.Unmarshal(data, &prev) == nil && !prev.FirstFailedAt.IsZero() {
+			m.FirstFailedAt = prev.FirstFailedAt
+		}
+	}
+	m.LastFailedAt = time.Now()
+	m.LastError = pushErr.Error()
+	if data, err := json.MarshalIndent(m, "", "  "); err == nil {
+		os.WriteFile(path, data, 0644)
+	}
+}
+
+// warnIfPushesFailing prints a prominent warning when the push-failed marker is
+// present. Rendered by `kai status` — the first place someone looks when a repo
+// seems off — so a silently failing background sync stops being silent.
+func warnIfPushesFailing(w io.Writer) {
+	data, err := os.ReadFile(filepath.Join(kaiDir, pushFailedMarkerFile))
+	if err != nil {
+		return
+	}
+	var m pushFailedMarker
+	if json.Unmarshal(data, &m) != nil || m.LastFailedAt.IsZero() {
+		return
+	}
+	since := ""
+	if !m.FirstFailedAt.IsZero() {
+		since = fmt.Sprintf(" (since %s)", m.FirstFailedAt.Format("2006-01-02 15:04"))
+	}
+	fmt.Fprintf(w, "%s pushes to the remote are FAILING%s\n", cRed("⚠"), since)
+	fmt.Fprintf(w, "  last error: %s\n", strings.SplitN(m.LastError, "\n", 2)[0])
+	fmt.Fprintf(w, "  run %s to see and retry; the graph on the server is stale until this succeeds\n\n", cBold("kai push"))
+}
+
 func runPush(cmd *cobra.Command, args []string) error {
+	err := runPushInner(cmd, args)
+	recordPushOutcome(err)
+	return err
+}
+
+func runPushInner(cmd *cobra.Command, args []string) error {
 	te := telemetry.NewEvent("push")
 	defer te.Finish()
 
@@ -16546,6 +16751,18 @@ func runPush(cmd *cobra.Command, args []string) error {
 				trackedTarget = tracked.TargetID
 			}
 			if isNonFastForwardPush(remoteTarget, trackedTarget, r.TargetID) {
+				// A tip written by the server's own GitHub ingest is not another
+				// user's snapshot — it's the server backfilling a browsable tip
+				// for a GitHub-connected repo (kailab/api/ingest_github.go, actor
+				// "github-ingest"). Rejecting against it wedges the repo forever:
+				// the server never advances the ref again once a client exists,
+				// and the client can never get past the guard without --force.
+				// The guard protects human pushes; a server-authored tip yields.
+				if remoteRef != nil && remoteRef.Actor == serverIngestActor {
+					debugf("push: remote %s (%s) was authored by %s — overwriting server-published tip",
+						r.Name, hex.EncodeToString(remoteTarget)[:12], remoteRef.Actor)
+					continue
+				}
 				fmt.Fprintf(os.Stderr, "\r\033[K")
 				// Two different situations reach this point and they
 				// need different advice. Reporting both as "advanced

@@ -1,0 +1,7 @@
+# kai repo registration — tracked (commit this file) so a fresh clone knows
+# this repo lives on a kai remote. Local kai state (.kai/, git hooks) does not
+# survive 'git clone'; with this marker, kai detects the gap and 'kai init'
+# re-links to the same org/repo automatically.
+remote: https://atlas.kaicontext.com
+org: kai
+repo: kai-cli
