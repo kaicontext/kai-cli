@@ -103,5 +103,24 @@ jobs:
           git tag "$next"
           # Atomic push: commit + tag land together or not at all, so a failure
           # leaves no partial state and the next run retries cleanly.
-          git push --atomic origin HEAD:main "refs/tags/$next"   # triggers ci.yml -> build + publish
+          # main is shared with humans; a lost push race is a
+          # rebase-and-retry, not a failure (2026-08-23: this bump died
+          # twice against a human push and needed a manual re-dispatch;
+          # the same race rejected the human's push hours later). The
+          # tag rides HEAD, so it is re-cut after each rebase.
+          pushed=""
+          for attempt in 1 2 3; do
+            if git push --atomic origin HEAD:main "refs/tags/$next"; then   # triggers ci.yml -> build + publish
+              pushed=yes
+              break
+            fi
+            echo "push rejected (attempt $attempt) — rebasing onto origin/main and retrying"
+            git tag -d "$next"
+            git pull --rebase origin main
+            git tag "$next"
+          done
+          if [ -z "$pushed" ]; then
+            echo "push still rejected after 3 rebases — giving up" >&2
+            exit 1
+          fi
           echo "Released kai-cli $next"
