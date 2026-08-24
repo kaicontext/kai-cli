@@ -20,3 +20,7 @@ coverage.out
 # Local cross-repo dev workspace (kai-cli + kai-core)
 /go.work
 /go.work.sum
+
+# kai agent-session hooks (machine-local; do not commit)
+.claude/settings.local.json
+.codex/hooks.json
