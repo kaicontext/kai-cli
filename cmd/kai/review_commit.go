@@ -445,7 +445,25 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 	if len(transcript) == 0 {
 		return ""
 	}
-	msgs := append(append([]message.Message{}, transcript...), message.Message{
+	// Trim tool-result bodies: the conclusion needs the run's reasoning and
+	// what it read, not every full file dump — a 12-file review's verbatim
+	// transcript pushed the single call past its deadline on a slow provider
+	// hour (PR#90 retrigger, 2026-08-26).
+	trimmed := make([]message.Message, 0, len(transcript))
+	for _, m := range transcript {
+		parts := make([]message.ContentPart, 0, len(m.Parts))
+		for _, pt := range m.Parts {
+			if tr, ok := pt.(message.ToolResult); ok && len(tr.Content) > 2000 {
+				tr.Content = tr.Content[:2000] + "\n… (tool result trimmed for the conclusion call)"
+				parts = append(parts, tr)
+				continue
+			}
+			parts = append(parts, pt)
+		}
+		m.Parts = parts
+		trimmed = append(trimmed, m)
+	}
+	msgs := append(trimmed, message.Message{
 		Role: message.RoleUser,
 		Parts: []message.ContentPart{message.TextContent{Text: "Your review time is up. Write the review NOW from what you have " +
 			"already read — no more tool calls, no more exploration. Output the human review prose, then the line " +
@@ -453,9 +471,12 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 			"with one line per concrete defect (empty ISSUES: section if none). If you saw too little to judge some part, " +
 			"say so explicitly in the prose rather than omitting the review."}},
 	})
-	// The conclusion is a single bounded call: a couple of minutes of grace,
-	// not a second review.
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	// The conclusion is a deliberate grace period BEYOND the run, so it gets
+	// a FRESH deadline — hanging it off the run's context handed it whatever
+	// scraps remained of the 12-minute hard deadline, which after a 9-minute
+	// review was not enough for one completion (the PR#90 failure).
+	_ = ctx
+	cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	resp, err := prov.Send(cctx, provider.Request{
 		Model:     model,
