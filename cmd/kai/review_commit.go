@@ -162,6 +162,16 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
 
 	prose, risks, match, note := rcParseReviewOutput(raw)
+
+	// An empty review is a FAILURE, not a finding. Shipping a bundle with no
+	// prose, no risks, and an unknown intent verdict green-checks a shell —
+	// the CI job succeeds, the inbox shows nothing, and nobody learns the
+	// review never happened (PRs #89/#90, 2026-08-26). Exit non-zero so the
+	// job fails visibly and the intake's retry machinery gets its chance.
+	if strings.TrimSpace(prose) == "" && len(risks) == 0 && match == finding.MatchUnknown {
+		return fmt.Errorf("review produced no content (no prose, no risks, intent unknown) — failing instead of posting an empty finding")
+	}
+
 	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
 
 	// Blast radius: walk the captured graph outward from the changed files so the
@@ -320,6 +330,17 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		user.WriteString(sc)
 		user.WriteString("\n\n")
 	}
+	// Hand the reviewer the diff's own added/changed symbols up front. The
+	// PR#89 dogfood run burned its entire time budget grepping for
+	// SendUsageWarning — a name sitting in the diff it had been given —
+	// because brand-new symbols resolve poorly through graph search. The
+	// reviewer must never spend turns discovering what its input states.
+	if symbols := rcChangedSymbols(diff); symbols != "" {
+		user.WriteString("CHANGED SYMBOLS (extracted from this diff — these are new or modified IN THIS CHANGE. ")
+		user.WriteString("Do not search the graph for these names; open the listed files directly):\n")
+		user.WriteString(symbols)
+		user.WriteString("\n\n")
+	}
 	user.WriteString("INTENT:\n")
 	user.WriteString(strings.TrimSpace(intent))
 	user.WriteString("\n\nDIFF:\n")
@@ -399,7 +420,113 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		return "", fmt.Errorf("review run: %w", err)
 	}
 	fmt.Fprintln(os.Stderr)
-	return strings.TrimSpace(res.FinalText), nil
+
+	raw := strings.TrimSpace(res.FinalText)
+	// A run that ran out of road — the soft time budget fired, or the loop
+	// ended without ever emitting the structured coda — has read the code
+	// but never wrote the review down. Don't ship that as an empty finding:
+	// make ONE direct conclusion call over the run's own transcript, forcing
+	// the write-down from what was already seen. (PR#89 dogfood: 5m38s of
+	// healthy exploration, budget expiry at a turn boundary, hollow finding
+	// posted as success.)
+	if res.FinishReason == message.FinishReasonTimeBudget || !strings.Contains(raw, rcReviewDataMarker) {
+		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", res.FinishReason)
+		if concluded := rcConcludeFromTranscript(ctx, prov, model, res.Transcript); concluded != "" {
+			raw = concluded
+		}
+	}
+	return raw, nil
+}
+
+// rcConcludeFromTranscript makes one non-tool completion over the review
+// run's message history, demanding the final write-up. Best-effort: any
+// failure returns "" and the caller keeps whatever the run produced.
+func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) string {
+	if len(transcript) == 0 {
+		return ""
+	}
+	msgs := append(append([]message.Message{}, transcript...), message.Message{
+		Role: message.RoleUser,
+		Parts: []message.ContentPart{message.TextContent{Text: "Your review time is up. Write the review NOW from what you have " +
+			"already read — no more tool calls, no more exploration. Output the human review prose, then the line " +
+			rcReviewDataMarker + " followed by INTENT_MATCH: (verified|partial|diverges), SUMMARY:, and ISSUES: " +
+			"with one line per concrete defect (empty ISSUES: section if none). If you saw too little to judge some part, " +
+			"say so explicitly in the prose rather than omitting the review."}},
+	})
+	// The conclusion is a single bounded call: a couple of minutes of grace,
+	// not a second review.
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	resp, err := prov.Send(cctx, provider.Request{
+		Model:     model,
+		System:    rcReviewSystem,
+		MaxTokens: 2500,
+		Messages:  msgs,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  conclusion call failed: %v\n", err)
+		return ""
+	}
+	var out strings.Builder
+	for _, p := range resp.Parts {
+		if t, ok := p.(message.TextContent); ok {
+			out.WriteString(t.Text)
+		}
+	}
+	return strings.TrimSpace(out.String())
+}
+
+// rcChangedSymbols extracts top-level declarations the diff ADDS or touches,
+// grouped by file, so the reviewer starts knowing the names this change
+// introduces. Line-regex over the unified diff — deliberately cheap and
+// language-loose (Go keywords + class/function for the frontend); a missed
+// symbol costs nothing, the reviewer just discovers it the old way.
+func rcChangedSymbols(diff string) string {
+	var b strings.Builder
+	file := ""
+	count := 0
+	seen := map[string]bool{}
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "+++ b/") {
+			file = strings.TrimPrefix(line, "+++ b/")
+			continue
+		}
+		if file == "" || len(line) < 2 || line[0] != '+' || strings.HasPrefix(line, "+++") {
+			continue
+		}
+		t := strings.TrimSpace(line[1:])
+		var name string
+		for _, kw := range []string{"func ", "type ", "class ", "function "} {
+			if strings.HasPrefix(t, kw) {
+				rest := t[len(kw):]
+				// Method receivers: skip "(r *T) " to the method name.
+				if strings.HasPrefix(rest, "(") {
+					if i := strings.Index(rest, ")"); i >= 0 {
+						rest = strings.TrimSpace(rest[i+1:])
+					}
+				}
+				name = rest
+				for i, c := range name {
+					if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+						name = name[:i]
+						break
+					}
+				}
+				break
+			}
+		}
+		if name == "" || seen[file+"|"+name] {
+			continue
+		}
+		seen[file+"|"+name] = true
+		fmt.Fprintf(&b, "- %s: %s\n", file, name)
+		count++
+		if count >= 40 {
+			b.WriteString("- … (more omitted)\n")
+			break
+		}
+	}
+	return b.String()
 }
 
 // rcReviewDataMarker separates the human review (everything before it) from
