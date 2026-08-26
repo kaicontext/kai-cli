@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -59,6 +60,30 @@ func (w *SyncLogWriter) Write(entry SyncLogEntry) {
 		return
 	}
 	fmt.Fprintf(f, "%s\n", data)
+}
+
+// Prune removes sync log files older than maxAgeDays. Passing maxAgeDays <= 0
+// disables pruning. Returns the number of files removed.
+func Prune(kaiDir string, maxAgeDays int) int {
+	dir := filepath.Join(kaiDir, "sync-log")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	cutoff := time.Now().AddDate(0, 0, -maxAgeDays)
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		day, err := time.Parse("2006-01-02", strings.TrimSuffix(e.Name(), ".jsonl"))
+		if err != nil || day.Before(cutoff) {
+			if os.Remove(filepath.Join(dir, e.Name())) == nil {
+				removed++
+			}
+		}
+	}
+	return removed
 }
 
 // CountPendingSyncLogs returns the number of unprocessed sync log files.
