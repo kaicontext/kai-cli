@@ -17,16 +17,21 @@ import (
 	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/finding"
 	"github.com/kaicontext/kai-engine/message"
+	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/reviewanalyze"
+	"github.com/kaicontext/kai-engine/session"
 )
 
-// review-commit is the agentic, graph-grounded PR reviewer: the same read-only
-// agent `kai verify` uses (via kit), but tuned to REVIEW a commit for defects and
-// emit a finding.Finding — the shape the findings inbox stores. This is the
-// headless-kit reviewer the CI review workflow runs (kai-review.yml), replacing
-// the one-shot reviewanalyze judge that can't see cross-file / concurrency bugs.
+// review-commit is the agentic, graph-grounded PR reviewer the CI review
+// workflow runs (kai-review.yml). It rides the SAME harness the coding paths
+// use — agent.ModeReview on the shared runner, with the harness's review
+// personality, tool whitelist, graph context injection, session/run logging,
+// and effort tiers — instead of the bespoke prompt-in-prompt agent it started
+// as. The reviewer writes an actual review (prose a colleague would leave on
+// the PR) plus a small machine coda that feeds finding.Finding — the shape the
+// findings inbox stores.
 const maxReviewCommitDiffBytes = 120 * 1024
 
 // rcInferIntentSystem reconstructs a commit's goal from its message + diff (one
@@ -37,31 +42,27 @@ const rcInferIntentSystem = "You reconstruct the INTENT of a merged pull request
 	"commit message as the source of truth for the goal; the diff is only evidence. Output only the intent prose: no " +
 	"preamble, no markdown headers, no fences."
 
-// rcReviewSystem drives the agentic reviewer: hunt for concrete defects, confirm
-// each against the graph, and emit a strict parseable block.
-const rcReviewSystem = "You are a rigorous, READ-ONLY code reviewer. You are given the author's CONTEXT, the reconstructed " +
-	"INTENT, and a code DIFF. Your job is to find real DEFECTS the change introduces — not style nits. You cannot edit, " +
-	"write, or run commands, and you MUST NOT ask the user anything. " +
-	"Go deeper than the textual diff using the graph tools: call kai_callers and kai_dependents on changed symbols to check " +
-	"the change is complete and consistent across the codebase (a changed signature whose callers were not updated is a " +
-	"defect), and kai_context to understand a symbol before flagging it. Use the graph to CONFIRM a suspected defect is real " +
-	"and reachable before reporting it — do not speculate. " +
-	"Hunt specifically for: concurrency bugs (data races, state mutated outside its lock, unsynchronized map access), " +
-	"security issues, resource leaks (goroutines/tickers/files/connections never stopped or closed), correctness bugs " +
-	"(off-by-one, wrong refill/limit math, nil dereference, truncation), and error handling that swallows or misroutes " +
-	"failures. For SECURITY, examine EVERY comparison that involves a secret or credential — an API key, token, password, " +
-	"session id, HMAC or signature: a plain `==`/`!=` (or a map/string compare) is a timing side-channel and MUST use a " +
-	"constant-time compare (subtle.ConstantTimeCompare / hmac.Equal); flag each one. Scrutinize authentication, " +
-	"authorization, bypass, allowlist, and admin/override paths specifically, and check for missing input validation and " +
-	"injection. Systematically walk the changed code for each category above before concluding — do not stop at the first " +
-	"bug you find. " +
-	"Also judge whether the change matches its stated INTENT: 'verified' (matches), 'partial' (mostly, with gaps), or " +
-	"'diverges' (does something materially different or broken). Judge against the author's ACTUAL goal, not a stricter one. " +
-	"Finish with EXACTLY this block and nothing after it. One finding per line under FINDINGS; omit the line if there are none:\n" +
-	"FINDINGS:\n" +
-	"- [category] path:line — one-sentence defect and why it is wrong\n" +
-	"INTENT_MATCH: verified|partial|diverges\n" +
-	"NOTE: <one sentence overall assessment>"
+// rcReviewSystem layers review-commit's specifics UNDER the harness's review
+// personality — the runner prepends agent.ModeReview's system prompt ahead of
+// this text — so this only carries what's specific to reviewing a merged
+// commit: the grounding discipline, the defect sweep, and the output contract.
+// The deliverable is a human review (prose the author can actually read),
+// closed by a machine coda the findings pipeline parses (rcParseReviewOutput).
+const rcReviewSystem = `You are reviewing a merged commit. You get the author's own description (AUTHOR CONTEXT), the reconstructed INTENT, and the DIFF; the codebase itself is reachable through your tools. You cannot edit anything and there is no one to ask questions — the review is your whole output.
+
+Ground every claim before you make it. Confirm a suspicion with the graph (kai_callers / kai_dependents on the changed symbols, kai_context to understand one) or by reading the file — a changed signature whose callers were not updated is a defect; so are data races and state mutated outside its lock, resource leaks (goroutines, tickers, files, connections that are never stopped or closed), off-by-one and nil-dereference bugs, swallowed or misrouted errors, and missing validation on inputs. For anything that touches a secret — API key, token, password, session id, HMAC or signature — a plain ==/!= comparison is a timing side channel and must be a constant-time compare (subtle.ConstantTimeCompare / hmac.Equal); check every comparison you can see, and give authentication, authorization, and admin/override paths a specifically suspicious read. Walk the whole diff for each of these before concluding; don't stop at the first thing you find. A finding you would hedge ("could be wrong", "if X implements Y…", "couldn't verify") is not a finding — confirm it or drop it.
+
+Then write the review the way a good colleague would leave it on the PR:
+- Open with a short paragraph: what the change actually does, and your overall take.
+- Then each real concern, in plain language: where it is (path:line), what goes wrong, why it matters, and what you'd do instead. No category tags, no severity labels, no template — clear sentences addressed to the author.
+- If the change is solid, say so plainly. A sentence on what's done well is welcome; flattery is not. Style nits are not concerns.
+
+Finish with this machine coda, exactly once, after everything else. INTENT_MATCH judges the change against the author's ACTUAL goal, not a stricter one: verified = does what they intended; partial = mostly, with gaps; diverges = materially different or broken. Omit the ISSUES list entirely when there are no concerns.
+===REVIEW-DATA===
+INTENT_MATCH: verified|partial|diverges
+SUMMARY: <one honest sentence — your bottom line>
+ISSUES:
+- path:line — <one-sentence version of each concern from your review>`
 
 const rcMaxAuthorContextBytes = 8 * 1024
 
@@ -85,11 +86,14 @@ var (
 
 var reviewCommitCmd = &cobra.Command{
 	Use:   "review-commit <commit>",
-	Short: "Agentic, graph-grounded code review of a commit — emits a finding (headless)",
-	Long: "Reviews a commit (typically a squash-merged PR) with a read-only, graph-grounded AGENT: it reconstructs the\n" +
-		"author's intent, then hunts for concrete defects (concurrency, security, resource leaks, correctness, error\n" +
-		"handling), using kai_callers / kai_dependents / kai_context to confirm each is real and reachable across the\n" +
-		"codebase. Emits a finding.Finding (verdict + intent + risks + diff) — the same JSON the findings inbox stores.\n\n" +
+	Short: "Harness-grade, graph-grounded code review of a commit — a human-readable review plus a finding (headless)",
+	Long: "Reviews a commit (typically a squash-merged PR) with the same agent harness the coding paths use, in its\n" +
+		"review mode: read-only tools, graph context injection, and the harness's review personality. It reconstructs\n" +
+		"the author's intent, hunts for concrete defects (concurrency, security, resource leaks, correctness, error\n" +
+		"handling) using kai_callers / kai_dependents / kai_context to confirm each is real and reachable, and writes\n" +
+		"the review the way a colleague would — prose you can read, not a findings block. --format json emits a\n" +
+		"finding.Finding (verdict + intent + risks + diff), the same JSON the findings inbox stores, with the prose\n" +
+		"review on stderr.\n\n" +
 		"This is what the CI review workflow runs. Requires a captured graph (`kai capture`).",
 	Args: cobra.ExactArgs(1),
 	RunE: runReviewCommit,
@@ -117,6 +121,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("opening projects: %w", err)
 	}
 	defer set.Close()
+	// Point config loads and the run log at the discovered project's kai dir
+	// (main.go's default is a cwd resolve, which diverges in sub-directories).
+	kaiDir = set.Primary().KaiDir
 
 	hash, subject, body, err := rcCommitMeta(ref)
 	if err != nil {
@@ -154,7 +161,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
 
-	risks, match, note := rcParseReviewOutput(raw)
+	prose, risks, match, note := rcParseReviewOutput(raw)
 	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
 
 	// Blast radius: walk the captured graph outward from the changed files so the
@@ -207,6 +214,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	}
 
 	if reviewCommitFormat == "json" {
+		// stdout stays pure JSON for ingestion; the human review still goes
+		// to stderr so a CI log shows the actual review, not just a blob.
+		if prose != "" {
+			fmt.Fprintf(os.Stderr, "\n%s\n\n", prose)
+		}
 		out, err := json.MarshalIndent(f, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
@@ -215,20 +227,27 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Println("──────── review ────────")
-	fmt.Printf("intent match: %s\n", f.Intent.Match)
+	// Text mode: the review itself is the output. Fall back to the parsed
+	// fields only when the model skipped the prose (legacy strict-block runs).
+	if prose != "" {
+		fmt.Println(prose)
+		if note != "" {
+			fmt.Printf("\nBottom line: %s\n", note)
+		}
+		return nil
+	}
 	if note != "" {
-		fmt.Printf("note: %s\n", note)
+		fmt.Println(note)
 	}
 	if len(risks) == 0 {
-		fmt.Println("findings: none")
+		fmt.Println("No concerns — looks good.")
 	} else {
-		fmt.Printf("findings (%d):\n", len(risks))
+		fmt.Printf("\n%d concern(s):\n", len(risks))
 		for _, r := range risks {
 			fmt.Printf("  • %s\n", r)
 		}
 	}
-	fmt.Println("─────────────────────────")
+	fmt.Printf("\nIntent match: %s\n", f.Intent.Match)
 	return nil
 }
 
@@ -275,8 +294,15 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 	return out.String(), nil
 }
 
+// rcRunReviewAgent runs the review through the shared harness runner, set up
+// the way the orchestrator sets up its executors: agent.ModeReview supplies
+// the harness's review personality + read-only tool whitelist, the graph
+// injection seeds turn 0 with real context, the session store and run log make
+// the run inspectable (`kai run summary`), and ApplyEffort honors KAI_SPEED.
+// rcReviewSystem rides in Options.System underneath the mode prompt.
 func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, diff string) (string, error) {
 	primary := set.Primary()
+	gdb := asGraphDB(primary.DB)
 
 	var user strings.Builder
 	if sc := strings.TrimSpace(sourceContext); sc != "" {
@@ -296,21 +322,55 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		user.WriteString(diff)
 		user.WriteString("\n")
 	}
-	prompt := "System: " + rcReviewSystem + "\n\n" + user.String()
+
+	// Graph-powered turn-0 injection, same as the orchestrator's executors:
+	// resolve the diff's entry points against the call graph + command index
+	// so the reviewer starts oriented instead of spending turns rediscovering
+	// structure. Best-effort — an empty body just skips injection.
+	var injected string
+	if gdb != nil {
+		injected = planner.BuildInjectedContext(user.String(), gdb, planner.LoadCommandIndex(primary.Path))
+	}
+
+	// Session + run-log plumbing so the review shows up in `kai run summary`
+	// like every other harness run. Non-fatal: we review without it.
+	if err := session.EnsureSchema(gdb); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: agent session schema: %v\n", err)
+	}
+
+	kaiBin := "kai"
+	if exe, err := os.Executable(); err == nil {
+		kaiBin = exe
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, rcReviewHardDeadline)
 	defer cancel()
 
-	res, err := agent.Run(ctx, agent.Options{
-		Projects:   set,
-		Workspace:  primary.Path,
-		Provider:   prov,
-		Model:      model,
-		Graph:      asGraphDB(primary.DB),
+	opts := agent.Options{
+		Projects:  set,
+		Workspace: primary.Path,
+		Provider:  prov,
+		Model:     model,
+		Graph:     gdb,
+		// The harness's review lane: prepends the review-mode system prompt,
+		// scopes graph context to changed functions, and whitelists the
+		// read-only tool set (+ kai_impact / kai_diff). ReadOnly is belt and
+		// braces on top of the mode's whitelist.
+		Mode:       agent.ModeReview,
+		System:     rcReviewSystem,
 		ReadOnly:   true,
 		EnableBash: false,
 		MaxTurns:   20,
-		Prompt:     prompt,
+		Prompt:     user.String(),
+
+		InjectedContext: injected,
+		SessionStore:    gdb,
+		TaskName:        "review-commit",
+		RunLogDir:       kaiDir,
+		KaiBinary:       kaiBin,
+		// Keep tool results verbatim so prompt caching works across turns —
+		// the same lesson every other harness path already carries.
+		KeepToolResults: true,
 
 		// The review's time contract: without this a ReadOnly run has no
 		// wall-clock bound at all (the runner's coding-run guards are skipped
@@ -322,7 +382,12 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				fmt.Fprintf(os.Stderr, "  → %s %s\n", name, rcOneLine(inputJSON, 90))
 			},
 		},
-	})
+	}
+	// Effort tier LAST, after every deliberate field above — ApplyEffort only
+	// tightens. Zero-value Speed resolves KAI_SPEED → thorough (a no-op).
+	agent.ApplyEffort(&opts, 0)
+
+	res, err := agent.Run(ctx, opts)
 	if err != nil {
 		return "", fmt.Errorf("review run: %w", err)
 	}
@@ -330,34 +395,74 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	return strings.TrimSpace(res.FinalText), nil
 }
 
-func rcParseReviewOutput(raw string) (risks []string, match finding.Match, note string) {
+// rcReviewDataMarker separates the human review (everything before it) from
+// the machine coda (INTENT_MATCH / SUMMARY / ISSUES) the pipeline parses.
+const rcReviewDataMarker = "===REVIEW-DATA==="
+
+// rcParseReviewOutput splits the reviewer's output into the human review prose
+// and the structured fields the finding carries. Tolerant of the legacy shape
+// (no marker; FINDINGS:/NOTE: lines inline) so an old model answer still parses.
+func rcParseReviewOutput(raw string) (prose string, risks []string, match finding.Match, note string) {
 	match = finding.MatchUnknown
-	inFindings := false
-	for _, line := range strings.Split(raw, "\n") {
+	coda := raw
+	if i := strings.Index(raw, rcReviewDataMarker); i >= 0 {
+		prose = strings.TrimSpace(raw[:i])
+		coda = raw[i+len(rcReviewDataMarker):]
+	}
+	inIssues := false
+	var proseEnd int // legacy: prose runs until the first machine line
+	sawMachineLine := false
+	for _, line := range strings.Split(coda, "\n") {
 		t := strings.TrimSpace(line)
+		upper := strings.ToUpper(t)
 		switch {
-		case strings.EqualFold(t, "FINDINGS:"):
-			inFindings = true
-		case strings.HasPrefix(strings.ToUpper(t), "INTENT_MATCH:"):
-			inFindings = false
-			switch strings.ToLower(strings.TrimSpace(t[len("INTENT_MATCH:"):])) {
-			case "verified":
-				match = finding.MatchVerified
-			case "partial":
-				match = finding.MatchPartial
-			case "diverges":
-				match = finding.MatchDiverges
+		case strings.EqualFold(t, "ISSUES:") || strings.EqualFold(t, "FINDINGS:"):
+			inIssues = true
+			sawMachineLine = true
+		case strings.HasPrefix(upper, "INTENT_MATCH:"):
+			inIssues = false
+			sawMachineLine = true
+			// First field only — the value is one word; anything after
+			// ("partial — see above") is commentary, not the verdict.
+			v := strings.Fields(strings.ToLower(strings.TrimSpace(t[len("INTENT_MATCH:"):])))
+			if len(v) > 0 {
+				switch v[0] {
+				case "verified":
+					match = finding.MatchVerified
+				case "partial":
+					match = finding.MatchPartial
+				case "diverges":
+					match = finding.MatchDiverges
+				}
 			}
-		case strings.HasPrefix(strings.ToUpper(t), "NOTE:"):
-			inFindings = false
+		case strings.HasPrefix(upper, "SUMMARY:"):
+			inIssues = false
+			sawMachineLine = true
+			note = strings.TrimSpace(t[len("SUMMARY:"):])
+		case strings.HasPrefix(upper, "NOTE:"): // legacy spelling
+			inIssues = false
+			sawMachineLine = true
 			note = strings.TrimSpace(t[len("NOTE:"):])
-		case inFindings && strings.HasPrefix(t, "-"):
+		case inIssues && strings.HasPrefix(t, "-"):
 			if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); item != "" {
 				risks = append(risks, item)
 			}
+		default:
+			if !sawMachineLine {
+				proseEnd += len(line) + 1
+			}
 		}
 	}
-	return risks, match, note
+	// Legacy shape: no marker — whatever preceded the first machine line is
+	// the review prose (may be empty for the old strict-block output). The
+	// clamp covers the final line's missing trailing newline.
+	if prose == "" && proseEnd > 0 {
+		if proseEnd > len(coda) {
+			proseEnd = len(coda)
+		}
+		prose = strings.TrimSpace(coda[:proseEnd])
+	}
+	return prose, risks, match, note
 }
 
 func rcCommitMeta(ref string) (hash, subject, body string, err error) {
