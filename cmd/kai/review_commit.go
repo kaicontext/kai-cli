@@ -219,7 +219,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		if prose != "" {
 			fmt.Fprintf(os.Stderr, "\n%s\n\n", prose)
 		}
-		out, err := json.MarshalIndent(f, "", "  ")
+		// Carry the prose review inside the bundle as a "review" field. The
+		// server stores the bundle verbatim (json.RawMessage), so the field
+		// round-trips to `kai findings get` and the inbox without any server
+		// or finding-package change; finding.Finding can adopt it later.
+		out, err := json.MarshalIndent(struct {
+			finding.Finding
+			Review string `json:"review,omitempty"`
+		}{f, prose}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}

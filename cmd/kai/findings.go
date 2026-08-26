@@ -180,7 +180,10 @@ func renderFinding(baseURL, org, repo string, body []byte) error {
 	var resp struct {
 		findingSummary
 		Finding struct {
-			Title  string `json:"title"`
+			Title string `json:"title"`
+			// Review is the reviewer's full prose write-up (harness-backed
+			// review-commit bundles carry it; older findings won't have it).
+			Review string `json:"review"`
 			Claims []struct {
 				Statement string `json:"statement"`
 				Tag       string `json:"tag"`
@@ -213,6 +216,10 @@ func renderFinding(baseURL, org, repo string, body []byte) error {
 		fmt.Printf("  intent:  %s\n", resp.IntentMatch)
 	}
 	fmt.Printf("  blast:   reaches %d symbol(s)\n", resp.Reaches)
+
+	if review := strings.TrimSpace(resp.Finding.Review); review != "" {
+		fmt.Printf("\n%s\n", review)
+	}
 
 	if len(resp.Finding.Claims) > 0 {
 		fmt.Printf("\nGrounded claims (%d):\n", len(resp.Finding.Claims))
