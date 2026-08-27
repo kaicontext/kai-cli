@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -3127,6 +3128,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		// snapshot that 404s CI checkout. Doctor used to be blind to this
 		// (everything green while CI was dark for days) — scan for it.
 		checkObjectIntegrity(ok, warn, bad)
+		checkGraphHealth(ok, warn, bad, doctorFix)
 	} else {
 		fmt.Printf("%s kai data directory missing — run 'kai init'\n", bad)
 	}
@@ -3180,6 +3182,117 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 // snapshot (CI then 404s at checkout). It mirrors the push pre-flight check:
 // digest == blake3(kind + "\n" + rawPayload). UUID-based kinds (Workspace,
 // Review) are excluded because their ID is not a hash of their payload.
+// checkGraphHealth surfaces the failure modes the 2026-08-27 marathon needed
+// a human to forensically dig out: a graph store that has outgrown its repo
+// (snapshot retention has no ceiling, so heavy agent traffic silently makes
+// every spawn/init/clone pay for the full history), an uncheckpointed WAL, a
+// stale capture lock from a killed process, orphaned spawn dirs in /tmp, and
+// the forbidden container-and-project state (a .kai sitting NEXT TO a
+// kai.projects.yaml — an unscoped capture creates it, and it then poisons
+// path resolution for every member project). Kai narrating "the harness is
+// experiencing DB lock contention" while a human runs du and sqlite3 by hand
+// is exactly what doctor exists to replace.
+func checkGraphHealth(ok, warn, bad string, fix bool) {
+	// Total .kai weight + the database + WAL specifically.
+	var total, dbBytes, walBytes int64
+	filepath.Walk(kaiDir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	if st, err := os.Stat(filepath.Join(kaiDir, "db.sqlite")); err == nil {
+		dbBytes = st.Size()
+	}
+	if st, err := os.Stat(filepath.Join(kaiDir, "db.sqlite-wal")); err == nil {
+		walBytes = st.Size()
+	}
+	mb := func(b int64) string { return fmt.Sprintf("%.0f MB", float64(b)/1048576) }
+
+	switch {
+	case total > 1<<30:
+		fmt.Printf("%s graph store: %s in %s (db %s, wal %s) — heavier than most repos it describes.\n", bad, mb(total), kaiDir, mb(dbBytes), mb(walBytes))
+		fmt.Printf("      Every spawn, preflight and clone pays for this history (observed: 10-minute preflights at 1.3 GB).\n")
+		fmt.Printf("      Snapshot retention has no automatic ceiling yet; archive .kai aside and re-init+capture for a fresh graph, preserving sessions.sqlite.\n")
+	case total > 300<<20:
+		fmt.Printf("%s graph store: %s (db %s, wal %s) — growing; spawns and preflights slow with it.\n", warn, mb(total), mb(dbBytes), mb(walBytes))
+	default:
+		fmt.Printf("%s graph store: %s\n", ok, mb(total))
+	}
+
+	// Snapshot accumulation: count + payload weight straight from the graph.
+	if db, err := sql.Open("sqlite", "file:"+filepath.Join(kaiDir, "db.sqlite")+"?mode=ro"); err == nil {
+		var snaps int
+		var snapMB sql.NullFloat64
+		if err := db.QueryRow("SELECT COUNT(*), SUM(LENGTH(payload))/1048576.0 FROM nodes WHERE kind='Snapshot'").Scan(&snaps, &snapMB); err == nil && snaps > 0 {
+			avg := snapMB.Float64 / float64(snaps)
+			if snaps > 40 || snapMB.Float64 > 150 {
+				fmt.Printf("%s snapshots: %d retained, %.0f MB of manifests (%.1f MB each) — nothing prunes reachable history; heavy agent traffic accretes one full manifest per capture.\n", warn, snaps, snapMB.Float64, avg)
+			} else {
+				fmt.Printf("%s snapshots: %d retained (%.0f MB)\n", ok, snaps, snapMB.Float64)
+			}
+		}
+		db.Close()
+	}
+
+	// WAL: a fat write-ahead log means no writer has checkpointed in a long
+	// time (or one died mid-write). --fix runs a TRUNCATE checkpoint.
+	if walBytes > 64<<20 {
+		if fix {
+			if db, err := sql.Open("sqlite", filepath.Join(kaiDir, "db.sqlite")); err == nil {
+				if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err == nil {
+					fmt.Printf("%s WAL was %s — checkpointed and truncated.\n", ok, mb(walBytes))
+				} else {
+					fmt.Printf("%s WAL is %s and checkpoint failed (another writer live?): %v\n", warn, mb(walBytes), err)
+				}
+				db.Close()
+			}
+		} else {
+			fmt.Printf("%s WAL is %s — no recent checkpoint; 'kai doctor --fix' will checkpoint it.\n", warn, mb(walBytes))
+		}
+	}
+
+	// Stale capture lock: a killed capture leaves it, and the next capture
+	// then queues behind a corpse.
+	if st, err := os.Stat(filepath.Join(kaiDir, "capture.lock")); err == nil && time.Since(st.ModTime()) > 30*time.Minute {
+		fmt.Printf("%s capture.lock is %s old — likely left by a killed capture; delete it if no capture is running.\n", warn, time.Since(st.ModTime()).Round(time.Minute))
+	}
+
+	// Orphaned spawn workspaces accumulate in /tmp until something cleans
+	// them (observed: 42). They also hold full graph copies.
+	if matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "kai-*")); len(matches) > 0 {
+		stale := 0
+		for _, m := range matches {
+			if st, err := os.Stat(m); err == nil && time.Since(st.ModTime()) > 24*time.Hour {
+				stale++
+			}
+		}
+		if stale > 5 {
+			fmt.Printf("%s %d spawn/scratch dirs older than a day in %s — run 'kai despawn --all --prune' from their source repos.\n", warn, stale, os.TempDir())
+		}
+	}
+
+	// The forbidden state: a graph AT a container root. An unscoped capture
+	// creates it, and it then shadows member projects' own resolution.
+	if set, outcome := projects.Discover("."); outcome == projects.OutcomeRootsFound && set != nil && len(set.Projects()) > 1 {
+		root := set.DiscoveryRoot
+		if root != "" {
+			if _, err := os.Stat(filepath.Join(root, ".kai")); err == nil {
+				rootIsProject := false
+				for _, pr := range set.Projects() {
+					if filepath.Clean(pr.Path) == filepath.Clean(root) {
+						rootIsProject = true
+					}
+				}
+				if !rootIsProject {
+					fmt.Printf("%s a .kai exists at the WORKSPACE CONTAINER root (%s) — a directory cannot be both a container and a project; this poisons path resolution for every member. Remove it.\n", bad, root)
+				}
+			}
+		}
+	}
+}
+
 func checkObjectIntegrity(ok, warn, bad string) {
 	db, err := openDB()
 	if err != nil {
@@ -3714,6 +3827,7 @@ func upgradeIfOldKaiHook(path, newScript string) {
 	}
 	_ = writeHookAtomic(path, newScript)
 }
+
 // writeHookAtomic replaces a git hook via temp-file + rename. A plain
 // os.WriteFile TRUNCATES in place — and a hook can be rewritten while
 // a shell is still executing it (the background `kai push` this very
@@ -3729,7 +3843,6 @@ func writeHookAtomic(path, script string) error {
 	}
 	return os.Rename(tmp, path)
 }
-
 
 func runHookInstall(cmd *cobra.Command, args []string) error {
 	hookPath := filepath.Join(".git", "hooks", "pre-commit")
