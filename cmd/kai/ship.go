@@ -235,7 +235,7 @@ func resolveShipBranch(cwd string) (string, error) {
 	}
 	identity := ""
 	if shipSession != "" {
-		base, err := resolveWorkspaceBase(shipSession, "")
+		base, err := spawnpkg.WorkspaceBase(shipSession, "")
 		if err != nil {
 			return "", err
 		}
@@ -247,7 +247,7 @@ func resolveShipBranch(cwd string) (string, error) {
 		return "", fmt.Errorf("no session identity: pass --session, --branch, or check out a kai workspace")
 	}
 	if shipSlug != "" {
-		slug, err := sanitizeWSName(shipSlug)
+		slug, err := spawnpkg.SanitizeName(shipSlug)
 		if err != nil {
 			return "", fmt.Errorf("--slug: %w", err)
 		}

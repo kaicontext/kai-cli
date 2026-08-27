@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -181,28 +180,28 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if spawnDryRun {
-		printDryRun(targets, srcSnapHex, resolved, srcRemote)
-		return nil
-	}
-
 	// Workspace base name + git anchor for this invocation. The name
 	// is the session identity when --session is given; it is never the
 	// old constant "spawn-1", which made every concurrent spawn share
 	// one sync channel and CRDT room — the collision that leaked one
 	// issue's fix into another's autofix PR.
-	wsBase, err := resolveWorkspaceBase(spawnSession, spawnWSName)
+	wsBase, err := spawnpkg.WorkspaceBase(spawnSession, spawnWSName)
 	if err != nil {
 		return err
 	}
-	baseGitSHA, gitDirty := gitHeadState(srcRepo)
+	baseGitSHA, gitDirty := spawnpkg.GitHeadState(srcRepo)
+
+	if spawnDryRun {
+		printDryRun(targets, wsBase, srcSnapHex, resolved, srcRemote)
+		return nil
+	}
 
 	// ----- Materialize workspace 1 -----
 	first := targets[0]
 	if _, err := os.Stat(first); err == nil {
 		return fmt.Errorf("target %s already exists", first)
 	}
-	wsName1 := workspaceNameFor(wsBase, 1)
+	wsName1 := spawnpkg.NameFor(wsBase, 1)
 	agent1 := agentNameFor(spawnAgent, 1, len(targets))
 
 	if err := materializeFirst(srcRepo, first, srcSnapHex, wsName1, agent1, srcRemote); err != nil {
@@ -224,7 +223,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 		if err := spawnpkg.Copy(first, dst, resolved); err != nil {
 			return fmt.Errorf("cloning %s → %s: %w", first, dst, err)
 		}
-		nameN := workspaceNameFor(wsBase, i+1)
+		nameN := spawnpkg.NameFor(wsBase, i+1)
 		agentN := agentNameFor(spawnAgent, i+1, len(targets))
 		// Resolve kai dir per-clone — the clone may not have the
 		// same `.git/kai` vs `.kai` layout as the parent invoker.
@@ -244,7 +243,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	for i, dir := range targets {
 		ent := spawnpkg.Entry{
 			Path:           dir,
-			WorkspaceName:  workspaceNameFor(wsBase, i+1),
+			WorkspaceName:  spawnpkg.NameFor(wsBase, i+1),
 			Agent:          agentNameFor(spawnAgent, i+1, len(targets)),
 			SourceSnapshot: srcSnapHex,
 			SourceRepo:     srcRepo,
@@ -697,74 +696,6 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-func workspaceNameFor(base string, n int) string {
-	if n == 1 {
-		return base
-	}
-	return fmt.Sprintf("%s-%d", base, n)
-}
-
-// resolveWorkspaceBase picks the workspace base name for one spawn
-// invocation: explicit --ws-name wins; else s-<first 8 of --session>;
-// else s-<8 random hex>. Every path yields a name unique to a session
-// or invocation — the workspace name keys the live-sync channel and
-// CRDT room, so a shared constant means shared rooms across unrelated
-// spawns.
-func resolveWorkspaceBase(sessionID, explicit string) (string, error) {
-	if explicit != "" {
-		return sanitizeWSName(explicit)
-	}
-	if sessionID != "" {
-		s, err := sanitizeWSName(sessionID)
-		if err != nil {
-			return "", fmt.Errorf("--session: %w", err)
-		}
-		if len(s) > 8 {
-			s = s[:8]
-		}
-		return "s-" + s, nil
-	}
-	buf := make([]byte, 4)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generating workspace name: %w", err)
-	}
-	return "s-" + hex.EncodeToString(buf), nil
-}
-
-// sanitizeWSName lowercases and keeps [a-z0-9-] — workspace names ride
-// into refs (ws.<name>.head), sync channels, and git branch names.
-func sanitizeWSName(s string) (string, error) {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
-			b.WriteRune(r)
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		return "", fmt.Errorf("no usable characters in workspace name %q", s)
-	}
-	return out, nil
-}
-
-// gitHeadState reports the source repo's git HEAD and whether the
-// tree had uncommitted changes. ("", false) means not git-backed (or
-// no commits yet) — the spawn simply has no git anchor then.
-func gitHeadState(repo string) (sha string, dirty bool) {
-	if _, err := exec.LookPath("git"); err != nil {
-		return "", false
-	}
-	out, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
-	if err != nil {
-		return "", false
-	}
-	sha = strings.TrimSpace(string(out))
-	st, err := exec.Command("git", "-C", repo, "status", "--porcelain").Output()
-	dirty = err == nil && len(strings.TrimSpace(string(st))) > 0
-	return sha, dirty
-}
-
 func agentNameFor(base string, n, total int) string {
 	if base == "" {
 		return ""
@@ -789,12 +720,12 @@ func lookupWorkspaceID(kaiDirPath, name string) (string, error) {
 	return hex.EncodeToString(ws.ID), nil
 }
 
-func printDryRun(targets []string, snapHex string, r spawnpkg.Resolved, rem *remote.RemoteEntry) {
+func printDryRun(targets []string, wsBase, snapHex string, r spawnpkg.Resolved, rem *remote.RemoteEntry) {
 	fmt.Printf("would spawn %d workspaces from snap %s (copy: %s)\n",
 		len(targets), snapHex[:12], r)
 	for i, t := range targets {
 		fmt.Printf("  %s  ws:%s  agent:%s\n", t,
-			workspaceNameFor(t, i+1),
+			spawnpkg.NameFor(wsBase, i+1),
 			agentNameFor(spawnAgent, i+1, len(targets)))
 	}
 	if rem != nil {
