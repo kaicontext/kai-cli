@@ -20,7 +20,7 @@ import (
 	"github.com/kaicontext/kai-engine/spawnclone"
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
-	spawnpkg "kai/pkg/spawn"
+	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 )
 
 // ---------------------------------------------------------------------------
