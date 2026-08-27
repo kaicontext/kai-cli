@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,10 +18,10 @@ import (
 	"github.com/kaicontext/kai-engine/kaipath"
 	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/remote"
+	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 	"github.com/kaicontext/kai-engine/spawnclone"
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
-	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 )
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,8 @@ var (
 	spawnDryRun       bool
 	spawnExplain      bool
 	spawnJSON         bool
+	spawnSession      string
+	spawnWSName       string
 
 	despawnAll              bool
 	despawnForce            bool
@@ -106,6 +109,8 @@ func init() {
 	spawnCmd.Flags().BoolVar(&spawnDryRun, "dry-run", false, "Print plan without executing")
 	spawnCmd.Flags().BoolVar(&spawnExplain, "explain", false, "Print detailed walkthrough")
 	spawnCmd.Flags().BoolVar(&spawnJSON, "json", false, "Output as JSON")
+	spawnCmd.Flags().StringVar(&spawnSession, "session", "", "Session UUID that owns this spawn; names the workspace s-<first 8> and is recorded for kai ship")
+	spawnCmd.Flags().StringVar(&spawnWSName, "ws-name", "", "Explicit workspace name (default: s-<session prefix>, or s-<random> without --session)")
 
 	despawnCmd.Flags().BoolVar(&despawnAll, "all", false, "Despawn all registered workspaces")
 	despawnCmd.Flags().BoolVar(&despawnForce, "force", false, "Despawn even with unpushed checkpoints")
@@ -181,12 +186,23 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Workspace base name + git anchor for this invocation. The name
+	// is the session identity when --session is given; it is never the
+	// old constant "spawn-1", which made every concurrent spawn share
+	// one sync channel and CRDT room — the collision that leaked one
+	// issue's fix into another's autofix PR.
+	wsBase, err := resolveWorkspaceBase(spawnSession, spawnWSName)
+	if err != nil {
+		return err
+	}
+	baseGitSHA, gitDirty := gitHeadState(srcRepo)
+
 	// ----- Materialize workspace 1 -----
 	first := targets[0]
 	if _, err := os.Stat(first); err == nil {
 		return fmt.Errorf("target %s already exists", first)
 	}
-	wsName1 := workspaceNameFor(first, 1)
+	wsName1 := workspaceNameFor(wsBase, 1)
 	agent1 := agentNameFor(spawnAgent, 1, len(targets))
 
 	if err := materializeFirst(srcRepo, first, srcSnapHex, wsName1, agent1, srcRemote); err != nil {
@@ -208,7 +224,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 		if err := spawnpkg.Copy(first, dst, resolved); err != nil {
 			return fmt.Errorf("cloning %s → %s: %w", first, dst, err)
 		}
-		nameN := workspaceNameFor(dst, i+1)
+		nameN := workspaceNameFor(wsBase, i+1)
 		agentN := agentNameFor(spawnAgent, i+1, len(targets))
 		// Resolve kai dir per-clone — the clone may not have the
 		// same `.git/kai` vs `.kai` layout as the parent invoker.
@@ -228,12 +244,15 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	for i, dir := range targets {
 		ent := spawnpkg.Entry{
 			Path:           dir,
-			WorkspaceName:  workspaceNameFor(dir, i+1),
+			WorkspaceName:  workspaceNameFor(wsBase, i+1),
 			Agent:          agentNameFor(spawnAgent, i+1, len(targets)),
 			SourceSnapshot: srcSnapHex,
 			SourceRepo:     srcRepo,
 			SyncMode:       spawnSync,
 			CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+			SessionID:      spawnSession,
+			BaseGitSHA:     baseGitSHA,
+			DirtyAtStart:   gitDirty,
 		}
 		if srcRemote != nil {
 			ent.RemoteName = remoteName
@@ -678,8 +697,72 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-func workspaceNameFor(_ string, n int) string {
-	return fmt.Sprintf("spawn-%d", n)
+func workspaceNameFor(base string, n int) string {
+	if n == 1 {
+		return base
+	}
+	return fmt.Sprintf("%s-%d", base, n)
+}
+
+// resolveWorkspaceBase picks the workspace base name for one spawn
+// invocation: explicit --ws-name wins; else s-<first 8 of --session>;
+// else s-<8 random hex>. Every path yields a name unique to a session
+// or invocation — the workspace name keys the live-sync channel and
+// CRDT room, so a shared constant means shared rooms across unrelated
+// spawns.
+func resolveWorkspaceBase(sessionID, explicit string) (string, error) {
+	if explicit != "" {
+		return sanitizeWSName(explicit)
+	}
+	if sessionID != "" {
+		s, err := sanitizeWSName(sessionID)
+		if err != nil {
+			return "", fmt.Errorf("--session: %w", err)
+		}
+		if len(s) > 8 {
+			s = s[:8]
+		}
+		return "s-" + s, nil
+	}
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generating workspace name: %w", err)
+	}
+	return "s-" + hex.EncodeToString(buf), nil
+}
+
+// sanitizeWSName lowercases and keeps [a-z0-9-] — workspace names ride
+// into refs (ws.<name>.head), sync channels, and git branch names.
+func sanitizeWSName(s string) (string, error) {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "", fmt.Errorf("no usable characters in workspace name %q", s)
+	}
+	return out, nil
+}
+
+// gitHeadState reports the source repo's git HEAD and whether the
+// tree had uncommitted changes. ("", false) means not git-backed (or
+// no commits yet) — the spawn simply has no git anchor then.
+func gitHeadState(repo string) (sha string, dirty bool) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return "", false
+	}
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", false
+	}
+	sha = strings.TrimSpace(string(out))
+	st, err := exec.Command("git", "-C", repo, "status", "--porcelain").Output()
+	dirty = err == nil && len(strings.TrimSpace(string(st))) > 0
+	return sha, dirty
 }
 
 func agentNameFor(base string, n, total int) string {
