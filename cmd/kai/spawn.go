@@ -17,10 +17,10 @@ import (
 	"github.com/kaicontext/kai-engine/kaipath"
 	"github.com/kaicontext/kai-engine/ref"
 	"github.com/kaicontext/kai-engine/remote"
+	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 	"github.com/kaicontext/kai-engine/spawnclone"
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
-	spawnpkg "kai/pkg/spawn"
 )
 
 // ---------------------------------------------------------------------------
@@ -37,6 +37,8 @@ var (
 	spawnDryRun       bool
 	spawnExplain      bool
 	spawnJSON         bool
+	spawnSession      string
+	spawnWSName       string
 
 	despawnAll              bool
 	despawnForce            bool
@@ -106,6 +108,8 @@ func init() {
 	spawnCmd.Flags().BoolVar(&spawnDryRun, "dry-run", false, "Print plan without executing")
 	spawnCmd.Flags().BoolVar(&spawnExplain, "explain", false, "Print detailed walkthrough")
 	spawnCmd.Flags().BoolVar(&spawnJSON, "json", false, "Output as JSON")
+	spawnCmd.Flags().StringVar(&spawnSession, "session", "", "Session UUID that owns this spawn; names the workspace s-<first 8> and is recorded for kai ship")
+	spawnCmd.Flags().StringVar(&spawnWSName, "ws-name", "", "Explicit workspace name (default: s-<session prefix>, or s-<random> without --session)")
 
 	despawnCmd.Flags().BoolVar(&despawnAll, "all", false, "Despawn all registered workspaces")
 	despawnCmd.Flags().BoolVar(&despawnForce, "force", false, "Despawn even with unpushed checkpoints")
@@ -176,8 +180,19 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Workspace base name + git anchor for this invocation. The name
+	// is the session identity when --session is given; it is never the
+	// old constant "spawn-1", which made every concurrent spawn share
+	// one sync channel and CRDT room — the collision that leaked one
+	// issue's fix into another's autofix PR.
+	wsBase, err := spawnpkg.WorkspaceBase(spawnSession, spawnWSName)
+	if err != nil {
+		return err
+	}
+	baseGitSHA, gitDirty := spawnpkg.GitHeadState(srcRepo)
+
 	if spawnDryRun {
-		printDryRun(targets, srcSnapHex, resolved, srcRemote)
+		printDryRun(targets, wsBase, srcSnapHex, resolved, srcRemote)
 		return nil
 	}
 
@@ -186,7 +201,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	if _, err := os.Stat(first); err == nil {
 		return fmt.Errorf("target %s already exists", first)
 	}
-	wsName1 := workspaceNameFor(first, 1)
+	wsName1 := spawnpkg.NameFor(wsBase, 1)
 	agent1 := agentNameFor(spawnAgent, 1, len(targets))
 
 	if err := materializeFirst(srcRepo, first, srcSnapHex, wsName1, agent1, srcRemote); err != nil {
@@ -208,7 +223,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 		if err := spawnpkg.Copy(first, dst, resolved); err != nil {
 			return fmt.Errorf("cloning %s → %s: %w", first, dst, err)
 		}
-		nameN := workspaceNameFor(dst, i+1)
+		nameN := spawnpkg.NameFor(wsBase, i+1)
 		agentN := agentNameFor(spawnAgent, i+1, len(targets))
 		// Resolve kai dir per-clone — the clone may not have the
 		// same `.git/kai` vs `.kai` layout as the parent invoker.
@@ -228,12 +243,15 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	for i, dir := range targets {
 		ent := spawnpkg.Entry{
 			Path:           dir,
-			WorkspaceName:  workspaceNameFor(dir, i+1),
+			WorkspaceName:  spawnpkg.NameFor(wsBase, i+1),
 			Agent:          agentNameFor(spawnAgent, i+1, len(targets)),
 			SourceSnapshot: srcSnapHex,
 			SourceRepo:     srcRepo,
 			SyncMode:       spawnSync,
 			CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+			SessionID:      spawnSession,
+			BaseGitSHA:     baseGitSHA,
+			DirtyAtStart:   gitDirty,
 		}
 		if srcRemote != nil {
 			ent.RemoteName = remoteName
@@ -678,10 +696,6 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-func workspaceNameFor(_ string, n int) string {
-	return fmt.Sprintf("spawn-%d", n)
-}
-
 func agentNameFor(base string, n, total int) string {
 	if base == "" {
 		return ""
@@ -706,12 +720,12 @@ func lookupWorkspaceID(kaiDirPath, name string) (string, error) {
 	return hex.EncodeToString(ws.ID), nil
 }
 
-func printDryRun(targets []string, snapHex string, r spawnpkg.Resolved, rem *remote.RemoteEntry) {
+func printDryRun(targets []string, wsBase, snapHex string, r spawnpkg.Resolved, rem *remote.RemoteEntry) {
 	fmt.Printf("would spawn %d workspaces from snap %s (copy: %s)\n",
 		len(targets), snapHex[:12], r)
 	for i, t := range targets {
 		fmt.Printf("  %s  ws:%s  agent:%s\n", t,
-			workspaceNameFor(t, i+1),
+			spawnpkg.NameFor(wsBase, i+1),
 			agentNameFor(spawnAgent, i+1, len(targets)))
 	}
 	if rem != nil {

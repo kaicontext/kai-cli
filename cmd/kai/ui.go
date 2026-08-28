@@ -18,7 +18,7 @@ import (
 
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/kaipath"
-	spawnpkg "kai/pkg/spawn"
+	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 	"kai/pkg/synclog"
 )
 

@@ -1,39 +1,17 @@
 package autofix
 
-// artifacts.go identifies files kai writes for its own operation — the
-// agent-session ingest hooks (.codex/hooks.json, .claude/settings.local.json)
-// and the kai data dir (.kai/) — so the headless loop never mistakes them
-// for the fix. This is the bug that once shipped a PR whose entire diff was
-// `.codex/hooks.json`: the agent edited nothing, kai's hook installer wrote
-// that file during the run, and `git add -A` swept it into the commit.
+// The artifact guard moved to kai-engine/gitio so every consumer of
+// DirtyPaths (autofix, kai ship, the TUI close-out offer) filters
+// identically; these wrappers keep autofix's existing API. Provenance:
+// this is the guard that stopped a zero-edit run from shipping a PR
+// whose entire diff was `.codex/hooks.json`.
 
-import "strings"
-
-// kaiArtifactPrefixes are repo-relative path prefixes kai writes during a
-// run. Directory prefixes (not exact files) so future additions under these
-// dirs are covered too.
-var kaiArtifactPrefixes = []string{".codex/", ".claude/", ".kai/"}
+import "github.com/kaicontext/kai-engine/gitio"
 
 // IsKaiArtifact reports whether p is something kai writes for its own
 // operation rather than a change toward the fix.
-func IsKaiArtifact(p string) bool {
-	p = strings.TrimPrefix(strings.ReplaceAll(p, "\\", "/"), "./")
-	for _, pre := range kaiArtifactPrefixes {
-		if strings.HasPrefix(p, pre) {
-			return true
-		}
-	}
-	return false
-}
+func IsKaiArtifact(p string) bool { return gitio.IsKaiArtifact(p) }
 
-// FilterArtifacts returns paths with kai's own artifacts removed, preserving
-// order. Returns a fresh slice (never aliases the input).
-func FilterArtifacts(paths []string) []string {
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		if !IsKaiArtifact(p) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
+// FilterArtifacts returns paths with kai's own artifacts removed,
+// preserving order.
+func FilterArtifacts(paths []string) []string { return gitio.FilterKaiArtifacts(paths) }

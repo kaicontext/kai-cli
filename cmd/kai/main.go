@@ -66,7 +66,7 @@ import (
 	"kai/internal/config"
 	"kai/internal/kitlauncher"
 	tuierrors "kai/internal/tui/errors"
-	spawnpkg "kai/pkg/spawn"
+	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 )
 
 const (
