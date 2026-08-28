@@ -66,6 +66,14 @@ type shipServerStatus struct {
 	PRNumber  int    `json:"pr_number,omitempty"`
 	PRURL     string `json:"pr_url,omitempty"`
 	CommitSHA string `json:"commit_sha,omitempty"`
+	// Overlaps are the server's concurrency advisories: other sessions'
+	// recent ships that touched some of the same files.
+	Overlaps []struct {
+		Branch   string   `json:"branch"`
+		PRNumber int      `json:"pr_number,omitempty"`
+		PRURL    string   `json:"pr_url,omitempty"`
+		Files    []string `json:"files"`
+	} `json:"overlaps,omitempty"`
 }
 
 // runShipServer is the --server arm of runShip: collect the delta,
@@ -174,6 +182,15 @@ func runShipServer(cwd, branch, sessionID string) error {
 		switch st.Status {
 		case "done":
 			fmt.Printf("shipped: PR #%d %s (commit %.12s)\n", st.PRNumber, st.PRURL, st.CommitSHA)
+			// Advisory, not an error: sessions are isolated by branch;
+			// overlap just means the merges will interact.
+			for _, o := range st.Overlaps {
+				ref := o.Branch
+				if o.PRURL != "" {
+					ref = fmt.Sprintf("PR #%d (%s)", o.PRNumber, o.PRURL)
+				}
+				fmt.Printf("note: %s recently shipped changes to %s\n", ref, strings.Join(o.Files, ", "))
+			}
 			return nil
 		case "failed":
 			return fmt.Errorf("ship failed: %s", st.Error)

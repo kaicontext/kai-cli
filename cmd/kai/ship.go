@@ -424,3 +424,70 @@ func resolveShipClient(cwd string) (*autofix.Client, error) {
 	}
 	return autofix.NewClient(shipToken, repo)
 }
+
+// ---------------------------------------------------------------------------
+// kai ship rebase — the conflicted-PR recovery flow
+
+var (
+	shipRebaseRemote string
+	shipRebaseBase   string
+)
+
+var shipRebaseCmd = &cobra.Command{
+	Use:   "rebase",
+	Short: "Rebase the ship branch onto the moved base and update the PR",
+	Long: `When GitHub reports the ship PR conflicts with a moved base, this
+rebases the checked-out kai/ branch onto the remote base and pushes
+with --force-with-lease (safe against a concurrent push from another
+machine); the PR updates via synchronize.
+
+On conflict the rebase is aborted so the tree stays clean, and the
+conflicted files are named — resolve them with a normal
+` + "`git rebase`" + ` and re-run ` + "`kai ship`" + `.`,
+	RunE: runShipRebase,
+}
+
+func init() {
+	shipRebaseCmd.Flags().StringVar(&shipRebaseRemote, "remote", "origin", "git remote holding the base")
+	shipRebaseCmd.Flags().StringVar(&shipRebaseBase, "base", "main", "base branch the PR targets")
+	shipCmd.AddCommand(shipRebaseCmd)
+}
+
+func runShipRebase(cmd *cobra.Command, args []string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	current, err := gitio.CurrentBranch(cwd)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(current, "kai/") {
+		return fmt.Errorf("%s is not a ship branch — check out the kai/ branch to rebase it", current)
+	}
+	if dirty, err := gitio.WorkingTreeDirty(cwd); err != nil {
+		return err
+	} else if dirty {
+		return fmt.Errorf("the working tree has uncommitted changes — ship or stash them before rebasing")
+	}
+	if err := gitio.Fetch(cwd, shipRebaseRemote, shipRebaseBase); err != nil {
+		return fmt.Errorf("fetching %s/%s: %w", shipRebaseRemote, shipRebaseBase, err)
+	}
+	upstream := shipRebaseRemote + "/" + shipRebaseBase
+	conflicted, err := gitio.RebaseOnto(cwd, upstream)
+	if err != nil {
+		if len(conflicted) > 0 {
+			fmt.Printf("rebase onto %s stopped on conflicts (tree restored, nothing lost):\n", upstream)
+			for _, f := range conflicted {
+				fmt.Printf("  %s\n", f)
+			}
+			fmt.Printf("resolve manually: git rebase %s, fix the files, git rebase --continue, then kai ship\n", upstream)
+		}
+		return err
+	}
+	if err := gitio.PushForceWithLease(cwd, shipRebaseRemote, current); err != nil {
+		return fmt.Errorf("rebased locally, but the push was refused (%w) — another machine may have pushed this branch; pull it first", err)
+	}
+	fmt.Printf("rebased %s onto %s and pushed — the PR updates via synchronize\n", current, upstream)
+	return nil
+}
