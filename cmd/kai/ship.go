@@ -42,6 +42,7 @@ var (
 	shipPush    bool
 	shipPR      bool
 	shipDryRun  bool
+	shipServer  bool
 )
 
 var shipCmd = &cobra.Command{
@@ -77,6 +78,7 @@ func init() {
 	shipCmd.Flags().BoolVar(&shipPush, "push", true, "push the branch (set false to stop after the local commit)")
 	shipCmd.Flags().BoolVar(&shipPR, "pr", true, "open a pull request after pushing")
 	shipCmd.Flags().BoolVar(&shipDryRun, "dry-run", false, "print the plan without changing anything")
+	shipCmd.Flags().BoolVar(&shipServer, "server", false, "publish via the kailab server (GitHub App) instead of local git — required for spawned workspaces; --repo means kai org/repo in this mode")
 	rootCmd.AddCommand(shipCmd)
 }
 
@@ -91,6 +93,10 @@ func runShip(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	sessionID := resolveShipSession(cwd)
+
+	if shipServer {
+		return runShipServer(cwd, branch, sessionID)
+	}
 
 	current, err := gitio.CurrentBranch(cwd)
 	if err != nil {
