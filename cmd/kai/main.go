@@ -88,6 +88,7 @@ var kaiDir = kaipath.Resolve(".")
 var ciPolicyFile = filepath.Join(kaiDir, "rules", "ci-policy.yaml")
 
 // Version is the kai CLI's version string; release builds override it via -ldflags "-X main.Version=<tag>".
+// It is the default value reported by `kai --version` for non-release (development) builds.
 var Version = "0.34.5"
 
 // GitSHA is the commit this binary was built from, injected by the
