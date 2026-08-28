@@ -87,8 +87,7 @@ var kaiDir = kaipath.Resolve(".")
 // ciPolicyFile is the primary CI policy location (inside kaiDir).
 var ciPolicyFile = filepath.Join(kaiDir, "rules", "ci-policy.yaml")
 
-// Version is the current kai CLI default; release builds override it via
-// -ldflags "-X main.Version=<tag>" (see .github/workflows/ci.yml).
+// Version is the kai CLI's version string; release builds override it via -ldflags "-X main.Version=<tag>".
 var Version = "0.34.5"
 
 // GitSHA is the commit this binary was built from, injected by the

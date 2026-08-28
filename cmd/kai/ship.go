@@ -44,6 +44,7 @@ var (
 	shipPR      bool
 	shipDryRun  bool
 	shipServer  bool
+	shipClean   bool
 )
 
 var shipCmd = &cobra.Command{
@@ -79,6 +80,7 @@ func init() {
 	shipCmd.Flags().BoolVar(&shipPush, "push", true, "push the branch (set false to stop after the local commit)")
 	shipCmd.Flags().BoolVar(&shipPR, "pr", true, "open a pull request after pushing")
 	shipCmd.Flags().BoolVar(&shipDryRun, "dry-run", false, "print the plan without changing anything")
+	shipCmd.Flags().BoolVar(&shipClean, "clean", false, "after a successful --server ship, stash the shipped changes (labeled; `git stash pop` restores) so the working tree returns to pristine main")
 	shipCmd.Flags().BoolVar(&shipServer, "server", false, "publish via the kailab server (GitHub App) instead of local git — required for spawned workspaces; --repo means kai org/repo in this mode")
 	rootCmd.AddCommand(shipCmd)
 }
