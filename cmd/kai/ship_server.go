@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -182,6 +183,22 @@ func runShipServer(cwd, branch, sessionID string) error {
 		switch st.Status {
 		case "done":
 			fmt.Printf("shipped: PR #%d %s (commit %.12s)\n", st.PRNumber, st.PRURL, st.CommitSHA)
+			// The dirty-main fix: the shipped changes' home is the PR
+			// now. --clean stashes exactly those paths (recoverable),
+			// returning the tree to pristine; without it, say how.
+			if shipClean {
+				msg := fmt.Sprintf("kai ship: PR #%d (%s) — `git stash pop` restores", st.PRNumber, branch)
+				switch err := gitio.StashPushPaths(cwd, msg, changed); {
+				case err == nil:
+					fmt.Println("workspace clean — shipped changes stashed; pull main after the PR merges")
+				case errors.Is(err, gitio.ErrNothingToStash):
+					fmt.Println("workspace already clean")
+				default:
+					fmt.Printf("shipped, but the clean failed (changes are safe on the PR): %v\n", err)
+				}
+			} else {
+				fmt.Println("tip: --clean stashes the shipped changes so main stays pristine (git stash pop restores)")
+			}
 			// Advisory, not an error: sessions are isolated by branch;
 			// overlap just means the merges will interact.
 			for _, o := range st.Overlaps {
