@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -85,14 +86,16 @@ func runShipServer(cwd, branch, sessionID string) error {
 		return err
 	}
 
-	// Delta = the working tree's real changes vs the local git HEAD.
-	// In a spawn, HEAD is the spawn baseline commit, so the dirty set
-	// is exactly what the session changed since it began.
-	dirty, err := gitio.DirtyPaths(cwd)
+	// Delta = everything the session did vs its BASELINE. In a spawn
+	// that is baseline-commit-vs-tree — agents COMMIT their work there
+	// (the Last-Mile discipline), so the dirty set alone reads a
+	// disciplined session as "nothing to ship". In a plain checkout the
+	// baseline is HEAD and the dirty set is the delta, as before.
+	changed, err := shipDeltaNames(cwd)
 	if err != nil {
 		return fmt.Errorf("not a git-backed tree — `kai ship --server` needs the spawn's baseline repo or a git checkout: %w", err)
 	}
-	changed := gitio.FilterKaiArtifacts(dirty)
+	changed = gitio.FilterKaiArtifacts(changed)
 	if len(changed) == 0 {
 		return fmt.Errorf("nothing to ship — the working tree has no changes")
 	}
@@ -236,6 +239,13 @@ func resolveShipServerTarget() (baseURL, token, org, repoName string, err error)
 		}
 		return baseURL, token, o, r, nil
 	}
+	// The tracked .kai.yaml marker is the repo's DESIGNED identity —
+	// it survives clones and spawns, unlike remotes.json (a spawn's
+	// copy has been observed carrying the wrong repo). Marker first,
+	// remote entry as fallback.
+	if o, r := kaiMarkerIdentity(); o != "" && r != "" {
+		return baseURL, token, o, r, nil
+	}
 	entry, gerr := remote.GetRemote("origin")
 	if gerr != nil || entry == nil || entry.Tenant == "" || entry.Repo == "" {
 		return "", "", "", "", fmt.Errorf("no kai repo: pass --repo org/repo or set an origin remote (`kai remote set origin …`)")
@@ -303,4 +313,83 @@ func shipServerCall(baseURL, token, method, path string, body []byte) (*shipServ
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 	return &st, nil
+}
+
+// shipDeltaNames lists the paths of the session's delta: baseline-vs-
+// tree when this dir is a registered spawn (kai-baseline tag, falling
+// back to the root/materialization commit), dirty-vs-HEAD otherwise.
+func shipDeltaNames(cwd string) ([]string, error) {
+	isSpawn := false
+	if reg, err := spawnpkg.Load(); err == nil {
+		resolved, _ := filepath.EvalSymlinks(cwd)
+		for _, e := range reg.Spawned {
+			p, _ := filepath.EvalSymlinks(e.Path)
+			if e.Path == cwd || (resolved != "" && p == resolved) {
+				isSpawn = true
+				break
+			}
+		}
+	}
+	if !isSpawn {
+		return gitio.DirtyPaths(cwd)
+	}
+	base := "HEAD"
+	if out, err := gitOut(cwd, "rev-parse", "-q", "--verify", "kai-baseline^{commit}"); err == nil && out != "" {
+		base = out
+	} else if out, err := gitOut(cwd, "rev-list", "--max-parents=0", "HEAD"); err == nil {
+		roots := strings.Fields(out)
+		if len(roots) > 0 {
+			base = roots[len(roots)-1]
+		}
+	}
+	out, err := gitOut(cwd, "diff", "--name-only", "--no-renames", base)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, p := range strings.Split(out, "\n") {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		names = append(names, p)
+	}
+	if un, err := gitOut(cwd, "ls-files", "--others", "--exclude-standard"); err == nil {
+		for _, p := range strings.Split(un, "\n") {
+			if p == "" || seen[p] {
+				continue
+			}
+			seen[p] = true
+			names = append(names, p)
+		}
+	}
+	return names, nil
+}
+
+func gitOut(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// kaiMarkerIdentity reads org:/repo: from the cwd's tracked .kai.yaml
+// marker (line-based on purpose — no YAML dependency, mirroring the
+// desktop's reader).
+func kaiMarkerIdentity() (org, repo string) {
+	raw, err := os.ReadFile(".kai.yaml")
+	if err != nil {
+		return "", ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "org:"); ok {
+			org = strings.TrimSpace(v)
+		}
+		if v, ok := strings.CutPrefix(line, "repo:"); ok {
+			repo = strings.TrimSpace(v)
+		}
+	}
+	return org, repo
 }
