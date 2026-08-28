@@ -39,6 +39,7 @@ var (
 	spawnJSON         bool
 	spawnSession      string
 	spawnWSName       string
+	spawnDurable      bool
 
 	despawnAll              bool
 	despawnForce            bool
@@ -109,6 +110,7 @@ func init() {
 	spawnCmd.Flags().BoolVar(&spawnExplain, "explain", false, "Print detailed walkthrough")
 	spawnCmd.Flags().BoolVar(&spawnJSON, "json", false, "Output as JSON")
 	spawnCmd.Flags().StringVar(&spawnSession, "session", "", "Session UUID that owns this spawn; names the workspace s-<first 8> and is recorded for kai ship")
+	spawnCmd.Flags().BoolVar(&spawnDurable, "durable", false, "session spawn: lives across turns until shipped; dependency dirs are CoW-copied instead of symlinked, and it is exempt from orphan absorption")
 	spawnCmd.Flags().StringVar(&spawnWSName, "ws-name", "", "Explicit workspace name (default: s-<session prefix>, or s-<random> without --session)")
 
 	despawnCmd.Flags().BoolVar(&despawnAll, "all", false, "Despawn all registered workspaces")
@@ -204,7 +206,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	wsName1 := spawnpkg.NameFor(wsBase, 1)
 	agent1 := agentNameFor(spawnAgent, 1, len(targets))
 
-	if err := materializeFirst(srcRepo, first, srcSnapHex, wsName1, agent1, srcRemote); err != nil {
+	if err := materializeFirst(srcRepo, first, srcSnapHex, wsName1, agent1, srcRemote, spawnDurable, resolved); err != nil {
 		return fmt.Errorf("materializing first workspace: %w", err)
 	}
 	if !spawnNoGit {
@@ -252,6 +254,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 			SessionID:      spawnSession,
 			BaseGitSHA:     baseGitSHA,
 			DirtyAtStart:   gitDirty,
+			Durable:        spawnDurable,
 		}
 		if srcRemote != nil {
 			ent.RemoteName = remoteName
@@ -453,7 +456,7 @@ func resolveSourceSnapshot(repo, sel string) (string, error) {
 	return util.BytesToHex(res.ID), nil
 }
 
-func materializeFirst(srcRepo, dst, snapHex, wsName, agentName string, rem *remote.RemoteEntry) error {
+func materializeFirst(srcRepo, dst, snapHex, wsName, agentName string, rem *remote.RemoteEntry, durable bool, strategy spawnpkg.Resolved) error {
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return err
 	}
@@ -476,7 +479,7 @@ func materializeFirst(srcRepo, dst, snapHex, wsName, agentName string, rem *remo
 	// dep dirs are read-mostly; agent edits to them would be
 	// unusual and would correctly affect the source repo too —
 	// which the user can revert if needed.
-	linkDeps(srcRepo, dst)
+	provisionDeps(srcRepo, dst, durable, strategy)
 
 	// 2. kai init in dst (fresh kai dir).
 	//
@@ -666,8 +669,19 @@ func kaiExe() string {
 //
 // We use os.Symlink, not bind-mounts: cross-platform, no
 // privileges needed, transparent to most tooling.
-func linkDeps(src, dst string) {
-	for _, name := range []string{"node_modules", "vendor", ".venv", "venv"} {
+// depDirs are excluded from snapshots, so a spawn needs them provided
+// some other way or the agent's tests die with "module not found".
+var depDirs = []string{"node_modules", "vendor", ".venv", "venv"}
+
+// provisionDeps gives a spawn its dependency dirs. Ephemeral spawns
+// symlink them from the source — near-free, and fine for a tree that
+// lives minutes. A DURABLE session spawn must not share mutable deps
+// with the user's checkout (an agent's `npm install` would mutate the
+// source repo — and every other session — through the link), so it
+// gets a real copy: CoW where the filesystem supports it, plain copy
+// otherwise. Correctness over speed; both are one `cp` invocation.
+func provisionDeps(src, dst string, durable bool, strategy spawnpkg.Resolved) {
+	for _, name := range depDirs {
 		srcPath := filepath.Join(src, name)
 		info, err := os.Lstat(srcPath)
 		if err != nil || !info.IsDir() {
@@ -677,7 +691,17 @@ func linkDeps(src, dst string) {
 		if _, err := os.Lstat(dstPath); err == nil {
 			continue // something already there; don't clobber
 		}
-		_ = os.Symlink(srcPath, dstPath)
+		if !durable {
+			_ = os.Symlink(srcPath, dstPath)
+			continue
+		}
+		if err := spawnpkg.Copy(srcPath, dstPath, strategy); err != nil {
+			// A dep copy that fails must not kill the spawn — but a
+			// silent symlink fallback would reintroduce the shared-
+			// mutable-deps hazard invisibly. Fall back loudly.
+			fmt.Fprintf(os.Stderr, "warning: copying %s failed (%v) — falling back to a SHARED symlink; installs in this session will touch the source repo\n", name, err)
+			_ = os.Symlink(srcPath, dstPath)
+		}
 	}
 }
 
