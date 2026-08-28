@@ -24,6 +24,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/kaicontext/kai-engine/gitio"
+	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/kaipath"
 	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 	"kai/internal/autofix"
@@ -327,7 +328,59 @@ func shipPRBody(branch, sessionID, snapHex string, files []string) string {
 	for _, f := range files {
 		fmt.Fprintf(&b, "- `%s`\n", f)
 	}
-	b.WriteString("\n</details>\n\n<!-- kai-ship -->\n")
+	b.WriteString("\n</details>\n")
+	if known := ledgerKnownIssues(); known != "" {
+		b.WriteString(known)
+	}
+	b.WriteString("\n<!-- kai-ship -->\n")
+	return b.String()
+}
+
+// ledgerKnownIssues renders the session's unresolved review-ledger
+// claims (open + accepted) for the PR body — the same claims the
+// turn-0 injector shows the agent, now shown to the human reviewer so
+// the PR review starts where the gate audit left off instead of
+// re-diagnosing. Best-effort and capped: no ledger, no section.
+func ledgerKnownIssues() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	kd := kaipath.Resolve(cwd)
+	if _, err := os.Stat(filepath.Join(kd, dbFile)); err != nil {
+		return ""
+	}
+	db, err := graph.Open(filepath.Join(kd, dbFile), filepath.Join(kd, objectsDir))
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	findings, err := db.ListFindingsByState(graph.FindingOpen, graph.FindingAccepted)
+	if err != nil || len(findings) == 0 {
+		return ""
+	}
+	const knownCap = 10
+	var b strings.Builder
+	b.WriteString("\n### Known issues (kai review ledger)\n\n")
+	b.WriteString("Unresolved claims from kai's gate audit, riding along so review starts from the diagnosis instead of re-deriving it.\n\n")
+	for i, f := range findings {
+		if i == knownCap {
+			fmt.Fprintf(&b, "- …%d more — `kai findings` lists them all\n", len(findings)-knownCap)
+			break
+		}
+		what := f.Symptom
+		if what == "" {
+			what = f.Description
+		}
+		fmt.Fprintf(&b, "- **[%s]** %s", f.State, what)
+		if len(f.Files) > 0 {
+			fmt.Fprintf(&b, " (`%s`)", strings.Join(f.Files, "`, `"))
+		}
+		if f.Prescription != "" {
+			fmt.Fprintf(&b, " — fix: %s", f.Prescription)
+		}
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 
