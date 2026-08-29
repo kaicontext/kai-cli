@@ -21,7 +21,7 @@ func TestChatActivity_ToolEventQuietByDefault(t *testing.T) {
 
 	r2, _ := r.Update(ChatActivityMsg{Event: ChatActivityEvent{
 		Kind:    "tool",
-		Summary: "bash: ls -la",
+		Summary: "kai_bash: ls -la",
 	}})
 
 	if len(r2.pendingPrints) > pre {
@@ -37,7 +37,7 @@ func TestChatActivity_ToolEventQuietByDefault(t *testing.T) {
 	if r2.suppressedToolEvents != 1 {
 		t.Errorf("expected suppressedToolEvents=1, got %d", r2.suppressedToolEvents)
 	}
-	if r2.lastToolSummary != "bash: ls -la" {
+	if r2.lastToolSummary != "kai_bash: ls -la" {
 		t.Errorf("expected lastToolSummary captured for spinner; got %q", r2.lastToolSummary)
 	}
 }
@@ -54,14 +54,14 @@ func TestChatActivity_ToolEventVerboseRendersToScrollback(t *testing.T) {
 
 	r2, _ := r.Update(ChatActivityMsg{Event: ChatActivityEvent{
 		Kind:    "tool",
-		Summary: "bash: ls -la",
+		Summary: "kai_bash: ls -la",
 	}})
 
 	if len(r2.pendingPrints) <= pre {
 		t.Fatalf("verbose tool event produced no scrollback line; pendingPrints unchanged (len=%d)", len(r2.pendingPrints))
 	}
 	added := strings.Join(r2.pendingPrints[pre:], "\n")
-	for _, want := range []string{"→", "bash", "ls -la"} {
+	for _, want := range []string{"→", "kai_bash", "ls -la"} {
 		if !strings.Contains(added, want) {
 			t.Errorf("expected %q in verbose tool line, got: %q", want, added)
 		}
