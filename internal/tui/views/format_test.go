@@ -283,10 +283,10 @@ func TestSummarizeToolCall_ShowsArgs(t *testing.T) {
 		// renders the [start-end] slice so the user can tell a
 		// paginated read apart from a cache-miss duplicate. Bare
 		// view (no offset/limit) renders without the suffix.
-		{"view", `{"file_path":"foo.go"}`, `→ view foo.go`},
-		{"view", `{"file_path":"foo.go","offset":100,"limit":50}`, `→ view foo.go [101-150]`},
-		{"view", `{"file_path":"foo.go","offset":0,"limit":50}`, `→ view foo.go [1-50]`},
-		{"view", `{"file_path":"foo.go","offset":200}`, `→ view foo.go [201-]`},
+		{"kai_view", `{"file_path":"foo.go"}`, `→ kai_view foo.go`},
+		{"kai_view", `{"file_path":"foo.go","offset":100,"limit":50}`, `→ kai_view foo.go [101-150]`},
+		{"kai_view", `{"file_path":"foo.go","offset":0,"limit":50}`, `→ kai_view foo.go [1-50]`},
+		{"kai_view", `{"file_path":"foo.go","offset":200}`, `→ kai_view foo.go [201-]`},
 	}
 	for _, c := range cases {
 		got := summarizeToolCall(c.name, c.in)

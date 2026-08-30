@@ -1067,18 +1067,18 @@ func summarizeToolCall(name, inputJSON string) string {
 	// query, not just the tool name. Quoted form on free-text
 	// args makes word boundaries unambiguous.
 	switch name {
-	case "view", "write", "edit":
+	case "kai_view", "kai_write", "kai_edit":
 		if p := pluck("file_path"); p != "" {
-			// Surface offset/limit for view so a paginated read
-			// (e.g. view foo.go offset=200, limit=100) doesn't
-			// LOOK like a duplicate of an earlier `view foo.go`
+			// Surface offset/limit for kai_view so a paginated read
+			// (e.g. kai_view foo.go offset=200, limit=100) doesn't
+			// LOOK like a duplicate of an earlier `kai_view foo.go`
 			// in the tool log. Without this, the user reading
-			// the log sees `view tui.go` three times and assumes
+			// the log sees `kai_view tui.go` three times and assumes
 			// the dedupe cache is broken — when actually each
 			// call has different offset/limit and is correctly
-			// fetching a different slice. write/edit don't have
+			// fetching a different slice. kai_write/kai_edit don't have
 			// offset/limit so they fall through unchanged.
-			if name == "view" {
+			if name == "kai_view" {
 				offset := pluckInt("offset")
 				limit := pluckInt("limit")
 				if offset > 0 || limit > 0 {
@@ -1088,16 +1088,16 @@ func summarizeToolCall(name, inputJSON string) string {
 					}
 					end := offset + limit
 					if limit <= 0 {
-						return fmt.Sprintf("→ view %s [%d-]", p, start)
+						return fmt.Sprintf("→ kai_view %s [%d-]", p, start)
 					}
-					return fmt.Sprintf("→ view %s [%d-%d]", p, start, end)
+					return fmt.Sprintf("→ kai_view %s [%d-%d]", p, start, end)
 				}
 			}
 			return "→ " + name + " " + p
 		}
-	case "bash":
+	case "kai_bash":
 		if c := pluck("command"); c != "" {
-			return "→ bash: " + clip(c)
+			return "→ kai_bash: " + clip(c)
 		}
 	case "kai_grep":
 		q := pluck("query")
@@ -2273,7 +2273,7 @@ func runChatAgent(ctx context.Context, s *PlannerServices, request, sessionID st
 		KeepToolResults: true,
 		Hooks: agent.Hooks{
 			OnToolCall: func(name, inputJSON string) {
-				if name == "bash" {
+				if name == "kai_bash" {
 					bashLineCount = 0
 				}
 				emit("tool", summarizeToolCall(name, inputJSON))
