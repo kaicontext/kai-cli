@@ -193,11 +193,15 @@ type ReviewConfig struct {
 // stays on Opus (a first-class Anthropic model) since misrouting a
 // turn is costly.
 const (
-	defaultClassifierModel = "claude-opus-4-6"
-	defaultReviewModel     = "claude-opus-4-6"
+	defaultClassifierModel = "anthropic/claude-opus-4.8"
+	defaultReviewModel     = "anthropic/claude-opus-4.8"
 	// Open models now route through OpenRouter (switched from Together
-	// 2026-06-05) — ids are OpenRouter slugs. Classifier/review stay on
-	// native Anthropic this phase (Opus caching). DeepSeek/GLM behavior
+	// 2026-06-05) — ids are OpenRouter slugs. Classifier/review moved onto
+	// OpenRouter too (2026-08-31): they were on bare `claude-opus-4-6`,
+	// which kai-server's classifyProvider sends DIRECT to api.anthropic.com,
+	// bypassing the OpenRouter route everything else takes. The
+	// `anthropic/` prefix is what selects OpenRouter, and 4.8 supersedes the
+	// stale 4.6. Do not "simplify" this back to a bare claude-* id. DeepSeek/GLM behavior
 	// notes below still apply — same underlying models, new slugs.
 	defaultPlannerModel = "deepseek/deepseek-v4-pro"
 	// Chat runs the coding agent loop (chat mode is code mode) but on
