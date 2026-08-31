@@ -5087,7 +5087,7 @@ func (r *REPL) maybeRenderDailyCapWarning() {
 		return
 	}
 	r.write(styleError.Render(fmt.Sprintf(
-		"⚠ Today: $%.2f / $%.2f (kailab daily cap). Set ANTHROPIC_API_KEY + KAI_PROVIDER=anthropic to continue past the cap.",
+		"⚠ Today: $%.2f / $%.2f (kailab daily cap). Raise it in Plans & Billing, or set OPENROUTER_API_KEY + KAI_PROVIDER=openrouter to continue past the cap.",
 		float64(cost)/100, float64(cap)/100)))
 }
 

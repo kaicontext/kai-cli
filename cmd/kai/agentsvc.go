@@ -197,7 +197,13 @@ func (s *agentServices) Close() {
 }
 
 // kailabCreds re-derives the kailab base/token the orchestrator config
-// wants. Cheap and side-effect-free; keeps the struct lean.
+// wants. Cheap and side-effect-free; keeps the struct lean. Either value
+// may come back empty (not logged in, expired refresh) — callers decide
+// whether that is fatal. Also used by buildGateProvider and by the
+// paths that need raw credentials rather than a provider.Provider
+// (ai.NewReviewer for `review-summary --ai`), so those resolve
+// credentials the same way the provider path does instead of reaching
+// for an env var.
 func kailabCreds() (base, token string) {
 	creds, _ := remote.LoadCredentials()
 	if creds != nil {

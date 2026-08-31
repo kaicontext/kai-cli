@@ -32,12 +32,6 @@ var fallbackModels = map[provider.Kind][]string{
 		"qwen/qwen3.5-397b-a17b",
 		"qwen/qwen3-coder-next",
 	},
-	provider.KindAnthropic: {
-		"claude-opus-4-7",
-		"claude-opus-4-6",
-		"claude-sonnet-4-6",
-		"claude-haiku-4-5-20251001",
-	},
 	provider.KindOpenAI: {
 		"gpt-5.5",
 		"gpt-5.4",
@@ -167,9 +161,12 @@ func getCachedCatalog() []RemoteCatalogEntry {
 	return out
 }
 
+// KindAnthropic is deliberately absent: direct-to-Anthropic was removed
+// on 2026-08-31, so offering it here would let a user pick a provider
+// that errors at New(). The same Claude models are reachable through
+// kailab, which is the first entry.
 var providerOrder = []provider.Kind{
 	provider.KindKailab,
-	provider.KindAnthropic,
 	provider.KindOpenAI,
 }
 
@@ -446,12 +443,13 @@ func swapModel(s *PlannerServices, rawProvider, model string) string {
 			"(kailab credentials live in disk, not env). For now, set " +
 			"KAI_PROVIDER=kailab in env, exit, and re-run kai code."
 	case provider.KindAnthropic:
-		cfg.AuthToken = strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
-		cfg.BaseURL = strings.TrimSpace(os.Getenv("KAI_ANTHROPIC_BASE_URL"))
-		if cfg.AuthToken == "" {
-			return "model: ANTHROPIC_API_KEY not set in env. " +
-				"Set it and either restart the TUI, or rerun this command."
-		}
+		// Unreachable from the picker (KindAnthropic is out of
+		// providerOrder), but a session restored from an older config
+		// can still carry the kind.
+		return "model: direct-to-Anthropic support was removed. The same " +
+			"Claude models are available through kailab — run `kai login` " +
+			"and pick a kailab model, or use KAI_PROVIDER=openrouter to " +
+			"bring your own."
 	case provider.KindOpenAI:
 		cfg.AuthToken = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 		cfg.BaseURL = strings.TrimSpace(os.Getenv("KAI_OPENAI_BASE_URL"))

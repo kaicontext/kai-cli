@@ -145,7 +145,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 
 	prov, model := rcReviewProvider()
 	if prov == nil {
-		return fmt.Errorf("no LLM provider available (run `kai login` or set ANTHROPIC_API_KEY)")
+		return fmt.Errorf("no LLM provider available (run `kai login`)")
 	}
 
 	fmt.Fprintf(os.Stderr, "kai review-commit %s · %s\n", rcShort(hash), subject)
