@@ -82,10 +82,22 @@ const rcMaxAuthorContextBytes = 8 * 1024
 // agent time; a run still going past that is thrashing, not reviewing.
 // rcReviewHardDeadline backstops a hung provider call that never reaches a
 // turn boundary (the soft budget is only enforced between turns).
+//
+// Raised 2026-08-31. The grounding rules added in #60 make the reviewer do
+// strictly more work per review — it now web-searches an external rate before
+// endorsing it and reads across repos to bound its own claims — and the old
+// 5m/9m budget was set before any of that. Measured on the same commit
+// (kai-server#126): a run that completed took 6m24s, i.e. already past the old
+// soft budget and living on extensions, and a second run truncated mid-sentence
+// with "my web check did not complete before time ran out", producing
+// intent=unknown and zero flags. A hollow finding is worse than a slow one: it
+// reads as "nothing to report" rather than "I ran out of time".
+//
+// The CI step's own timeout is 30 minutes, so this stays well inside it.
 const (
-	rcReviewSoftBudget    = 5 * time.Minute
-	rcReviewSoftExtension = 2 * time.Minute // granted at most twice → 9m ceiling
-	rcReviewHardDeadline  = 12 * time.Minute
+	rcReviewSoftBudget    = 9 * time.Minute
+	rcReviewSoftExtension = 3 * time.Minute // granted at most twice → 15m ceiling
+	rcReviewHardDeadline  = 20 * time.Minute
 )
 
 var (
