@@ -136,7 +136,7 @@ func (r *REPL) enterGateReview() tea.Cmd {
 	}
 	if r.services.OrchestratorCfg.AgentProvider == nil {
 		r.write(styleError.Render(
-			"/gate review needs an LLM api. Run `kai login` (kailab) or set ANTHROPIC_API_KEY and re-run."))
+			"/gate review needs an LLM api. Run `kai login` and re-run."))
 		return nil
 	}
 
@@ -194,7 +194,7 @@ func runGateReviewItem(svc *PlannerServices, snap *graph.Node, sessionTurns stri
 		te := telemetry.NewEvent("gate_review_started")
 		prov := svc.OrchestratorCfg.AgentProvider
 		if prov == nil {
-			err := fmt.Errorf("gate review: no LLM provider configured (run kai login or set ANTHROPIC_API_KEY)")
+			err := fmt.Errorf("gate review: no LLM provider configured (run kai login)")
 			if te != nil {
 				te.SetResult("error")
 				te.SetErrorClass("ai_client")
