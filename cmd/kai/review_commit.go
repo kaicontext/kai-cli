@@ -45,24 +45,33 @@ const rcInferIntentSystem = "You reconstruct the INTENT of a merged pull request
 // rcReviewSystem layers review-commit's specifics UNDER the harness's review
 // personality — the runner prepends agent.ModeReview's system prompt ahead of
 // this text — so this only carries what's specific to reviewing a merged
-// commit: the grounding discipline, the defect sweep, and the output contract.
+// commit: the grounding discipline, the defect sweep, the decisions sweep, and
+// the output contract.
 // The deliverable is a human review (prose the author can actually read),
 // closed by a machine coda the findings pipeline parses (rcParseReviewOutput).
 const rcReviewSystem = `You are reviewing a merged commit. You get the author's own description (AUTHOR CONTEXT), the reconstructed INTENT, and the DIFF; the codebase itself is reachable through your tools. You cannot edit anything and there is no one to ask questions — the review is your whole output.
 
 Ground every claim before you make it. Confirm a suspicion with the graph (kai_callers / kai_dependents on the changed symbols, kai_context to understand one) or by reading the file — a changed signature whose callers were not updated is a defect; so are data races and state mutated outside its lock, resource leaks (goroutines, tickers, files, connections that are never stopped or closed), off-by-one and nil-dereference bugs, swallowed or misrouted errors, and missing validation on inputs. For anything that touches a secret — API key, token, password, session id, HMAC or signature — a plain ==/!= comparison is a timing side channel and must be a constant-time compare (subtle.ConstantTimeCompare / hmac.Equal); check every comparison you can see, and give authentication, authorization, and admin/override paths a specifically suspicious read. Walk the whole diff for each of these before concluding; don't stop at the first thing you find. A finding you would hedge ("could be wrong", "if X implements Y…", "couldn't verify") is not a finding — confirm it or drop it.
 
+GROUND EXTERNAL FACTS TOO — THE REPO CANNOT CONFIRM THEM. Your grounding tools answer questions about THIS codebase. They cannot confirm a claim about the outside world: a third party's fee, rate, or price; an API's actual contract; a spec's required field; a library's current behavior. When the diff (or its comment, or the PR description) asserts such a number and the code's correctness depends on that number being right, the assertion is UNVERIFIED — treat it exactly as you would an unverified claim about a caller. Run ONE kai_web_search before you endorse it, then either cite what you found or say plainly that you could not confirm it. Repeating the author's premise back in your own voice ("the math is correct: $1.00 of credits costs us $1.05") is not review — it launders their assumption into your verdict. kaicontext/kai-server#126 (2026-08-31) shipped a 5% surcharge on a rate nobody checked; the reviewer had kai_web_search in its tool list and never called it.
+
+AN ALL-CLEAR NEEDS THE SAME EVIDENCE AS A CONCERN. Confirm-it-or-drop-it cuts both ways, and the reassuring direction is the one that ships bugs. "Only ever", "never", "always", "nothing else reaches this" are universal claims, and a search that came back empty inside ONE repo does not establish one. Before writing a universal, name the boundary you actually searched and put that boundary in the sentence: "within this repo, the only caller is X" is honest; "X is the only caller" is not, when another repo, another binary, or a client you cannot see also calls it. If the change's correctness rests on something outside your reach, that IS a finding — say what you could not see and what breaks if it is false. Silence about a limit reads as coverage.
+
+SOME THINGS ARE CORRECT AND STILL NEED A HUMAN. A change can be flawless as code and still be a decision the author may not have realized they were making — usually because the PR describes it in a narrower frame than it acts in. Follow the changed values outward until you reach something that CHARGES a customer, LIMITS one (a quota, cap, or rate limit), SENDS or PUBLISHES on their behalf, DELETES, or changes who can access what. If a changed number reaches any of those, report it as a DECISION even when every line is right and the intent matches. "The 5% flows consistently into the daily counter, monthly overflow, credit drawdown, and per-run record" is not a note about internal consistency — it is the sentence "this debits every customer's prepaid balance 5% more", and it belongs in DECISIONS, not in the paragraph reassuring the author that nothing is wrong. Do not weigh whether the decision is a good one: name it, name who it affects, and hand it back.
+
 Then write the review the way a good colleague would leave it on the PR:
-- Open with a short paragraph: what the change actually does, and your overall take.
+- Open with one line naming your scope: the repo and revision you read, plus anything the change obviously touches that you could NOT read (another repo, a client, a deployed config, a provider's behavior). Then a short paragraph: what the change actually does, and your overall take.
 - Then each real concern, in plain language: where it is (path:line), what goes wrong, why it matters, and what you'd do instead. No category tags, no severity labels, no template — clear sentences addressed to the author.
 - If the change is solid, say so plainly. A sentence on what's done well is welcome; flattery is not. Style nits are not concerns.
 
-Finish with this machine coda, exactly once, after everything else. INTENT_MATCH judges the change against the author's ACTUAL goal, not a stricter one: verified = does what they intended; partial = mostly, with gaps; diverges = materially different or broken. Omit the ISSUES list entirely when there are no concerns.
+Finish with this machine coda, exactly once, after everything else. INTENT_MATCH judges the change against the author's ACTUAL goal, not a stricter one: verified = does what they intended; partial = mostly, with gaps; diverges = materially different or broken. A DECISION never lowers INTENT_MATCH — a change can be verified and still need a human's yes. Omit either list entirely when it is empty.
 ===REVIEW-DATA===
 INTENT_MATCH: verified|partial|diverges
 SUMMARY: <one honest sentence — your bottom line>
 ISSUES:
-- path:line — <one-sentence version of each concern from your review>`
+- path:line — <one-sentence version of each concern from your review>
+DECISIONS:
+- <what the author is deciding, who it affects, and the consequence — no path:line; it is not a defect>`
 
 const rcMaxAuthorContextBytes = 8 * 1024
 
@@ -161,14 +170,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
 
-	prose, risks, match, note := rcParseReviewOutput(raw)
+	prose, risks, decisions, match, note := rcParseReviewOutput(raw)
 
 	// An empty review is a FAILURE, not a finding. Shipping a bundle with no
 	// prose, no risks, and an unknown intent verdict green-checks a shell —
 	// the CI job succeeds, the inbox shows nothing, and nobody learns the
 	// review never happened (PRs #89/#90, 2026-08-26). Exit non-zero so the
 	// job fails visibly and the intake's retry machinery gets its chance.
-	if strings.TrimSpace(prose) == "" && len(risks) == 0 && match == finding.MatchUnknown {
+	if strings.TrimSpace(prose) == "" && len(risks) == 0 && len(decisions) == 0 && match == finding.MatchUnknown {
 		return fmt.Errorf("review produced no content (no prose, no risks, intent unknown) — failing instead of posting an empty finding")
 	}
 
@@ -194,11 +203,29 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Emit each defect as a risk-tagged grounded Claim so the findings inbox
+	// A DECISION is a correct change that still needs a human's yes — a changed
+	// number that reaches a charge, a cap, a send, or a delete. It is not a
+	// defect, so it carries no path:line and never lowers INTENT_MATCH; but it
+	// MUST stop the green badge, because "intent verified, nothing flagged" is
+	// exactly the wrong thing to tell an author who is about to move customer
+	// money without having said so. Folding decisions into the risk-tagged
+	// claims does that with no server change: mergeLine (github_pr_comment.go)
+	// flips to "Review before merging" on RiskCount > 0. The prefix keeps them
+	// readable as what they are in the inbox and the PR comment.
+	// kaicontext/kai-server#126 (2026-08-31) is the case this exists for: the
+	// reviewer traced a 5% surcharge into the credit-drawdown path, reported it
+	// as evidence of correctness, and green-checked a billing change.
+	flags := make([]string, 0, len(risks)+len(decisions))
+	flags = append(flags, risks...)
+	for _, d := range decisions {
+		flags = append(flags, "Decision: "+d)
+	}
+
+	// Emit each flag as a risk-tagged grounded Claim so the findings inbox
 	// denormalizes RiskCount/ClaimsCount correctly (storeFinding counts claims
 	// whose tag == "risk"); Intent.Risks keeps the same list for the intent panel.
-	claims := make([]finding.Claim, 0, len(risks))
-	for _, r := range risks {
+	claims := make([]finding.Claim, 0, len(flags))
+	for _, r := range flags {
 		claims = append(claims, finding.Claim{Statement: r, Tag: finding.TagRisk, Resolved: true, Verified: true})
 	}
 
@@ -216,7 +243,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			Stated: subject,
 			Match:  match,
 			Note:   note,
-			Risks:  risks,
+			Risks:  flags,
 		},
 		Claims: claims,
 		Diff:   finding.Diff{Files: files},
@@ -557,14 +584,18 @@ const rcReviewDataMarker = "===REVIEW-DATA==="
 // rcParseReviewOutput splits the reviewer's output into the human review prose
 // and the structured fields the finding carries. Tolerant of the legacy shape
 // (no marker; FINDINGS:/NOTE: lines inline) so an old model answer still parses.
-func rcParseReviewOutput(raw string) (prose string, risks []string, match finding.Match, note string) {
+func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, match finding.Match, note string) {
 	match = finding.MatchUnknown
 	coda := raw
 	if i := strings.Index(raw, rcReviewDataMarker); i >= 0 {
 		prose = strings.TrimSpace(raw[:i])
 		coda = raw[i+len(rcReviewDataMarker):]
 	}
-	inIssues := false
+	// section tracks which bulleted list the parser is inside: "issues" (a
+	// defect) or "decisions" (a correct change that still needs a human's
+	// yes). Empty means neither, so a stray bullet outside a list header is
+	// ignored rather than silently filed as a defect.
+	section := ""
 	var proseEnd int // legacy: prose runs until the first machine line
 	sawMachineLine := false
 	for _, line := range strings.Split(coda, "\n") {
@@ -572,10 +603,13 @@ func rcParseReviewOutput(raw string) (prose string, risks []string, match findin
 		upper := strings.ToUpper(t)
 		switch {
 		case strings.EqualFold(t, "ISSUES:") || strings.EqualFold(t, "FINDINGS:"):
-			inIssues = true
+			section = "issues"
+			sawMachineLine = true
+		case strings.EqualFold(t, "DECISIONS:"):
+			section = "decisions"
 			sawMachineLine = true
 		case strings.HasPrefix(upper, "INTENT_MATCH:"):
-			inIssues = false
+			section = ""
 			sawMachineLine = true
 			// First field only — the value is one word; anything after
 			// ("partial — see above") is commentary, not the verdict.
@@ -591,16 +625,20 @@ func rcParseReviewOutput(raw string) (prose string, risks []string, match findin
 				}
 			}
 		case strings.HasPrefix(upper, "SUMMARY:"):
-			inIssues = false
+			section = ""
 			sawMachineLine = true
 			note = strings.TrimSpace(t[len("SUMMARY:"):])
 		case strings.HasPrefix(upper, "NOTE:"): // legacy spelling
-			inIssues = false
+			section = ""
 			sawMachineLine = true
 			note = strings.TrimSpace(t[len("NOTE:"):])
-		case inIssues && strings.HasPrefix(t, "-"):
+		case section != "" && strings.HasPrefix(t, "-"):
 			if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); item != "" {
-				risks = append(risks, item)
+				if section == "decisions" {
+					decisions = append(decisions, item)
+				} else {
+					risks = append(risks, item)
+				}
 			}
 		default:
 			if !sawMachineLine {
@@ -617,7 +655,7 @@ func rcParseReviewOutput(raw string) (prose string, risks []string, match findin
 		}
 		prose = strings.TrimSpace(coda[:proseEnd])
 	}
-	return prose, risks, match, note
+	return prose, risks, decisions, match, note
 }
 
 func rcCommitMeta(ref string) (hash, subject, body string, err error) {
