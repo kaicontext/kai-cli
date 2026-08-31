@@ -724,8 +724,16 @@ func runGateFix(cmd *cobra.Command, args []string) error {
 // model (a strong model audits the held change) and the fix model
 // (the cheaper agent applies the fixes) — cheap model writes, strong
 // model reviews. Same plumbing the planner uses (provider.FromEnv +
-// provider.New): kailab credentials when present, ANTHROPIC_API_KEY
-// fallback otherwise. For BYOM providers both roles collapse to the
+// provider.New): kailab, always, unless the developer deliberately
+// selected another provider with KAI_PROVIDER. There is NO automatic
+// ANTHROPIC_API_KEY fallback — provider.FromEnv defaults to KindKailab
+// and reads ANTHROPIC_API_KEY only inside the KAI_PROVIDER=anthropic
+// branch. (This comment used to say "ANTHROPIC_API_KEY fallback
+// otherwise", describing a fallback that has never existed; it cost a
+// 2026-08-31 session looking for a direct-to-Anthropic call that was
+// not there. The error string below names the env var as a remedy the
+// developer can opt into, not as a fallback the code takes on its own.)
+// For BYOM providers both roles collapse to the
 // single provider-resolved model (kailab model ids aren't valid
 // there), mirroring buildPlannerServices in tui.go.
 func buildGateProvider(cfg config.Config) (prov provider.Provider, reviewModel, fixModel string, err error) {
