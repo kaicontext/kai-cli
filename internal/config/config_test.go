@@ -134,8 +134,8 @@ func TestLoad_BashAllowParses(t *testing.T) {
 func TestDefault_RoleModels(t *testing.T) {
 	d := Default()
 	cases := []struct{ role, got, want string }{
-		{"classifier", d.Classifier.Model, "claude-opus-4-6"},
-		{"review", d.Review.Model, "claude-opus-4-6"},
+		{"classifier", d.Classifier.Model, "anthropic/claude-opus-4.8"},
+		{"review", d.Review.Model, "anthropic/claude-opus-4.8"},
 		{"planner", d.Planner.Model, "deepseek/deepseek-v4-pro"},
 		// Chat is a coding-mode agent loop → GLM-5.1, same as the
 		// executor (DeepSeek silently dies mid-loop). OpenRouter slugs.
