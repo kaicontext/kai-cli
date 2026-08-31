@@ -90,8 +90,8 @@ func TestRunConfigShow_DefaultProvider(t *testing.T) {
 	}
 }
 
-// TestRunConfigShow_AnthropicProviderNoKey verifies anthropic provider without
-// the ANTHROPIC_API_KEY set reports "(not set)".
+// TestRunConfigShow_AnthropicProviderNoKey verifies the retired anthropic
+// kind reports itself as retired rather than as a provider awaiting a key.
 func TestRunConfigShow_AnthropicProviderNoKey(t *testing.T) {
 	_, cleanup := setupConfigShowDir(t)
 	defer cleanup()
@@ -111,13 +111,16 @@ func TestRunConfigShow_AnthropicProviderNoKey(t *testing.T) {
 	if !strings.Contains(out, "anthropic") {
 		t.Errorf("expected provider 'anthropic'; got:\n%s", out)
 	}
-	if !strings.Contains(out, "(not set)") {
-		t.Errorf("expected api_key_source '(not set)'; got:\n%s", out)
+	if !strings.Contains(out, "retired") {
+		t.Errorf("expected the retired-kind notice; got:\n%s", out)
 	}
 }
 
-// TestRunConfigShow_AnthropicProviderWithKey verifies anthropic provider with
-// ANTHROPIC_API_KEY set reports "ANTHROPIC_API_KEY (env)".
+// TestRunConfigShow_AnthropicProviderWithKey is the regression guard for the
+// 2026-08-31 BYOK removal: even with ANTHROPIC_API_KEY and a model override
+// in the environment, config show must NOT report a usable direct provider.
+// Reporting "ANTHROPIC_API_KEY (env)" would tell a user their key is live
+// when nothing reads it any more.
 func TestRunConfigShow_AnthropicProviderWithKey(t *testing.T) {
 	_, cleanup := setupConfigShowDir(t)
 	defer cleanup()
@@ -136,11 +139,14 @@ func TestRunConfigShow_AnthropicProviderWithKey(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(out, "ANTHROPIC_API_KEY (env)") {
-		t.Errorf("expected 'ANTHROPIC_API_KEY (env)'; got:\n%s", out)
+	if strings.Contains(out, "ANTHROPIC_API_KEY (env)") {
+		t.Errorf("config show still presents the key as a live source; got:\n%s", out)
 	}
-	if !strings.Contains(out, "claude-3-opus") {
-		t.Errorf("expected model override 'claude-3-opus'; got:\n%s", out)
+	if strings.Contains(out, "claude-3-opus") {
+		t.Errorf("model override reported for a retired kind; got:\n%s", out)
+	}
+	if !strings.Contains(out, "retired") {
+		t.Errorf("expected the retired-kind notice; got:\n%s", out)
 	}
 }
 
@@ -279,8 +285,12 @@ func TestRunConfigShow_JSONAnthropicAlias(t *testing.T) {
 		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, out)
 	}
 	runtime := parsed["runtime"].(map[string]interface{})
-	if runtime["api_key_source"] != "ANTHROPIC_API_KEY (env)" {
-		t.Errorf("expected ANTHROPIC_API_KEY (env); got %v", runtime["api_key_source"])
+	// The "claude" alias still normalizes to the anthropic kind, so the
+	// JSON must carry the same retired notice the human output does —
+	// scripts reading api_key_source shouldn't conclude the key is live.
+	src, _ := runtime["api_key_source"].(string)
+	if !strings.Contains(src, "retired") {
+		t.Errorf("expected a retired-kind api_key_source; got %v", runtime["api_key_source"])
 	}
 }
 

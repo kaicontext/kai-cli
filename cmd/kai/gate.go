@@ -16,7 +16,6 @@ import (
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/projects"
 	"github.com/kaicontext/kai-engine/provider"
-	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/session"
 	"github.com/kaicontext/kai-engine/util"
@@ -737,18 +736,11 @@ func runGateFix(cmd *cobra.Command, args []string) error {
 // single provider-resolved model (kailab model ids aren't valid
 // there), mirroring buildPlannerServices in tui.go.
 func buildGateProvider(cfg config.Config) (prov provider.Provider, reviewModel, fixModel string, err error) {
-	creds, _ := remote.LoadCredentials()
-	var kailabBase, kailabToken string
-	if creds != nil {
-		kailabBase = creds.ServerURL
-		if t, terr := remote.GetValidAccessToken(); terr == nil {
-			kailabToken = t
-		}
-	}
+	kailabBase, kailabToken := kailabCreds()
 	pcfg := provider.FromEnv(kailabBase, kailabToken, cfg.Planner.Model)
 	prov, err = provider.New(pcfg)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("provider: %w (set ANTHROPIC_API_KEY or run `kai login` for kailab)", err)
+		return nil, "", "", fmt.Errorf("provider: %w (run `kai login`)", err)
 	}
 	reviewModel, fixModel = pcfg.Model, pcfg.Model
 	if pcfg.Kind == provider.KindKailab {

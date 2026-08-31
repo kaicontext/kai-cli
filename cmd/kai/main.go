@@ -294,7 +294,7 @@ Bring Your Own Model:
   LLM provider (one bearer, server holds the upstream key). To use your
   own keys instead, set KAI_PROVIDER before running kai code:
 
-    KAI_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... kai code
+    KAI_PROVIDER=openrouter OPENROUTER_API_KEY=sk-or-... kai code
     KAI_PROVIDER=openai    OPENAI_API_KEY=sk-...        kai code
 
   Local OpenAI-compatible endpoints (Ollama, vLLM, LM Studio):
@@ -1827,7 +1827,7 @@ LLM provider environment variables (used by the kai TUI):
                         Aliases:
                           openai-compatible / oai-compat / local → openai
                           anthropic-direct / claude              → anthropic
-  ANTHROPIC_API_KEY     required when KAI_PROVIDER=anthropic
+  OPENROUTER_API_KEY    required when KAI_PROVIDER=openrouter
   OPENAI_API_KEY        used when KAI_PROVIDER=openai (optional for local)
   KAI_OPENAI_BASE_URL   OpenAI-compatible endpoint URL
   KAI_OPENAI_MODEL      override default model on OpenAI
@@ -2522,12 +2522,11 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	out.Runtime.Provider = prov
 	switch prov {
 	case "anthropic", "anthropic-direct", "claude":
-		out.Runtime.ModelOverride = os.Getenv("KAI_ANTHROPIC_MODEL")
-		if os.Getenv("ANTHROPIC_API_KEY") != "" {
-			out.Runtime.APIKeySource = "ANTHROPIC_API_KEY (env)"
-		} else {
-			out.Runtime.APIKeySource = "(not set)"
-		}
+		// Retired kind. Report it as such rather than reading a key
+		// nothing consumes — a doctor report that says
+		// "ANTHROPIC_API_KEY (env)" would imply a live direct path.
+		out.Runtime.ModelOverride = ""
+		out.Runtime.APIKeySource = "(retired — direct-to-Anthropic removed; use kailab)"
 	case "openai", "openai-compatible", "oai-compat", "local":
 		out.Runtime.ModelOverride = os.Getenv("KAI_OPENAI_MODEL")
 		if os.Getenv("OPENAI_API_KEY") != "" {
@@ -4615,7 +4614,7 @@ func init() {
 	reviewAnalyzeCmd.Flags().StringVar(&analyzeContract, "contract", "", "Contract id to enrich the intent-vs-code panel")
 	reviewCmd.AddCommand(reviewAnalyzeSnapshotsCmd)
 	reviewSummaryCmd.Flags().BoolVarP(&reviewInteractive, "interactive", "i", false, "Interactive drill-down mode")
-	reviewSummaryCmd.Flags().BoolVar(&reviewAI, "ai", false, "Run AI review (requires ANTHROPIC_API_KEY)")
+	reviewSummaryCmd.Flags().BoolVar(&reviewAI, "ai", false, "Run AI review (requires `kai login`)")
 	rootCmd.AddCommand(reviewCmd)
 
 	// Config commands
@@ -6009,10 +6008,7 @@ func printBYOMHintIfActive() {
 	}
 	switch kind {
 	case string(provider.KindAnthropic):
-		fmt.Fprintf(os.Stderr, "  LLM: anthropic (direct) — using ANTHROPIC_API_KEY\n")
-		if strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) == "" {
-			fmt.Fprintf(os.Stderr, "  %s ANTHROPIC_API_KEY is not set — `kai` will fail at first turn\n", cRed("Warning:"))
-		}
+		fmt.Fprintf(os.Stderr, "  %s KAI_PROVIDER=anthropic is retired — direct-to-Anthropic was removed; every call now goes through kailab. Unset KAI_PROVIDER and run `kai login`.\n", cRed("Warning:"))
 	case string(provider.KindOpenAI):
 		base := strings.TrimSpace(os.Getenv("KAI_OPENAI_BASE_URL"))
 		if base == "" {
@@ -18700,10 +18696,8 @@ func printLLMProviderStatus() {
 	fmt.Println("LLM provider:")
 	switch cfg.Kind {
 	case provider.KindAnthropic:
-		fmt.Println("  Kind:    anthropic (direct)")
-		fmt.Printf("  Key:     %s\n", maskKey("ANTHROPIC_API_KEY", cfg.AuthToken))
-		fmt.Printf("  Model:   %s\n", cfg.Model)
-		fmt.Println("  Cache:   supported")
+		fmt.Println("  Kind:    anthropic (RETIRED — direct-to-Anthropic was removed)")
+		fmt.Println("  Fix:     unset KAI_PROVIDER to use kailab, then `kai login`")
 	case provider.KindOpenAI:
 		fmt.Println("  Kind:    openai (direct)")
 		base := cfg.BaseURL
@@ -19944,11 +19938,16 @@ func runReviewSummary(cmd *cobra.Command, args []string) error {
 
 	// Run AI review if requested
 	if reviewAI {
-		if !ai.IsConfigured() {
-			fmt.Println("⚠ AI review requires ANTHROPIC_API_KEY environment variable")
+		// Routed through kailab like every other model call: resolve the
+		// same credentials buildGateProvider uses. Before 2026-08-31
+		// this read ANTHROPIC_API_KEY and went straight to
+		// api.anthropic.com, which billed outside the proxy.
+		aiBase, aiToken := kailabCreds()
+		if !ai.IsConfigured(aiBase, aiToken) {
+			fmt.Println("⚠ AI review requires a kailab login — run `kai login`")
 		} else {
 			fmt.Println("Running AI review...")
-			reviewer, err := ai.NewReviewer()
+			reviewer, err := ai.NewReviewer(aiBase, aiToken, "")
 			if err != nil {
 				fmt.Printf("⚠ AI review setup failed: %v\n", err)
 			} else {

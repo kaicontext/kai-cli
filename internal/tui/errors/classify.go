@@ -358,7 +358,7 @@ func classifyKnown(err error) (UserError, bool) {
 			return UserError{
 				Kind:     "auth.anthropic",
 				Headline: "Anthropic rejected the request (401)",
-				Action:   "Check ANTHROPIC_API_KEY. Verify the key is valid and not revoked.",
+				Action:   "Check your kailab login (`kai login`). The session token may have expired or been revoked.",
 				Severity: Block,
 			}, true
 		default:
