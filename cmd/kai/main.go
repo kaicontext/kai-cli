@@ -59,6 +59,7 @@ import (
 	"github.com/kaicontext/kai-engine/review"
 	"github.com/kaicontext/kai-engine/safetygate"
 	"github.com/kaicontext/kai-engine/snapshot"
+	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 	"github.com/kaicontext/kai-engine/status"
 	"github.com/kaicontext/kai-engine/telemetry"
 	"github.com/kaicontext/kai-engine/util"
@@ -66,7 +67,6 @@ import (
 	"kai/internal/config"
 	"kai/internal/kitlauncher"
 	tuierrors "kai/internal/tui/errors"
-	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 )
 
 const (
@@ -3459,7 +3459,8 @@ func selfHealHooks() {
 
 // bridgeEnabled reports whether the kai↔git bridge is turned on for this
 // repo. Presence of <kaiDir>/bridge-enabled is the sentinel; the file is
-// written by 'kai init --git-bridge' (or 'kai bridge enable', future).
+// written by 'kai bridge enable' (or 'kai init --git-bridge' at
+// creation time).
 // autoImportEnabled reports whether the git→kai import direction is on:
 // the post-commit/merge/checkout/rewrite hooks importing commits as
 // snapshots. Default true (config `bridge.auto_import`) — this direction
@@ -3501,13 +3502,117 @@ and kai's pre-commit/pre-push hooks short-circuit when driven by the bridge.`,
 var bridgeStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show bridge status for this repo",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if bridgeEnabled() {
-			fmt.Println("kai↔git bridge: enabled")
-		} else {
-			fmt.Println("kai↔git bridge: disabled (run 'kai init --git-bridge')")
-		}
+	Long: `Report what the bridge is actually doing in this repo.
+
+Both directions are reported separately, because they are separately
+gated and either one can be live without the other:
+
+  kai→git   milestones become git commits (the opt-in direction; the
+            'bridge-enabled' sentinel written by 'kai bridge enable')
+  git→kai   commits become kai snapshots (on by default; config
+            bridge.auto_import)
+
+Neither direction can do anything without its hooks, so the installed
+hooks are listed too — "enabled" with no post-commit hook is a repo
+where nothing will actually happen.`,
+	RunE: runBridgeStatus,
+}
+
+func runBridgeStatus(cmd *cobra.Command, args []string) error {
+	if bridgeEnabled() {
+		fmt.Println("kai→git (milestones → commits): enabled")
+	} else {
+		fmt.Println("kai→git (milestones → commits): disabled (run 'kai bridge enable')")
+	}
+	if autoImportEnabled() {
+		fmt.Println("git→kai (commits → snapshots): enabled")
+	} else {
+		fmt.Println("git→kai (commits → snapshots): disabled (config bridge.auto_import)")
+	}
+
+	if _, err := os.Stat(".git"); err != nil {
+		fmt.Println("hooks: none — this is not a git repository, so neither direction can run")
 		return nil
+	}
+	var live, missing []string
+	for _, name := range []string{"post-commit", "post-merge", "post-checkout", "post-rewrite"} {
+		data, err := os.ReadFile(filepath.Join(".git", "hooks", name))
+		switch {
+		case err == nil && strings.Contains(string(data), kaiHookMarker):
+			live = append(live, name)
+		case err == nil:
+			missing = append(missing, name+" (foreign hook — left untouched)")
+		default:
+			missing = append(missing, name)
+		}
+	}
+	if len(live) > 0 {
+		fmt.Println("hooks installed: " + strings.Join(live, ", "))
+	}
+	if len(missing) > 0 {
+		fmt.Println("hooks missing:   " + strings.Join(missing, ", "))
+		fmt.Println("Run 'kai bridge enable' to install them.")
+	}
+	return nil
+}
+
+// The bridge used to be reachable only through 'kai init --git-bridge',
+// which meant a repo that had already been initialized could never turn
+// it on without re-running init. Enable/disable are the same operation
+// at any point in a repo's life.
+var bridgeEnableCmd = &cobra.Command{
+	Use:   "enable",
+	Short: "Turn the kai↔git bridge on for this repo",
+	Long: `Enable the bridge in an already-initialized repo.
+
+Writes the 'bridge-enabled' sentinel and installs the hooks both
+directions need — post-commit, post-merge, post-checkout, post-rewrite.
+Safe to re-run: existing kai-managed hooks are upgraded in place, and a
+foreign hook of the same name is reported and left alone.
+
+Requires a git repository. Everything else about the repo is untouched;
+this does not capture, commit, or rewrite anything.`,
+	RunE: runBridgeEnable,
+}
+
+func runBridgeEnable(cmd *cobra.Command, args []string) error {
+	if _, err := os.Stat(".git"); err != nil {
+		return fmt.Errorf("the bridge needs a git repository (no .git directory here)")
+	}
+	if _, err := os.Stat(kaiDir); err != nil {
+		return fmt.Errorf("no kai project here (%s missing) — run 'kai capture' first", kaiDir)
+	}
+	sentinel := filepath.Join(kaiDir, "bridge-enabled")
+	if err := os.WriteFile(sentinel, []byte("1\n"), 0644); err != nil {
+		return fmt.Errorf("enabling the bridge: %w", err)
+	}
+	// The sentinel alone changes nothing — bridgeEnabled() gates the
+	// hook install, so it has to be written before this runs.
+	if err := runHookInstall(cmd, nil); err != nil {
+		return fmt.Errorf("installing bridge hooks: %w", err)
+	}
+	fmt.Println("kai↔git bridge enabled.")
+	return runBridgeStatus(cmd, nil)
+}
+
+var bridgeDisableCmd = &cobra.Command{
+	Use:   "disable",
+	Short: "Turn the kai→git milestone direction off for this repo",
+	Long: `Remove the 'bridge-enabled' sentinel, so kai milestones stop
+becoming git commits.
+
+The hooks stay installed and the git→kai import direction keeps running
+— that direction is what stops the graph from drifting behind the repo,
+and it never writes to git. Turn it off separately with the
+bridge.auto_import config key, or remove the hooks entirely with
+'kai hook uninstall'.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sentinel := filepath.Join(kaiDir, "bridge-enabled")
+		if err := os.Remove(sentinel); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("disabling the bridge: %w", err)
+		}
+		fmt.Println("kai→git milestone direction disabled.")
+		return runBridgeStatus(cmd, nil)
 	},
 }
 
@@ -4578,6 +4683,8 @@ func init() {
 
 	bridgeCmd.AddCommand(bridgeImportCmd)
 	bridgeCmd.AddCommand(bridgeStatusCmd)
+	bridgeCmd.AddCommand(bridgeEnableCmd)
+	bridgeCmd.AddCommand(bridgeDisableCmd)
 	bridgeMilestoneCmd.Flags().StringVar(&milestoneLabel, "label", "", "Milestone label (becomes the git commit subject)")
 	bridgeMilestoneCmd.Flags().StringVar(&milestoneAssert, "assert", "", "Trust assertion (tests-pass, types-ok, lints-clean, manual-verified)")
 	bridgeMilestoneCmd.Flags().StringVar(&milestonePlanHash, "plan-hash", "", "Plan hash (optional, used with assert=tests-pass)")
