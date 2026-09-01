@@ -3,8 +3,12 @@ package main
 // kai ship --server: publish through the kailab control-plane publisher
 // instead of local git. The request carries the changeset delta as
 // per-file content; the server fetches the recorded base commit,
-// applies the delta, commits with session trailers, force-pushes the
-// kai/ branch via the GitHub App, and opens a draft PR. This is the
+// applies the delta, commits the resulting tree with session trailers
+// onto the kai/ branch tip via the GitHub App, and opens a draft PR.
+// Re-shipping the same session stacks another commit on that branch —
+// review rounds are their own commits, not a rebuilt branch. This path
+// sends the flat delta only; the desktop additionally sends the spawn's
+// commit range, which the publisher replays as real history. This is the
 // path for spawned workspaces (whose git repo is an orphan `git init`
 // with no remote) and for any machine without GitHub credentials.
 //
