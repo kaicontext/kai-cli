@@ -38,3 +38,14 @@ func TestFormatChangeReviewDetail(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatVerbOutcome(t *testing.T) {
+	out := &serverVerbResponse{Review: serverChangeReview{ID: "0123456789abcdef", State: "approved"}, Mirrored: true}
+	if got := formatVerbOutcome("approve", out); got != "Review 0123456789ab: approved (state approved) — mirrored to GitHub\n" {
+		t.Errorf("mirrored = %q", got)
+	}
+	out = &serverVerbResponse{Review: serverChangeReview{ID: "cr", State: "changes_requested"}, MirrorError: "org/app is not GitHub-linked here"}
+	if got := formatVerbOutcome("request_changes", out); !strings.Contains(got, "changes requested") || !strings.Contains(got, "GitHub was not updated: org/app") {
+		t.Errorf("unmirrored = %q", got)
+	}
+}
