@@ -380,3 +380,19 @@ func formatSetOutcome(verb string, out *serverVerbResponse) string {
 	}
 	return b.String()
 }
+
+// reviewUseServer decides where a review command acts. --server forces
+// the control plane; --local forces the graph; otherwise the server is
+// used when this checkout can name a kai repo and the caller is logged
+// in — the server's change review is the one the desktop and Atlas
+// show, so it is the default answer to "where does this change stand".
+func reviewUseServer() bool {
+	if reviewServer {
+		return true
+	}
+	if reviewLocal {
+		return false
+	}
+	_, _, _, _, err := resolveServerTarget(reviewRepo)
+	return err == nil
+}

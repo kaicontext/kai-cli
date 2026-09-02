@@ -2044,8 +2044,8 @@ Reviews are anchored to semantic entities (changesets, symbols) not lines.
 
 Examples:
   kai review open @cs:last --title "Add auth"    # Open a review
-  kai review list                                 # List all reviews
-  kai review list --server                        # The server's change reviews for this repo
+  kai review list                                 # This repo's change reviews on the server (local graph with --local)
+  kai review list --local                         # The local graph's reviews
   kai review view <id>                            # View a review
   kai review approve <id>                         # Approve a review
   kai review close <id> --state merged            # Close as merged`,
@@ -2242,6 +2242,7 @@ var (
 	reviewRepo          string
 	reviewVerbMessage   string
 	reviewAll           bool
+	reviewLocal         bool
 	reviewViewMode      string
 	reviewExplain       bool
 	reviewBase          string
@@ -4260,6 +4261,9 @@ func init() {
 	reviewListCmd.Flags().BoolVar(&reviewJSON, "json", false, "Output as JSON")
 	reviewListCmd.Flags().BoolVar(&reviewServer, "server", false, "list the kailab server's change reviews for this repo instead of the local graph")
 	reviewListCmd.Flags().StringVar(&reviewRepo, "repo", "", "kai org/repo for --server (default: this checkout's .kai.yaml)")
+	for _, c := range []*cobra.Command{reviewListCmd, reviewViewCmd, reviewApproveCmd, reviewRequestChangesCmd, reviewCommentCmd} {
+		c.Flags().BoolVar(&reviewLocal, "local", false, "act on the local graph's review instead of the server's (the default when this checkout has no kai repo or you are not logged in)")
+	}
 	for _, c := range []*cobra.Command{reviewApproveCmd, reviewRequestChangesCmd, reviewCommentCmd, reviewLandCmd} {
 		c.Flags().BoolVar(&reviewServer, "server", false, "act on the kailab server's change review (mirrored to its pull request) instead of the local graph")
 		c.Flags().StringVar(&reviewRepo, "repo", "", "kai org/repo for --server (default: this checkout's .kai.yaml)")
@@ -19207,7 +19211,7 @@ func runReviewOpen(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewList(cmd *cobra.Command, args []string) error {
-	if reviewServer {
+	if reviewUseServer() {
 		return runReviewListServer()
 	}
 	db, err := openDB()
@@ -19246,7 +19250,7 @@ func runReviewList(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewView(cmd *cobra.Command, args []string) error {
-	if reviewServer {
+	if reviewUseServer() {
 		return runReviewViewServer(args[0])
 	}
 	db, err := openDB()
@@ -19738,7 +19742,7 @@ func runReviewLand(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewApprove(cmd *cobra.Command, args []string) error {
-	if reviewServer {
+	if reviewUseServer() {
 		if reviewAll {
 			return runReviewVerbServer(args[0], "set_approve", reviewVerbMessage, "", 0)
 		}
@@ -19765,7 +19769,7 @@ func runReviewApprove(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewRequestChanges(cmd *cobra.Command, args []string) error {
-	if reviewServer {
+	if reviewUseServer() {
 		return runReviewVerbServer(args[0], "request_changes", reviewVerbMessage, "", 0)
 	}
 	db, err := openDB()
@@ -19892,7 +19896,7 @@ func runReviewReady(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewComment(cmd *cobra.Command, args []string) error {
-	if reviewServer {
+	if reviewUseServer() {
 		return runReviewVerbServer(args[0], "comment", reviewCommentBody, reviewCommentFile, reviewCommentLine)
 	}
 	db, err := openDB()
