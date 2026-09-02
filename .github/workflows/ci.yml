@@ -52,9 +52,13 @@ jobs:
       - name: Authenticate to private kai-core module
         run: git config --global url."https://x-access-token:${{ steps.core-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc gcc-mingw-w64-x86-64
       - name: Test
         run: CGO_ENABLED=1 go test -timeout 5m -skip 'TestRunCompletion' ./...
+      # Windows cross-check: unix-only syscalls (flock, Setpgid, Kill, Exec)
+      # only surface under GOOS=windows; tree-sitter needs cgo, hence mingw.
+      - name: Vet windows/amd64
+        run: CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go vet ./...
 
   # Engine module-boundary check (see internal/boundary). kai-cli consumes
   # kai-core and kai-engine as versioned module dependencies; this fails the
@@ -183,8 +187,56 @@ jobs:
             gcloud storage cp "$asset" "gs://kaicontext-releases/kai-cli/latest/${asset}"
           done
 
+  build-windows:
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+      - name: Mint short-lived kai-core read token
+        uses: actions/create-github-app-token@v3
+        id: core-token
+        with:
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-core,kai-engine
+      - name: Authenticate to private kai-core module
+        run: git config --global url."https://x-access-token:${{ steps.core-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      # Cross-compiled from Linux with mingw (tree-sitter needs cgo). The
+      # asset keeps the kai-<os>-<arch>.gz shape `kai update` expects; the
+      # .exe suffix is restored by the installer, not the asset name.
+      - name: Build windows/amd64
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0-dev+${GITHUB_SHA::7}"; fi
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go build -ldflags="-s -w -X main.Version=${VERSION}" -o kai-windows-amd64.exe ./cmd/kai
+          gzip -c kai-windows-amd64.exe > kai-windows-amd64.gz
+      - name: Authenticate to Google Cloud
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/1093447114400/locations/global/workloadIdentityPools/github/providers/github
+          service_account: kai-release-uploader@preplanai.iam.gserviceaccount.com
+      - name: Set up Cloud SDK
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Upload windows binary to GCS
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gcloud storage cp kai-windows-amd64.gz "gs://kaicontext-releases/kai-cli/v${VERSION}/kai-windows-amd64.gz"
+          gcloud storage cp kai-windows-amd64.gz "gs://kaicontext-releases/kai-cli/latest/kai-windows-amd64.gz"
+
   # Dual-publish on version tags. The binaries are uploaded directly to GCS by
-  # the build-linux/build-darwin jobs (to both v<X.Y.Z>/ and latest/). This job
+  # the build-linux/build-darwin/build-windows jobs (to both v<X.Y.Z>/ and latest/). This job
   # (1) records the `latest/VERSION` marker so GCS installers can discover the
   # current version, and (2) recreates the GitHub Release — pulling the same
   # binaries back down from GCS (instead of Actions artifacts) and re-attaching
@@ -192,7 +244,7 @@ jobs:
   # working off /releases/latest.
   release:
     runs-on: ubuntu-latest
-    needs: [build-linux, build-darwin]
+    needs: [build-linux, build-darwin, build-windows]
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
@@ -215,7 +267,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p release
-          for asset in kai-linux-amd64.gz kai-linux-arm64.gz kai-darwin-arm64.gz kai-darwin-amd64.gz; do
+          for asset in kai-linux-amd64.gz kai-linux-arm64.gz kai-darwin-arm64.gz kai-darwin-amd64.gz kai-windows-amd64.gz; do
             gcloud storage cp "gs://kaicontext-releases/kai-cli/v${VERSION}/${asset}" "release/${asset}"
           done
           # The curl installer itself — get.kaicontext.com redirects to
