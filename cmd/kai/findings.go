@@ -82,15 +82,18 @@ func findingsAPIGet(baseURL, token, path string) ([]byte, error) {
 
 // findingSummary mirrors the flat fields the findings API returns per finding.
 type findingSummary struct {
-	ID          string `json:"id"`
-	PRNumber    int    `json:"pr_number"`
-	Title       string `json:"title"`
-	Author      string `json:"author"`
-	Verdict     string `json:"verdict"`
-	IntentMatch string `json:"intent_match"`
-	Reaches     int    `json:"reaches"`
-	Claims      int    `json:"claims"`
-	Risk        int    `json:"risk"`
+	ID       string `json:"id"`
+	PRNumber int    `json:"pr_number"`
+	// ChangeReviewID is the change this finding reviewed (the server's
+	// change review, the one `kai review view --server` shows).
+	ChangeReviewID string `json:"change_review_id"`
+	Title          string `json:"title"`
+	Author         string `json:"author"`
+	Verdict        string `json:"verdict"`
+	IntentMatch    string `json:"intent_match"`
+	Reaches        int    `json:"reaches"`
+	Claims         int    `json:"claims"`
+	Risk           int    `json:"risk"`
 }
 
 var findingsCmd = &cobra.Command{
@@ -140,6 +143,9 @@ var findingsListCmd = &cobra.Command{
 			pr := ""
 			if f.PRNumber > 0 {
 				pr = fmt.Sprintf("PR #%-4d ", f.PRNumber)
+			}
+			if f.ChangeReviewID != "" {
+				pr += "chg:" + findingsShortID(f.ChangeReviewID) + " "
 			}
 			fmt.Printf("  %-22s %-9s %srisk:%d claims:%d  %s\n",
 				f.ID, findingsVerdictLabel(f.Verdict), pr, f.Risk, f.Claims, findingsTruncate(f.Title, 56))
@@ -207,6 +213,9 @@ func renderFinding(baseURL, org, repo string, body []byte) error {
 	fmt.Printf("  id:      %s\n", resp.ID)
 	if resp.PRNumber > 0 {
 		fmt.Printf("  pr:      #%d\n", resp.PRNumber)
+	}
+	if resp.ChangeReviewID != "" {
+		fmt.Printf("  change:  %s   (kai review view %s)\n", resp.ChangeReviewID, findingsShortID(resp.ChangeReviewID))
 	}
 	if resp.Author != "" {
 		fmt.Printf("  author:  %s\n", resp.Author)
@@ -282,4 +291,11 @@ func init() {
 	findingsListCmd.Flags().IntVar(&findingsLimit, "limit", 0, "Maximum findings to show (0 = all)")
 	findingsCmd.AddCommand(findingsListCmd, findingsGetCmd)
 	rootCmd.AddCommand(findingsCmd)
+}
+
+func findingsShortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
