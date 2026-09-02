@@ -7,6 +7,7 @@ package main
 // same idea, which is the one the desktop and Atlas show.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -58,12 +59,23 @@ type serverChangeDetail struct {
 // serverGetRaw performs one authenticated GET and returns the body, with
 // the same status-to-prescription mapping shipServerCall uses.
 func serverGetRaw(baseURL, token, path string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, baseURL+path, nil)
+	return serverCallRaw(baseURL, token, http.MethodGet, path, nil)
+}
+
+func serverCallRaw(baseURL, token, method, path string, body []byte) ([]byte, error) {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, baseURL+path, rd)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
@@ -77,6 +89,8 @@ func serverGetRaw(baseURL, token, path string) ([]byte, error) {
 		return nil, fmt.Errorf("forbidden (403) — reading reviews needs membership of this repo")
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, fmt.Errorf("not found (404) — no such review, or this server does not serve change reviews yet")
+	case resp.StatusCode == http.StatusConflict:
+		return nil, fmt.Errorf("refused (409): %s", strings.TrimSpace(string(raw)))
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
 		return nil, fmt.Errorf("server %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
@@ -229,4 +243,70 @@ func formatChangeReviewDetail(d *serverChangeDetail) string {
 		}
 	}
 	return b.String()
+}
+
+// changeReviewVerbSegments maps a verb onto the server's route.
+var changeReviewVerbSegments = map[string]string{
+	"approve":         "approve",
+	"request_changes": "request-changes",
+	"reopen":          "reopen",
+	"comment":         "comments",
+}
+
+type serverVerbResponse struct {
+	Review      serverChangeReview `json:"review"`
+	Mirrored    bool               `json:"mirrored"`
+	MirrorError string             `json:"mirror_error"`
+}
+
+// runReviewVerbServer records a reviewer's action on the server's change
+// review and says how it fared on GitHub. Kai's row is written before the
+// mirror is attempted, so a mirror failure is reported, not fatal.
+func runReviewVerbServer(id, verb, body, file string, line int) error {
+	seg, ok := changeReviewVerbSegments[verb]
+	if !ok {
+		return fmt.Errorf("unknown review action %q", verb)
+	}
+	baseURL, token, org, repoName, err := resolveServerTarget(reviewRepo)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{"body": strings.TrimSpace(body)}
+	if file != "" {
+		payload["file"] = file
+		if line > 0 {
+			payload["line"] = line
+		}
+	}
+	enc, _ := json.Marshal(payload)
+	raw, err := serverCallRaw(baseURL, token, http.MethodPost,
+		fmt.Sprintf("/api/v1/orgs/%s/repos/%s/changes/%s/%s", org, repoName, id, seg), enc)
+	if err != nil {
+		return err
+	}
+	if reviewJSON {
+		os.Stdout.Write(raw)
+		fmt.Println()
+		return nil
+	}
+	var out serverVerbResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
+	fmt.Print(formatVerbOutcome(verb, &out))
+	return nil
+}
+
+func formatVerbOutcome(verb string, out *serverVerbResponse) string {
+	what := map[string]string{
+		"approve": "approved", "request_changes": "changes requested", "reopen": "reopened", "comment": "comment recorded",
+	}[verb]
+	line := fmt.Sprintf("Review %s: %s (state %s)", shortReviewID(out.Review.ID), what, out.Review.State)
+	switch {
+	case out.Mirrored:
+		line += " — mirrored to GitHub"
+	case out.MirrorError != "":
+		line += " — recorded in Kai, but GitHub was not updated: " + out.MirrorError
+	}
+	return line + "\n"
 }

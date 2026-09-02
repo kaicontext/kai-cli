@@ -2226,6 +2226,7 @@ var (
 	reviewJSON          bool
 	reviewServer        bool
 	reviewRepo          string
+	reviewVerbMessage   string
 	reviewViewMode      string
 	reviewExplain       bool
 	reviewBase          string
@@ -4244,6 +4245,13 @@ func init() {
 	reviewListCmd.Flags().BoolVar(&reviewJSON, "json", false, "Output as JSON")
 	reviewListCmd.Flags().BoolVar(&reviewServer, "server", false, "list the kailab server's change reviews for this repo instead of the local graph")
 	reviewListCmd.Flags().StringVar(&reviewRepo, "repo", "", "kai org/repo for --server (default: this checkout's .kai.yaml)")
+	for _, c := range []*cobra.Command{reviewApproveCmd, reviewRequestChangesCmd, reviewCommentCmd} {
+		c.Flags().BoolVar(&reviewServer, "server", false, "act on the kailab server's change review (mirrored to its pull request) instead of the local graph")
+		c.Flags().StringVar(&reviewRepo, "repo", "", "kai org/repo for --server (default: this checkout's .kai.yaml)")
+		c.Flags().BoolVar(&reviewJSON, "json", false, "Output as JSON (--server only)")
+	}
+	reviewApproveCmd.Flags().StringVarP(&reviewVerbMessage, "message", "m", "", "note to record with the approval (--server only)")
+	reviewRequestChangesCmd.Flags().StringVarP(&reviewVerbMessage, "message", "m", "", "what needs to change (--server only)")
 	reviewViewCmd.Flags().StringVar(&reviewViewMode, "view", "semantic", "View mode: semantic, text, or mixed")
 	reviewViewCmd.Flags().BoolVarP(&reviewSummary, "summary", "s", true, "Show progressive disclosure summary (default)")
 	reviewViewCmd.Flags().BoolVarP(&reviewInteractive, "interactive", "i", false, "Interactive mode: drill down into changes")
@@ -19710,6 +19718,9 @@ func runReviewStatus(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewApprove(cmd *cobra.Command, args []string) error {
+	if reviewServer {
+		return runReviewVerbServer(args[0], "approve", reviewVerbMessage, "", 0)
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -19731,6 +19742,9 @@ func runReviewApprove(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewRequestChanges(cmd *cobra.Command, args []string) error {
+	if reviewServer {
+		return runReviewVerbServer(args[0], "request_changes", reviewVerbMessage, "", 0)
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -19855,6 +19869,9 @@ func runReviewReady(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewComment(cmd *cobra.Command, args []string) error {
+	if reviewServer {
+		return runReviewVerbServer(args[0], "comment", reviewCommentBody, reviewCommentFile, reviewCommentLine)
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
