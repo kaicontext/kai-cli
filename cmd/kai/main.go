@@ -6582,14 +6582,6 @@ func acquireCaptureLock(kaiDir string) (func(), error) {
 // (no such process, permission denied — which on macOS also means
 // the process is gone for non-root callers since the PID has been
 // reused or freed).
-func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
-}
-
 func runCapture(cmd *cobra.Command, args []string) error {
 	te := telemetry.NewEvent("capture")
 	defer te.Finish()

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/kaicontext/kai-engine/remote"
@@ -77,12 +76,14 @@ func acquireLiveRunLock(kaiDir string) (*os.File, bool) {
 	if err != nil {
 		return nil, true // fail open
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	held, err := tryLockFile(f)
+	if err != nil {
 		f.Close()
-		if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
-			return nil, false // another daemon holds it
-		}
 		return nil, true // unexpected error — fail open
+	}
+	if !held {
+		f.Close()
+		return nil, false // another daemon holds it
 	}
 	return f, true
 }
@@ -105,7 +106,7 @@ func autoSyncRunningPid(kaiDir string) int {
 func stopAutoSync(kaiDir string) {
 	if pid := autoSyncRunningPid(kaiDir); pid > 0 {
 		if proc, err := os.FindProcess(pid); err == nil {
-			_ = proc.Signal(syscall.SIGTERM)
+			terminateProcess(proc)
 		}
 	}
 	_ = os.Remove(autoSyncPidPath(kaiDir))
@@ -155,7 +156,7 @@ func startAutoSync(kaiDir, wsName string) {
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	detachFromSession(cmd)
 	if err := cmd.Start(); err != nil {
 		return
 	}

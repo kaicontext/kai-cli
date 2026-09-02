@@ -88,7 +88,7 @@ func runLiveCheckpoint(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("finding live sync process: %w", err)
 	}
-	if err := proc.Signal(syscall.SIGUSR1); err != nil {
+	if err := sendCheckpoint(proc); err != nil {
 		return fmt.Errorf("signaling live sync: %w", err)
 	}
 	fmt.Println("Checkpoint flushed to live sync.")
@@ -240,7 +240,7 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	chk := make(chan os.Signal, 1)
-	signal.Notify(chk, syscall.SIGUSR1)
+	notifyCheckpoint(chk)
 
 	wsLabel := ws
 	if wsLabel == "" {
