@@ -2087,6 +2087,20 @@ Examples:
 	RunE: runReviewView,
 }
 
+var reviewLandCmd = &cobra.Command{
+	Use:   "land <review-id>",
+	Short: "Land an approved change review onto the base branch (server, kai mode)",
+	Long: `Land an approved change review: the kailab server merges the session's
+branch onto the repository's base branch — fast-forward when base has not
+moved, otherwise replaying the review's commits onto the new tip. No pull
+request is involved; the repository must be in kai review mode.
+
+Examples:
+  kai review land cr-3f2a9c1e --server`,
+	Args: cobra.ExactArgs(1),
+	RunE: runReviewLand,
+}
+
 var reviewStatusCmd = &cobra.Command{
 	Use:   "status <review-id>",
 	Short: "Show review status",
@@ -4245,7 +4259,7 @@ func init() {
 	reviewListCmd.Flags().BoolVar(&reviewJSON, "json", false, "Output as JSON")
 	reviewListCmd.Flags().BoolVar(&reviewServer, "server", false, "list the kailab server's change reviews for this repo instead of the local graph")
 	reviewListCmd.Flags().StringVar(&reviewRepo, "repo", "", "kai org/repo for --server (default: this checkout's .kai.yaml)")
-	for _, c := range []*cobra.Command{reviewApproveCmd, reviewRequestChangesCmd, reviewCommentCmd} {
+	for _, c := range []*cobra.Command{reviewApproveCmd, reviewRequestChangesCmd, reviewCommentCmd, reviewLandCmd} {
 		c.Flags().BoolVar(&reviewServer, "server", false, "act on the kailab server's change review (mirrored to its pull request) instead of the local graph")
 		c.Flags().StringVar(&reviewRepo, "repo", "", "kai org/repo for --server (default: this checkout's .kai.yaml)")
 		c.Flags().BoolVar(&reviewJSON, "json", false, "Output as JSON (--server only)")
@@ -4728,6 +4742,7 @@ func init() {
 	// Add review subcommands
 	reviewCmd.AddCommand(reviewOpenCmd)
 	reviewCmd.AddCommand(reviewListCmd)
+	reviewCmd.AddCommand(reviewLandCmd)
 	reviewCmd.AddCommand(reviewViewCmd)
 	reviewCmd.AddCommand(reviewStatusCmd)
 	reviewCmd.AddCommand(reviewApproveCmd)
@@ -19715,6 +19730,13 @@ func runReviewStatus(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Review %s: %s\n", review.IDToHex(rev.ID)[:12], rev.State)
 	return nil
+}
+
+func runReviewLand(cmd *cobra.Command, args []string) error {
+	if !reviewServer {
+		return fmt.Errorf("landing is a server operation — pass --server (the repository must be in kai review mode)")
+	}
+	return runReviewVerbServer(args[0], "land", "", "", 0)
 }
 
 func runReviewApprove(cmd *cobra.Command, args []string) error {
