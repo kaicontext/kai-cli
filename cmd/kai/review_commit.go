@@ -59,6 +59,12 @@ AN ALL-CLEAR NEEDS THE SAME EVIDENCE AS A CONCERN. Confirm-it-or-drop-it cuts bo
 
 SOME THINGS ARE CORRECT AND STILL NEED A HUMAN. A change can be flawless as code and still be a decision the author may not have realized they were making — usually because the PR describes it in a narrower frame than it acts in. Follow the changed values outward until you reach something that CHARGES a customer, LIMITS one (a quota, cap, or rate limit), SENDS or PUBLISHES on their behalf, DELETES, or changes who can access what. If a changed number reaches any of those, report it as a DECISION even when every line is right and the intent matches. "The 5% flows consistently into the daily counter, monthly overflow, credit drawdown, and per-run record" is not a note about internal consistency — it is the sentence "this debits every customer's prepaid balance 5% more", and it belongs in DECISIONS, not in the paragraph reassuring the author that nothing is wrong. Do not weigh whether the decision is a good one: name it, name who it affects, and hand it back.
 
+MONEY HAS A DIRECTION. When a change moves money or credits, say in words who is debited and who is credited, and name the function that moves it — a grant adds to a balance, a drawdown subtracts from one. Read the function, not its name. A decision handed back with the direction inverted ("this draws against the referrer's balance" when it pays them) sends the author to confirm the wrong thing, and it happened (kai-server, 2026-09-02).
+
+SIBLING PATHS SHARE GUARDS. When the diff adds a branch beside an existing one that does the same kind of work — a second case in a webhook switch, a second checkout path, a second handler for the same event — read the older branch's guards and list each one the new branch lacks: a payment-status check, an idempotency key, an auth check, a size limit. A guard the author already wrote once and did not carry over is a defect, not a style nit.
+
+NEW DEFAULTS POINT SOMEWHERE. A new config default that is a URL, host, e-mail address, or path ships to every user who never sets the variable. Confirm the target exists and that something in this repo, or a repo you can see, serves it; a default pointing at a domain nobody here owns is a defect. (The pipeline also greps for hosts the change introduces that nothing else mentions and files them as risks; you still have to say whether the target is real.)
+
 Then write the review the way a good colleague would leave it on the PR:
 - Open with one line naming your scope: the repo and revision you read, plus anything the change obviously touches that you could NOT read (another repo, a client, a deployed config, a provider's behavior). Then a short paragraph: what the change actually does, and your overall take.
 - Then each real concern, in plain language: where it is (path:line), what goes wrong, why it matters, and what you'd do instead. No category tags, no severity labels, no template — clear sentences addressed to the author.
@@ -103,6 +109,7 @@ const (
 var (
 	reviewCommitFormat string
 	reviewCommitBase   string
+	reviewCommitBranch string
 )
 
 var reviewCommitCmd = &cobra.Command{
@@ -123,6 +130,7 @@ var reviewCommitCmd = &cobra.Command{
 func init() {
 	reviewCommitCmd.Flags().StringVar(&reviewCommitFormat, "format", "text", "output format: text|json")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBase, "base", "", "review the aggregate diff of <base>...<commit> (PR range) instead of a single commit")
+	reviewCommitCmd.Flags().StringVar(&reviewCommitBranch, "branch", "", "branch name to record on the finding (default: GITHUB_HEAD_REF / GITHUB_REF_NAME / the checked-out branch)")
 	rootCmd.AddCommand(reviewCommitCmd)
 }
 
@@ -150,6 +158,20 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A merge commit says nothing about the work it brings in ("Merge
+	// origin/main into X" is not a goal), so its stated intent, inbox title,
+	// and author context come from the commits in the reviewed range instead.
+	isMerge := rcIsMergeCommit(hash)
+	rangeSubjects, rangeBodies := rcRangeCommits(reviewCommitBase, ref)
+	stated := rcStatedIntent(subject, isMerge, rangeSubjects)
+	title := rcTitle(subject, isMerge, rangeSubjects)
+	authorContext := rcAuthorContext(subject, body, isMerge, rangeSubjects, rangeBodies)
+	intentBody := body
+	if isMerge && len(rangeSubjects) > 0 {
+		intentBody = authorContext
+		fmt.Fprintf(os.Stderr, "  merge commit: intent taken from %d commit(s) in %s..%s\n",
+			len(rangeSubjects), reviewCommitBase, rcShort(hash))
+	}
 	diff := rcCommitDiff(reviewCommitBase, ref, maxReviewCommitDiffBytes)
 	if strings.TrimSpace(diff) == "" {
 		return fmt.Errorf("commit %s has an empty diff (merge commit? try a child, or pass --base)", rcShort(hash))
@@ -163,16 +185,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "kai review-commit %s · %s\n", rcShort(hash), subject)
 	fmt.Fprintf(os.Stderr, "  reconstructing intent (model %s)…\n", model)
 	phase := time.Now()
-	intent, err := rcInferIntent(ctx, prov, model, subject, body, diff)
+	intent, err := rcInferIntent(ctx, prov, model, stated, intentBody, diff)
 	if err != nil {
 		return fmt.Errorf("infer intent: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "  timing: intent=%s\n", time.Since(phase).Round(time.Second))
-
-	authorContext := subject
-	if strings.TrimSpace(body) != "" {
-		authorContext += "\n\n" + body
-	}
 
 	fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
 	phase = time.Now()
@@ -233,17 +250,33 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		flags = append(flags, "Decision: "+d)
 	}
 
-	// Emit each flag as a risk-tagged grounded Claim so the findings inbox
-	// denormalizes RiskCount/ClaimsCount correctly (storeFinding counts claims
-	// whose tag == "risk"); Intent.Risks keeps the same list for the intent panel.
+	// Each ISSUE becomes a Claim grounded against the reviewed tree: its
+	// path:line resolves to the source line itself as the lookup, or the
+	// claim is held when that location does not exist at this revision (the
+	// one thing the reviewer was asked to pin down could not be found where
+	// it said). A DECISION is grounded by construction. URL hosts the change
+	// introduces that nothing else in the tree mentions are added as risks
+	// of their own — with the grep as their lookup — and join Intent.Risks so
+	// the intent panel shows them too. The inbox denormalizes RiskCount from
+	// grounded risk-tagged claims, so held claims are visible but do not
+	// count.
 	claims := make([]finding.Claim, 0, len(flags))
-	for _, r := range flags {
-		claims = append(claims, finding.Claim{Statement: r, Tag: finding.TagRisk, Resolved: true, Verified: true})
+	tree := rcTreeFiles(hash)
+	for _, r := range risks {
+		claims = append(claims, rcGroundIssue(hash, r, tree, rcFileLines))
+	}
+	for _, d := range decisions {
+		claims = append(claims, rcDecisionClaim(d))
+	}
+	for _, c := range rcNewHostClaims(hash, diff, changedPaths, rcFilesMentioningHost) {
+		claims = append(claims, c)
+		flags = append(flags, c.Statement)
 	}
 
 	f := finding.Finding{
 		ID:      rcFindingID(hash),
-		Title:   subject,
+		Title:   title,
+		Branch:  rcBranchName(reviewCommitBranch),
 		Author:  rcCommitAuthor(hash),
 		From:    from,
 		To:      rcShort(hash),
@@ -252,7 +285,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		Files:   len(files),
 		Verdict: finding.VerdictAwaiting,
 		Intent: finding.Intent{
-			Stated: subject,
+			Stated: stated,
 			Match:  match,
 			Note:   note,
 			Risks:  flags,
@@ -645,7 +678,10 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 			sawMachineLine = true
 			note = strings.TrimSpace(t[len("NOTE:"):])
 		case section != "" && strings.HasPrefix(t, "-"):
-			if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); item != "" {
+			// "- (none)" under a header the model was told to omit when
+			// empty is an empty list, not a finding (kai-server
+			// rc-d93f2dc3595c38e0 shipped one as a verified claim).
+			if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); item != "" && !rcIsEmptyListItem(item) {
 				if section == "decisions" {
 					decisions = append(decisions, item)
 				} else {

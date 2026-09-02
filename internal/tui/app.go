@@ -22,7 +22,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"golang.org/x/sys/unix"
 
 	"kai/api/graph"
 	"kai/api/provider"
@@ -124,7 +123,7 @@ func Run(ctx context.Context, opts Options) error {
 	// POSIX scheduler. Silent failure on permission denied (the
 	// common case for non-root users; the kernel just keeps us at the
 	// default priority).
-	_ = unix.Setpriority(unix.PRIO_PROCESS, 0, -5)
+	raisePriority()
 
 	// Defensive terminal cleanup. Bubble Tea normally tears down
 	// mouse tracking + alt-screen on its own, but a panic, an
@@ -149,7 +148,7 @@ func Run(ctx context.Context, opts Options) error {
 		// Without this, scripts that check $? after `kai code`
 		// can't tell normal exit from "killed by signal."
 		signal.Reset(s)
-		_ = syscall.Kill(syscall.Getpid(), s.(syscall.Signal))
+		reraise(s)
 	}()
 	defer signal.Stop(sigCh)
 
