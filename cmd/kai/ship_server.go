@@ -224,7 +224,16 @@ func runShipServer(cwd, branch, sessionID string) error {
 
 // resolveShipServerTarget mirrors the findings CLI: control-plane base
 // URL + login token, kai org/repo from --repo or the origin remote.
+// resolveShipServerTarget is resolveServerTarget for the ship command's
+// own --repo flag.
 func resolveShipServerTarget() (baseURL, token, org, repoName string, err error) {
+	return resolveServerTarget(shipRepo)
+}
+
+// resolveServerTarget resolves the control plane and the kai org/repo a
+// server-backed command talks to: an explicit --repo, else the tracked
+// .kai.yaml marker, else the origin remote entry.
+func resolveServerTarget(repoFlag string) (baseURL, token, org, repoName string, err error) {
 	baseURL = os.Getenv("KAI_SERVER")
 	if baseURL == "" {
 		baseURL = remote.DefaultServer
@@ -236,8 +245,8 @@ func resolveShipServerTarget() (baseURL, token, org, repoName string, err error)
 		return "", "", "", "", fmt.Errorf("not logged in — run `kai login` first (or use `kai ship` locally)")
 	}
 
-	if shipRepo != "" {
-		o, r, ok := strings.Cut(shipRepo, "/")
+	if repoFlag != "" {
+		o, r, ok := strings.Cut(repoFlag, "/")
 		if !ok || o == "" || r == "" {
 			return "", "", "", "", fmt.Errorf("--repo must be kai org/repo for --server")
 		}

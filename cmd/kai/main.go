@@ -2045,6 +2045,7 @@ Reviews are anchored to semantic entities (changesets, symbols) not lines.
 Examples:
   kai review open @cs:last --title "Add auth"    # Open a review
   kai review list                                 # List all reviews
+  kai review list --server                        # The server's change reviews for this repo
   kai review view <id>                            # View a review
   kai review approve <id>                         # Approve a review
   kai review close <id> --state merged            # Close as merged`,
@@ -2223,6 +2224,8 @@ var (
 	reviewExportMD      bool
 	reviewExportHTML    bool
 	reviewJSON          bool
+	reviewServer        bool
+	reviewRepo          string
 	reviewViewMode      string
 	reviewExplain       bool
 	reviewBase          string
@@ -4236,6 +4239,11 @@ func init() {
 	reviewOpenCmd.Flags().BoolVar(&reviewExplain, "explain", false, "Show detailed explanation of what this command does")
 
 	reviewViewCmd.Flags().BoolVar(&reviewJSON, "json", false, "Output as JSON")
+	reviewViewCmd.Flags().BoolVar(&reviewServer, "server", false, "read the kailab server's change review (the one a `kai ship --server` publish opened) instead of the local graph")
+	reviewViewCmd.Flags().StringVar(&reviewRepo, "repo", "", "kai org/repo for --server (default: this checkout's .kai.yaml)")
+	reviewListCmd.Flags().BoolVar(&reviewJSON, "json", false, "Output as JSON")
+	reviewListCmd.Flags().BoolVar(&reviewServer, "server", false, "list the kailab server's change reviews for this repo instead of the local graph")
+	reviewListCmd.Flags().StringVar(&reviewRepo, "repo", "", "kai org/repo for --server (default: this checkout's .kai.yaml)")
 	reviewViewCmd.Flags().StringVar(&reviewViewMode, "view", "semantic", "View mode: semantic, text, or mixed")
 	reviewViewCmd.Flags().BoolVarP(&reviewSummary, "summary", "s", true, "Show progressive disclosure summary (default)")
 	reviewViewCmd.Flags().BoolVarP(&reviewInteractive, "interactive", "i", false, "Interactive mode: drill down into changes")
@@ -19181,6 +19189,9 @@ func runReviewOpen(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewList(cmd *cobra.Command, args []string) error {
+	if reviewServer {
+		return runReviewListServer()
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -19217,6 +19228,9 @@ func runReviewList(cmd *cobra.Command, args []string) error {
 }
 
 func runReviewView(cmd *cobra.Command, args []string) error {
+	if reviewServer {
+		return runReviewViewServer(args[0])
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
