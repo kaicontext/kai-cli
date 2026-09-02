@@ -4535,7 +4535,14 @@ func init() {
 	resolveCmd.Flags().BoolVar(&resolveAbort, "abort", false, "Discard pending conflict state for the workspace")
 	rootCmd.AddCommand(resolveCmd)
 
-	gateCmd.AddCommand(gateListCmd, gateShowCmd, gateApproveCmd, gateRejectCmd, gateDiffCmd, gateReviewCmd, gateFixCmd)
+	gateCmd.AddCommand(gateListCmd, gateShowCmd, gateApproveCmd, gateRejectCmd, gateDiffCmd, gateReviewCmd, gateFixCmd, gateStatsCmd)
+	// The note recorded alongside a manual resolution. Registered here
+	// with the other gate flags for the same reason --json is (see the
+	// note on gateListJSON): declaring it in gate.go too panics at
+	// startup with "flag redefined".
+	for _, c := range []*cobra.Command{gateApproveCmd, gateRejectCmd} {
+		c.Flags().StringVar(&gateReason, "reason", "", "why — recorded with the resolution (wanted on reject)")
+	}
 	gateFixCmd.Flags().BoolVar(&gateFixAutoApprove, "auto-approve", false,
 		"if the post-fix verdict is Auto, fail loudly when refs were not advanced")
 	gateFixCmd.Flags().IntVar(&gateFixMaxTurns, "max-turns", 3,

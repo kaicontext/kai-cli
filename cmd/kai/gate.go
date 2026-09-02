@@ -97,6 +97,26 @@ var gateApproveCmd = &cobra.Command{
 	RunE:  runGateApprove,
 }
 
+// gateActor decides whose name goes on a resolution.
+//
+// This has to be inferred, not assumed. Jeff resolves its own holds by
+// SHELLING OUT to `kai gate approve` — the same code path a person
+// uses — so hardcoding "human" here would file every agent approval as
+// a human read and make the tally say the opposite of the truth. kit
+// exports KAI_GATE_ACTOR into the agent's environment; anything without
+// it is a person at a terminal.
+func gateActor() string {
+	if a := strings.TrimSpace(os.Getenv("KAI_GATE_ACTOR")); a != "" {
+		return a
+	}
+	return workspace.ActorHuman
+}
+
+// gateReason is the optional note recorded with a manual approve or
+// reject. Optional on approve, strongly wanted on reject: a rejection
+// with no stated reason leaves the next reader nothing to act on.
+var gateReason string
+
 var (
 	gateFixAutoApprove bool
 	gateFixMaxTurns    int
@@ -113,6 +133,77 @@ gate gets another swing. Refuses if the audit has any [human] issues
 or no fixable issues at all.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runGateFix,
+}
+
+// `kai gate stats` answers the only question that makes an automatic
+// backstop defensible: how often did anything actually READ the change
+// before it was approved? If the backstop dominates, the verification
+// step is theatre and the policy should change deliberately.
+var gateStatsCmd = &cobra.Command{
+	Use:   "stats",
+	Short: "Who has been resolving held integrations — agent, backstop, or human",
+	RunE:  runGateStats,
+}
+
+func runGateStats(cmd *cobra.Command, args []string) error {
+	// Multi-root, for the same reason `gate list` is: holds live in the
+	// project's own DB, and a tally that only saw the cwd would under-
+	// count exactly the cross-project runs most likely to be backstopped.
+	counts := workspace.ResolutionCounts{
+		Approved: map[string]int{}, Rejected: map[string]int{},
+	}
+	add := func(c workspace.ResolutionCounts) {
+		for k, v := range c.Approved {
+			counts.Approved[k] += v
+		}
+		for k, v := range c.Rejected {
+			counts.Rejected[k] += v
+		}
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("cwd: %w", err)
+	}
+	if set, outcome := projects.Discover(cwd); outcome == projects.OutcomeRootsFound {
+		if err := set.Open(); err != nil {
+			return fmt.Errorf("opening project DBs: %w", err)
+		}
+		defer set.Close()
+		for _, p := range set.Projects() {
+			if p.DB == nil {
+				continue // uninitialized project
+			}
+			c, cerr := workspace.CountResolutions(p.DB)
+			if cerr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %v\n", p.Name, cerr)
+				continue
+			}
+			add(c)
+		}
+	} else {
+		db, derr := openDB()
+		if derr != nil {
+			return derr
+		}
+		defer db.Close()
+		c, cerr := workspace.CountResolutions(db)
+		if cerr != nil {
+			return cerr
+		}
+		add(c)
+	}
+	if counts.Total() == 0 {
+		fmt.Println("No gate holds have been resolved yet.")
+		return nil
+	}
+	fmt.Println(counts)
+	if s := counts.BackstopShare(); s >= 0.5 {
+		fmt.Println("\nMost approvals were the backstop, not a read of the diff.")
+		fmt.Println("That is evidence, not a verdict — but it is the case the")
+		fmt.Println("verification step was supposed to prevent.")
+	}
+	return nil
 }
 
 var gateRejectCmd = &cobra.Command{
@@ -404,7 +495,7 @@ func runGateApprove(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 	mgr := workspace.NewManager(db)
-	advanced, err := mgr.ApproveHeld(snap.ID)
+	advanced, err := mgr.ApproveHeldBy(snap.ID, gateActor(), gateReason)
 	if err != nil {
 		return err
 	}
@@ -427,7 +518,7 @@ func runGateReject(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 	mgr := workspace.NewManager(db)
-	if err := mgr.RejectHeld(snap.ID); err != nil {
+	if err := mgr.RejectHeldBy(snap.ID, gateActor(), gateReason); err != nil {
 		return err
 	}
 	fmt.Printf("Dismissed snapshot %s.\n", util.BytesToHex(snap.ID)[:12])
