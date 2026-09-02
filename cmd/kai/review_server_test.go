@@ -39,6 +39,24 @@ func TestFormatChangeReviewDetail(t *testing.T) {
 	}
 }
 
+func TestFormatSetOutcome(t *testing.T) {
+	out := &serverVerbResponse{
+		Landed: []map[string]interface{}{{"repo": "org/server", "land_sha": "abcdef0123456789"}},
+		Failed: map[string]interface{}{"repo": "org/desktop", "error": "GitHub refused the push"},
+		Held:   []string{"org/cli"},
+	}
+	got := formatVerbOutcome("set_land", out)
+	for _, want := range []string{"org/server", "landed abcdef012345", "org/desktop", "FAILED — GitHub refused the push", "org/cli", "held (not attempted)", "Stopped at the first member"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("set land missing %q:\n%s", want, got)
+		}
+	}
+	ap := &serverVerbResponse{OK: true, Members: []map[string]interface{}{{"repo": "org/server", "state": "approved", "skipped": "already approved"}, {"repo": "org/desktop", "state": "approved"}}}
+	if got := formatVerbOutcome("set_approve", ap); !strings.Contains(got, "(already approved)") || !strings.Contains(got, "Every member is approved.") {
+		t.Errorf("set approve = %q", got)
+	}
+}
+
 func TestFormatVerbOutcome(t *testing.T) {
 	out := &serverVerbResponse{Review: serverChangeReview{ID: "0123456789abcdef", State: "approved"}, Mirrored: true}
 	if got := formatVerbOutcome("approve", out); got != "Review 0123456789ab: approved (state approved) — mirrored to GitHub\n" {

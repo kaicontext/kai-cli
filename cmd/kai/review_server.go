@@ -252,6 +252,8 @@ var changeReviewVerbSegments = map[string]string{
 	"reopen":          "reopen",
 	"comment":         "comments",
 	"land":            "land",
+	"set_approve":     "set/approve",
+	"set_land":        "set/land",
 }
 
 type serverVerbResponse struct {
@@ -262,6 +264,12 @@ type serverVerbResponse struct {
 	LandSHA string `json:"land_sha"`
 	Base    string `json:"base"`
 	Rebased bool   `json:"rebased"`
+	// set verbs only
+	OK      bool                     `json:"ok"`
+	Members []map[string]interface{} `json:"members"`
+	Landed  []map[string]interface{} `json:"landed"`
+	Failed  map[string]interface{}   `json:"failed"`
+	Held    []string                 `json:"held"`
 }
 
 // runReviewVerbServer records a reviewer's action on the server's change
@@ -303,6 +311,9 @@ func runReviewVerbServer(id, verb, body, file string, line int) error {
 }
 
 func formatVerbOutcome(verb string, out *serverVerbResponse) string {
+	if verb == "set_approve" || verb == "set_land" {
+		return formatSetOutcome(verb, out)
+	}
 	what := map[string]string{
 		"approve": "approved", "request_changes": "changes requested", "reopen": "reopened", "comment": "comment recorded", "land": "landed",
 	}[verb]
@@ -319,4 +330,53 @@ func formatVerbOutcome(verb string, out *serverVerbResponse) string {
 		line += " — recorded in Kai, but GitHub was not updated: " + out.MirrorError
 	}
 	return line + "\n"
+}
+
+// formatSetOutcome renders a set verb: one line per member, then the
+// verdict on the whole.
+func formatSetOutcome(verb string, out *serverVerbResponse) string {
+	var b strings.Builder
+	str := func(m map[string]interface{}, k string) string {
+		if v, ok := m[k]; ok && v != nil {
+			return fmt.Sprint(v)
+		}
+		return ""
+	}
+	if verb == "set_approve" {
+		for _, m := range out.Members {
+			line := fmt.Sprintf("  %-28s %s", str(m, "repo"), str(m, "state"))
+			if s := str(m, "skipped"); s != "" {
+				line += "  (" + s + ")"
+			}
+			if e := str(m, "error"); e != "" {
+				line += "  — " + e
+			}
+			b.WriteString(line + "\n")
+		}
+		if out.OK {
+			b.WriteString("Every member is approved.\n")
+		} else {
+			b.WriteString("Not every member could be approved — see above.\n")
+		}
+		return b.String()
+	}
+	for _, m := range out.Landed {
+		line := fmt.Sprintf("  %-28s landed %.12s", str(m, "repo"), str(m, "land_sha"))
+		if s := str(m, "skipped"); s != "" {
+			line = fmt.Sprintf("  %-28s %s", str(m, "repo"), s)
+		}
+		b.WriteString(line + "\n")
+	}
+	if out.Failed != nil {
+		b.WriteString(fmt.Sprintf("  %-28s FAILED — %s\n", str(out.Failed, "repo"), str(out.Failed, "error")))
+	}
+	for _, r := range out.Held {
+		b.WriteString(fmt.Sprintf("  %-28s held (not attempted)\n", r))
+	}
+	if out.OK {
+		b.WriteString("Every member landed, in order.\n")
+	} else {
+		b.WriteString("Stopped at the first member that did not land; the rest are held. Fix it and run again — landed members are skipped.\n")
+	}
+	return b.String()
 }
