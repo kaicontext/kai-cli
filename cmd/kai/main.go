@@ -2241,6 +2241,7 @@ var (
 	reviewServer        bool
 	reviewRepo          string
 	reviewVerbMessage   string
+	reviewAll           bool
 	reviewViewMode      string
 	reviewExplain       bool
 	reviewBase          string
@@ -4265,6 +4266,8 @@ func init() {
 		c.Flags().BoolVar(&reviewJSON, "json", false, "Output as JSON (--server only)")
 	}
 	reviewApproveCmd.Flags().StringVarP(&reviewVerbMessage, "message", "m", "", "note to record with the approval (--server only)")
+	reviewApproveCmd.Flags().BoolVar(&reviewAll, "all", false, "approve every review of this review's session — a multi-root session's whole set (--server only)")
+	reviewLandCmd.Flags().BoolVar(&reviewAll, "all", false, "land every review of this review's session in its land order; stops at the first that does not land (--server only)")
 	reviewRequestChangesCmd.Flags().StringVarP(&reviewVerbMessage, "message", "m", "", "what needs to change (--server only)")
 	reviewViewCmd.Flags().StringVar(&reviewViewMode, "view", "semantic", "View mode: semantic, text, or mixed")
 	reviewViewCmd.Flags().BoolVarP(&reviewSummary, "summary", "s", true, "Show progressive disclosure summary (default)")
@@ -19736,11 +19739,17 @@ func runReviewLand(cmd *cobra.Command, args []string) error {
 	if !reviewServer {
 		return fmt.Errorf("landing is a server operation — pass --server (the repository must be in kai review mode)")
 	}
+	if reviewAll {
+		return runReviewVerbServer(args[0], "set_land", "", "", 0)
+	}
 	return runReviewVerbServer(args[0], "land", "", "", 0)
 }
 
 func runReviewApprove(cmd *cobra.Command, args []string) error {
 	if reviewServer {
+		if reviewAll {
+			return runReviewVerbServer(args[0], "set_approve", reviewVerbMessage, "", 0)
+		}
 		return runReviewVerbServer(args[0], "approve", reviewVerbMessage, "", 0)
 	}
 	db, err := openDB()
