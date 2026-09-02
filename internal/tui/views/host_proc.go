@@ -34,7 +34,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -162,9 +161,9 @@ func StartManagedProcess(s *PlannerServices, command string) (*ManagedProcess, e
 	}
 	// Put the child in its own process group so SIGTERM to the
 	// group reaches every child (concurrently's vite + electron
-	// case). Unix only — on Windows this is a no-op via
-	// SysProcAttr's zero value.
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// case). On Windows the group is a console group and teardown
+	// walks the child tree instead — see procgroup_windows.go.
+	setProcessGroup(c)
 
 	ring := newRingBuf(managedRingBytes)
 	c.Stdout = io.MultiWriter(ring, logFile)
@@ -379,9 +378,7 @@ func StopManagedProcess(s *PlannerServices) {
 	// Negative pid = process group. Kills children too. Best-effort
 	// on systems where the syscall fails (e.g. macOS missing
 	// privileges); fall back to direct kill of the parent pid.
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-	}
+	terminateGroup(cmd)
 	// 2-second grace for clean shutdown.
 	graceful := make(chan struct{})
 	go func() {
@@ -409,9 +406,7 @@ func StopManagedProcess(s *PlannerServices) {
 	stillAlive := !mp.exited
 	mp.mu.Unlock()
 	if stillAlive {
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-			_ = cmd.Process.Kill()
-		}
+		killGroup(cmd)
 	}
 	mp.cancelWatch()
 }

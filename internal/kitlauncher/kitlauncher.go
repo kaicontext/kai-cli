@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -60,7 +59,6 @@ var (
 
 // kitBinaryName is the on-disk name of the managed binary (~/.kai/bin/kit).
 // install.sh installs the gunzipped asset under this name.
-const kitBinaryName = "kit"
 
 // versionFileName is the sidecar next to the managed binary
 // (~/.kai/bin/kit.version) recording which kit version is installed there.
@@ -162,7 +160,7 @@ func Default() *Launcher {
 		ExpectedVersion: PinnedKitVersion,
 		GOOS:            runtime.GOOS,
 		GOARCH:          runtime.GOARCH,
-		Exec:            syscall.Exec,
+		Exec:            execHandoff,
 		Codesign:        adhocCodesign,
 		LookPath:        exec.LookPath,
 		Environ:         os.Environ,
@@ -297,13 +295,8 @@ func (l *Launcher) installedVersion() string {
 // (kit-{os}-{arch}-{ver}.gz) is requested so the download is exactly the
 // pinned build; otherwise the unversioned rolling-latest asset.
 func (l *Launcher) assetName() (string, error) {
-	switch l.GOOS {
-	case "linux", "darwin":
-	default:
-		return "", fmt.Errorf("%w: %s/%s", ErrUnsupportedPlatform, l.GOOS, l.GOARCH)
-	}
-	switch l.GOARCH {
-	case "amd64", "arm64":
+	switch l.GOOS + "/" + l.GOARCH {
+	case "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64":
 	default:
 		return "", fmt.Errorf("%w: %s/%s", ErrUnsupportedPlatform, l.GOOS, l.GOARCH)
 	}
