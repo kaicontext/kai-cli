@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/sys/unix"
 
 	"github.com/kaicontext/kai-engine/gitio"
 	"github.com/kaicontext/kai-engine/graph"
@@ -398,12 +397,12 @@ func acquireShipLock(cwd string) (func(), error) {
 	if err != nil {
 		return func() {}, nil
 	}
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	if held, err := tryLockFile(f); err != nil || !held {
 		f.Close()
 		return nil, fmt.Errorf("another kai ship is in progress in this repo")
 	}
 	return func() {
-		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		_ = unlockFile(f)
 		f.Close()
 	}, nil
 }

@@ -67,7 +67,8 @@ func TestAssetName(t *testing.T) {
 		{"linux", "arm64", "kit-linux-arm64.gz", false},
 		{"darwin", "amd64", "kit-darwin-amd64.gz", false},
 		{"darwin", "arm64", "kit-darwin-arm64.gz", false},
-		{"windows", "amd64", "", true},
+		{"windows", "amd64", "kit-windows-amd64.gz", false},
+		{"windows", "arm64", "", true},
 		{"linux", "386", "", true},
 		{"plan9", "arm64", "", true},
 	}
@@ -352,7 +353,7 @@ func TestInstall_UnsupportedPlatformNoNetwork(t *testing.T) {
 	defer srv.Close()
 
 	l := testLauncher(t)
-	l.GOOS = "windows"
+	l.GOOS = "plan9"
 	l.BaseURL = srv.URL + "/"
 	_, err := l.install(context.Background())
 	if !errors.Is(err, ErrUnsupportedPlatform) {
