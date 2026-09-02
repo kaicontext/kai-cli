@@ -51,6 +51,30 @@ func TestStatedIntentAndTitleForMergeCommit(t *testing.T) {
 	}
 }
 
+func TestParseReviewOutputEmptyListBullets(t *testing.T) {
+	raw := "Looks fine.\n\n===REVIEW-DATA===\nINTENT_MATCH: verified\nSUMMARY: ok\nISSUES:\n- (none)\nDECISIONS:\n- None.\n- Decision: the cap moves from 5 to 7 for every org\n"
+	_, risks, decisions, match, _ := rcParseReviewOutput(raw)
+	if len(risks) != 0 {
+		t.Errorf("\"(none)\" must not become an issue, got %v", risks)
+	}
+	if len(decisions) != 1 || !strings.HasPrefix(decisions[0], "Decision: the cap") {
+		t.Errorf("\"None.\" must be dropped and the real decision kept, got %v", decisions)
+	}
+	if match != finding.MatchVerified {
+		t.Errorf("match = %v", match)
+	}
+	for _, s := range []string{"(none)", "None.", "n/a", "No issues", "**none**", ""} {
+		if !rcIsEmptyListItem(s) {
+			t.Errorf("%q should read as an empty list", s)
+		}
+	}
+	for _, s := range []string{"none of the callers check the error", "billing.go:12 — nothing guards the nil"} {
+		if rcIsEmptyListItem(s) {
+			t.Errorf("%q is a real item", s)
+		}
+	}
+}
+
 func TestBranchNamePrecedence(t *testing.T) {
 	t.Setenv("GITHUB_HEAD_REF", "feat/from-pr")
 	t.Setenv("GITHUB_REF_NAME", "123/merge")
@@ -97,7 +121,7 @@ func TestGroundIssue(t *testing.T) {
 	}
 	hash := "01b3cf323d89eed7aaaaaaaaaaaaaaaaaaaaaaaa"
 
-	c := rcGroundIssue(hash, "internal/api/billing.go:4 — reward grant runs after the flip", read)
+	c := rcGroundIssue(hash, "internal/api/billing.go:4 — reward grant runs after the flip", nil, read)
 	if !c.Resolved || !c.Verified || c.Tag != finding.TagRisk {
 		t.Errorf("resolvable location must be a grounded risk: %+v", c)
 	}
@@ -105,19 +129,39 @@ func TestGroundIssue(t *testing.T) {
 		t.Errorf("lookup must quote the source line: %q", c.Lookup)
 	}
 
-	c = rcGroundIssue(hash, "internal/api/billing.go:40 — beyond the end", read)
+	c = rcGroundIssue(hash, "internal/api/billing.go:40 — beyond the end", nil, read)
 	if c.Resolved || c.Verified || !strings.Contains(c.Lookup, "has 5 lines") {
 		t.Errorf("line past EOF must be held with a reason: %+v", c)
 	}
 
-	c = rcGroundIssue(hash, "internal/api/nope.go:1 — missing file", read)
+	c = rcGroundIssue(hash, "internal/api/nope.go:1 — missing file", nil, read)
 	if c.Resolved || c.Verified || !strings.Contains(c.Lookup, "does not exist at 01b3cf323d89") {
 		t.Errorf("missing file must be held with a reason: %+v", c)
 	}
 
-	c = rcGroundIssue(hash, "the map is unlocked somewhere", read)
+	c = rcGroundIssue(hash, "the map is unlocked somewhere", nil, read)
 	if c.Resolved || c.Verified || !strings.Contains(c.Lookup, "no path:line") {
 		t.Errorf("unlocated issue must be held: %+v", c)
+	}
+
+	// A bare file name resolves through the tree when it is unique there;
+	// an ambiguous or absent one is held with the reason.
+	tree := []string{"frontend/dist/panel-changes.js", "internal/api/billing.go", "a/util.go", "b/util.go"}
+	files["frontend/dist/panel-changes.js"] = []string{"// panel", "reviewFor = function () {}"}
+	c = rcGroundIssue(hash, "panel-changes.js:2 — reviewFor skips the session check", tree, read)
+	if !c.Resolved || !strings.Contains(c.Lookup, "frontend/dist/panel-changes.js:2 @") || !strings.Contains(c.Lookup, "reviewFor") {
+		t.Errorf("bare file name must resolve through the tree: %+v", c)
+	}
+	c = rcGroundIssue(hash, "util.go:1 — ambiguous", tree, read)
+	if c.Resolved || !strings.Contains(c.Lookup, "matches 2 files") {
+		t.Errorf("ambiguous name must be held with the count: %+v", c)
+	}
+	c = rcGroundIssue(hash, "ghost.go:1 — absent", tree, read)
+	if c.Resolved || !strings.Contains(c.Lookup, "does not exist") {
+		t.Errorf("absent name must be held: %+v", c)
+	}
+	if p, n := rcResolvePath("internal/api/billing.go", tree); p != "internal/api/billing.go" || n != 1 {
+		t.Errorf("exact path: got (%q, %d)", p, n)
 	}
 
 	d := rcDecisionClaim("the reward is $10 in credits to the referrer")

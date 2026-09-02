@@ -261,8 +261,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// grounded risk-tagged claims, so held claims are visible but do not
 	// count.
 	claims := make([]finding.Claim, 0, len(flags))
+	tree := rcTreeFiles(hash)
 	for _, r := range risks {
-		claims = append(claims, rcGroundIssue(hash, r, rcFileLines))
+		claims = append(claims, rcGroundIssue(hash, r, tree, rcFileLines))
 	}
 	for _, d := range decisions {
 		claims = append(claims, rcDecisionClaim(d))
@@ -677,7 +678,10 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 			sawMachineLine = true
 			note = strings.TrimSpace(t[len("NOTE:"):])
 		case section != "" && strings.HasPrefix(t, "-"):
-			if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); item != "" {
+			// "- (none)" under a header the model was told to omit when
+			// empty is an empty list, not a finding (kai-server
+			// rc-d93f2dc3595c38e0 shipped one as a verified claim).
+			if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); item != "" && !rcIsEmptyListItem(item) {
 				if section == "decisions" {
 					decisions = append(decisions, item)
 				} else {
