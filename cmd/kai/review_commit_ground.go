@@ -137,6 +137,19 @@ func rcBranchName(explicit string) string {
 // ---------------------------------------------------------------------------
 // Grounding ISSUES against the tree
 
+// rcIsEmptyListItem reports whether a coda bullet is the model's way of
+// writing an empty list ("(none)", "none.", "n/a", "no issues") rather than
+// an issue or a decision.
+func rcIsEmptyListItem(item string) bool {
+	s := strings.ToLower(strings.TrimSpace(item))
+	s = strings.Trim(s, "()[]*_`. ")
+	switch s {
+	case "none", "n/a", "na", "nothing", "no issues", "no concerns", "no decisions", "empty", "-", "":
+		return true
+	}
+	return false
+}
+
 // rcIssueLocation extracts the leading path:line from an ISSUES bullet. The
 // coda contract is "path:line — sentence"; the model also writes ranges
 // ("billing.go:960-987"), lists ("billing.go:978,983") and pairs ("a.go:12 &
@@ -165,17 +178,65 @@ func rcFileLines(hash, path string) (lines []string, ok bool) {
 	return strings.Split(strings.TrimRight(string(out), "\n"), "\n"), true
 }
 
+// rcTreeFiles lists every path in the tree at hash, for resolving the short
+// file names the reviewer writes. nil when git fails (callers then take the
+// bullet's path as written).
+func rcTreeFiles(hash string) []string {
+	out, err := exec.Command("git", "ls-tree", "-r", "--name-only", hash).Output()
+	if err != nil {
+		return nil
+	}
+	return strings.Split(strings.TrimSpace(string(out)), "\n")
+}
+
+// rcResolvePath maps the path a bullet names onto the tree. The reviewer
+// often writes a bare file name ("panel-changes.js:1138") for a file that
+// lives at frontend/dist/panel-changes.js, and holding that claim for a
+// naming habit throws away a grounded finding (kai-desktop rc-c8f407d3b01aa3ca
+// held three of six that way). An exact path wins; otherwise a path that is
+// the unique suffix match ("…/" + written) wins; zero or several matches
+// resolve nothing and the count says why.
+func rcResolvePath(written string, tree []string) (resolved string, matches int) {
+	if tree == nil {
+		return written, 1
+	}
+	var hits []string
+	for _, p := range tree {
+		if p == written {
+			return p, 1
+		}
+		if strings.HasSuffix(p, "/"+written) {
+			hits = append(hits, p)
+		}
+	}
+	if len(hits) == 1 {
+		return hits[0], 1
+	}
+	return "", len(hits)
+}
+
 // rcGroundIssue turns one ISSUES bullet into a Claim whose Lookup is the
 // actual source line at the reviewed revision. A bullet whose path:line
 // resolves is a grounded risk; one whose path or line does not exist at that
 // revision, or that carries no location at all, is HELD — recorded, shown,
 // but not counted as a grounded risk, because the one thing the reviewer was
-// asked to pin down could not be found where it said.
-func rcGroundIssue(hash, item string, readFile func(hash, path string) ([]string, bool)) finding.Claim {
+// asked to pin down could not be found where it said. tree (rcTreeFiles) lets
+// a short file name resolve to its full path; nil takes the path as written.
+func rcGroundIssue(hash, item string, tree []string, readFile func(hash, path string) ([]string, bool)) finding.Claim {
 	c := finding.Claim{Statement: item, Tag: finding.TagRisk}
-	path, line, ok := rcIssueLocation(item)
+	written, line, ok := rcIssueLocation(item)
 	if !ok {
 		c.Lookup = "no path:line given — held until the reviewer names where"
+		return c
+	}
+	path, matches := rcResolvePath(written, tree)
+	switch {
+	case path != "":
+	case matches == 0:
+		c.Lookup = fmt.Sprintf("%s does not exist at %s — held", written, rcShort(hash))
+		return c
+	default:
+		c.Lookup = fmt.Sprintf("%s matches %d files at %s; say which — held", written, matches, rcShort(hash))
 		return c
 	}
 	lines, exists := readFile(hash, path)
