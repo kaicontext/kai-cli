@@ -251,12 +251,17 @@ var changeReviewVerbSegments = map[string]string{
 	"request_changes": "request-changes",
 	"reopen":          "reopen",
 	"comment":         "comments",
+	"land":            "land",
 }
 
 type serverVerbResponse struct {
 	Review      serverChangeReview `json:"review"`
 	Mirrored    bool               `json:"mirrored"`
 	MirrorError string             `json:"mirror_error"`
+	// land only
+	LandSHA string `json:"land_sha"`
+	Base    string `json:"base"`
+	Rebased bool   `json:"rebased"`
 }
 
 // runReviewVerbServer records a reviewer's action on the server's change
@@ -299,10 +304,15 @@ func runReviewVerbServer(id, verb, body, file string, line int) error {
 
 func formatVerbOutcome(verb string, out *serverVerbResponse) string {
 	what := map[string]string{
-		"approve": "approved", "request_changes": "changes requested", "reopen": "reopened", "comment": "comment recorded",
+		"approve": "approved", "request_changes": "changes requested", "reopen": "reopened", "comment": "comment recorded", "land": "landed",
 	}[verb]
 	line := fmt.Sprintf("Review %s: %s (state %s)", shortReviewID(out.Review.ID), what, out.Review.State)
 	switch {
+	case verb == "land":
+		line += fmt.Sprintf(" — %s is now %.12s", out.Base, out.LandSHA)
+		if out.Rebased {
+			line += " (replayed onto the moved base)"
+		}
 	case out.Mirrored:
 		line += " — mirrored to GitHub"
 	case out.MirrorError != "":

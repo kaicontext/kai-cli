@@ -44,6 +44,10 @@ func TestFormatVerbOutcome(t *testing.T) {
 	if got := formatVerbOutcome("approve", out); got != "Review 0123456789ab: approved (state approved) — mirrored to GitHub\n" {
 		t.Errorf("mirrored = %q", got)
 	}
+	land := &serverVerbResponse{Review: serverChangeReview{ID: "cr", State: "merged"}, LandSHA: "abcdef0123456789", Base: "main", Rebased: true}
+	if got := formatVerbOutcome("land", land); !strings.Contains(got, "landed") || !strings.Contains(got, "main is now abcdef012345") || !strings.Contains(got, "replayed") {
+		t.Errorf("land = %q", got)
+	}
 	out = &serverVerbResponse{Review: serverChangeReview{ID: "cr", State: "changes_requested"}, MirrorError: "org/app is not GitHub-linked here"}
 	if got := formatVerbOutcome("request_changes", out); !strings.Contains(got, "changes requested") || !strings.Contains(got, "GitHub was not updated: org/app") {
 		t.Errorf("unmirrored = %q", got)
