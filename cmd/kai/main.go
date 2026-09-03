@@ -16014,18 +16014,50 @@ func interactivePushOnboarding(remoteName string) (*remote.Client, error) {
 		visibility = "public"
 	}
 
-	fmt.Printf("Creating repository '%s/%s'...\n", selectedOrg.Slug, repoName)
-	fmt.Printf("  API: POST %s/api/v1/orgs/%s/repos\n", serverURL, selectedOrg.Slug)
-	_, err = ctrl.CreateRepo(selectedOrg.Slug, repoName, visibility)
-	if err != nil {
-		// Check if repo already exists
-		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "409") {
-			fmt.Printf("Repository already exists, using existing.\n")
-		} else {
-			return nil, fmt.Errorf("creating repository: %w", err)
+	// The server's create is idempotent — an existing name comes back
+	// as 200 with the existing repo — and this flow used to print
+	// "Created repository" either way, then push into a repo other
+	// people had been pushing to for weeks. Attaching a fresh clone to
+	// an existing repository is a decision, so it is asked (2026-09-03).
+	existing := false
+	existingSince := ""
+	if repos, lerr := ctrl.ListRepos(selectedOrg.Slug); lerr == nil {
+		for _, rp := range repos {
+			if rp.Name == repoName {
+				existing = true
+				existingSince = rp.CreatedAt
+			}
 		}
+	}
+	if existing {
+		fmt.Println()
+		if existingSince != "" {
+			fmt.Printf("Repository '%s/%s' already exists on the server (created %s).\n", selectedOrg.Slug, repoName, existingSince)
+		} else {
+			fmt.Printf("Repository '%s/%s' already exists on the server.\n", selectedOrg.Slug, repoName)
+		}
+		fmt.Println("Continuing attaches THIS clone to it. A push is refused when the remote is ahead of")
+		fmt.Println("what this clone has synced — a clone that has never synced must 'kai pull' first.")
+		fmt.Print("Attach this clone to the existing repository? [y/N]: ")
+		input, _ = reader.ReadString('\n')
+		input = strings.TrimSpace(strings.ToLower(input))
+		if input != "y" && input != "yes" {
+			return nil, fmt.Errorf("not attaching to existing repository %s/%s — run 'kai push' again and choose another name", selectedOrg.Slug, repoName)
+		}
+		fmt.Printf("Attaching to existing repository: %s/%s\n", selectedOrg.Slug, repoName)
 	} else {
-		fmt.Printf("Created repository: %s/%s\n", selectedOrg.Slug, repoName)
+		fmt.Printf("Creating repository '%s/%s'...\n", selectedOrg.Slug, repoName)
+		fmt.Printf("  API: POST %s/api/v1/orgs/%s/repos\n", serverURL, selectedOrg.Slug)
+		_, err = ctrl.CreateRepo(selectedOrg.Slug, repoName, visibility)
+		if err != nil {
+			if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "409") {
+				fmt.Printf("Repository already exists, attaching to it.\n")
+			} else {
+				return nil, fmt.Errorf("creating repository: %w", err)
+			}
+		} else {
+			fmt.Printf("Created repository: %s/%s\n", selectedOrg.Slug, repoName)
+		}
 	}
 
 	// Set up the remote
@@ -16989,6 +17021,9 @@ func runPushInner(cmd *cobra.Command, args []string) error {
 	// ref); if our push is not a fast-forward, we abort and tell the user to
 	// reconcile. --force overrides. The decision lives in isNonFastForwardPush so
 	// it can be unit-tested without a live remote.
+	// Refs the guard let replace a server-ingest tip after checking git
+	// ancestry; their compare-and-swap presents the live value below.
+	yielded := map[string]bool{}
 	if !pushForce {
 		for _, r := range validRefs {
 			if !guardedByFastForward(r.Name) {
@@ -17010,11 +17045,27 @@ func runPushInner(cmd *cobra.Command, args []string) error {
 				// "github-ingest"). Rejecting against it wedges the repo forever:
 				// the server never advances the ref again once a client exists,
 				// and the client can never get past the guard without --force.
-				// The guard protects human pushes; a server-authored tip yields.
+				// The guard protects human pushes; a server-authored tip yields —
+				// but only to a clone that CONTAINS the commit the tip was taken
+				// at. An unconditional yield is how a fresh, stale clone replaced
+				// a GitHub-fresh tip with month-old content (2026-09-03); the
+				// git.<short> refs pointing at the tip name its commit, and
+				// `git merge-base --is-ancestor` answers whether this clone is at
+				// or ahead of it (ingestYieldDecision).
 				if remoteRef != nil && remoteRef.Actor == serverIngestActor {
-					debugf("push: remote %s (%s) was authored by %s — overwriting server-published tip",
-						r.Name, hex.EncodeToString(remoteTarget)[:12], remoteRef.Actor)
-					continue
+					gitRefs, _ := client.ListRefs("git.")
+					yield, why := ingestYieldDecision(shortShasForTarget(gitRefs, remoteTarget), gitIsAncestorOfHead)
+					if yield {
+						debugf("push: remote %s (%s) was authored by %s and its commit is in this clone — replacing server-published tip",
+							r.Name, hex.EncodeToString(remoteTarget)[:12], remoteRef.Actor)
+						yielded[r.Name] = true
+						continue
+					}
+					fmt.Fprintf(os.Stderr, "\r\033[K")
+					return fmt.Errorf(
+						"push rejected: %s.\n"+
+							"  Bring your clone up to date ('git pull', then 'kai push'), or 'kai push --force' if you know your local snapshot is the one to keep (the remote %s is %s).",
+						why, r.Name, hex.EncodeToString(remoteTarget)[:12])
 				}
 				fmt.Fprintf(os.Stderr, "\r\033[K")
 				// Two different situations reach this point and they
@@ -17046,15 +17097,22 @@ func runPushInner(cmd *cobra.Command, args []string) error {
 	// Falls back to individual updates if server doesn't support batch endpoint
 	var batchUpdates []remote.BatchRefUpdate
 	for _, r := range validRefs {
-		// Get old value from remote
+		// The expected-old the server swaps against. For a guarded ref
+		// this is the BASELINE we last synced, not the live value we
+		// could read right now — presenting the live value is what made
+		// the server's check unable to fail (expectedOldForPush).
 		remoteRef, _ := client.GetRef(r.Name)
-		var oldTarget []byte
+		var liveTarget []byte
 		if remoteRef != nil {
-			oldTarget = remoteRef.Target
+			liveTarget = remoteRef.Target
+		}
+		var trackedTarget []byte
+		if tracked, _ := refMgr.Get("remote/origin/" + r.Name); tracked != nil {
+			trackedTarget = tracked.TargetID
 		}
 		batchUpdates = append(batchUpdates, remote.BatchRefUpdate{
 			Name:  r.Name,
-			Old:   oldTarget,
+			Old:   expectedOldForPush(r.Name, liveTarget, trackedTarget, r.TargetID, yielded[r.Name]),
 			New:   r.TargetID,
 			Force: pushForce,
 			Meta:  r.Meta,
