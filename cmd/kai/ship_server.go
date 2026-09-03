@@ -279,7 +279,7 @@ func shipServerBase(cwd string) (sha, baseSnapshot string) {
 			}
 		}
 	}
-	head, _ := spawnpkg.GitHeadState(cwd)
+	head, _, _ := spawnpkg.GitHeadState(cwd)
 	return head, ""
 }
 

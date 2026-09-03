@@ -191,7 +191,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	baseGitSHA, gitDirty := spawnpkg.GitHeadState(srcRepo)
+	baseGitSHA, gitDirty, kaiSnap := spawnpkg.GitHeadState(srcRepo)
 
 	if spawnDryRun {
 		printDryRun(targets, wsBase, srcSnapHex, resolved, srcRemote)
@@ -256,6 +256,14 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 			DirtyAtStart:   gitDirty,
 			Durable:        spawnDurable,
 		}
+		if ent.SourceSnapshot == "" && kaiSnap != "" {
+			ent.SourceSnapshot = kaiSnap
+		}
+		// kai is its own version control: when git has no HEAD the
+		// spawn still gets an anchor via the kai baseline snapshot.
+		// Keep an explicit srcSnapHex when present (it's the snapshot
+		// the workspace was actually materialized from); fall back to
+		// the kai baseline only when nothing else anchored the entry.
 		if srcRemote != nil {
 			ent.RemoteName = remoteName
 			ent.RepoChannel = srcRemote.Tenant + "/" + srcRemote.Repo
