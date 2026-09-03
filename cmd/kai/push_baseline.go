@@ -95,3 +95,19 @@ func gitIsAncestorOfHead(sha string) (bool, error) {
 	}
 	return false, err
 }
+
+// rejectedGuardedRefs turns a batch result that refused a guarded ref
+// into the push's error text, or "" when every guarded ref landed.
+func rejectedGuardedRefs(results []remote.BatchRefResult) string {
+	for _, res := range results {
+		if res.OK || !guardedByFastForward(res.Name) {
+			continue
+		}
+		if strings.Contains(strings.ToLower(res.Error), "fast-forward") || strings.Contains(strings.ToLower(res.Error), "mismatch") {
+			return fmt.Sprintf("push rejected: remote %s has moved since this clone last synced — your push is not a fast-forward.\n"+
+				"  Run 'kai pull' to reconcile, then push again. (server: %s)", res.Name, res.Error)
+		}
+		return fmt.Sprintf("push rejected: %s: %s", res.Name, res.Error)
+	}
+	return ""
+}

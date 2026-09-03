@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/kaicontext/kai-engine/remote"
@@ -72,5 +73,20 @@ func TestShortShasForTarget(t *testing.T) {
 	got := shortShasForTarget(refs, tip)
 	if len(got) != 1 || got[0] != "abc1234" {
 		t.Fatalf("want [abc1234], got %v", got)
+	}
+}
+
+func TestRejectedGuardedRefs(t *testing.T) {
+	results := []remote.BatchRefResult{
+		{Name: "ws.s-1.head", OK: false, Error: "ref mismatch (not fast-forward)"},
+		{Name: "snap.latest", OK: true},
+	}
+	if got := rejectedGuardedRefs(results); got != "" {
+		t.Fatalf("unguarded rejection must not fail the push, got %q", got)
+	}
+	results = append(results, remote.BatchRefResult{Name: "snap.latest", OK: false, Error: "ref mismatch (not fast-forward)"})
+	got := rejectedGuardedRefs(results)
+	if got == "" || !strings.Contains(got, "kai pull") {
+		t.Fatalf("guarded rejection must fail the push with advice, got %q", got)
 	}
 }

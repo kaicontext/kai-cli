@@ -17167,6 +17167,14 @@ func runPushInner(cmd *cobra.Command, args []string) error {
 					debugf("%s: %s", res.Name, res.Error)
 				}
 			}
+			// A guarded ref the server refused is a failed push, not a
+			// debug line. The client-side guard above catches the
+			// common case first; this is the server's verdict when the
+			// remote moved between the guard and the swap.
+			if msg := rejectedGuardedRefs(result.Results); msg != "" {
+				fmt.Fprintf(os.Stderr, "\r\033[K")
+				return fmt.Errorf("%s", msg)
+			}
 		}
 	}
 
