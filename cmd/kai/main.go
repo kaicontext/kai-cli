@@ -5169,6 +5169,65 @@ func pickPersonalOrg(orgs []remote.OrgInfo, email string) *remote.OrgInfo {
 	return nil
 }
 
+// ensureGitBaselineCommit creates an initial git commit when dir is a git
+// repository that has NO commits yet. The spawn model anchors workspaces
+// against a committed BaseGitSHA; a freshly `git init`'d directory has no
+// HEAD (git rev-parse fails with exit 128), so GitHeadState returns
+// ("", false), every file counts as untracked, and the desktop Changes
+// panel marks the whole tree as dirty. Creating a baseline commit here
+// gives fork-from-main a clean anchor and stops the "dirty main" warning
+// for the no-commits case.
+//
+// Returns (true, nil) when a commit was created, (false, nil) when there
+// was nothing to do (not a git repo, or HEAD already resolves).
+func ensureGitBaselineCommit(dir string) (bool, error) {
+	// Not a git repo — nothing to do.
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return false, nil
+	}
+
+	// If HEAD already resolves, a commit exists — nothing to do.
+	verifyCmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	verifyCmd.Dir = dir
+	if err := verifyCmd.Run(); err == nil {
+		return false, nil
+	}
+
+	// No commits yet: stage everything (respects .gitignore naturally,
+	// same as the milestone path) and create a baseline commit. --allow-empty
+	// so a truly empty repo still gets a baseline anchor.
+	addCmd := exec.Command("git", "add", "-A")
+	addCmd.Dir = dir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git add failed: %v\n%s", err, out)
+	}
+
+	// Provide a git identity if none is configured so the commit succeeds
+	// even in a fresh environment with no user.name/user.email. Only append a
+	// default when the var isn't already present in the environment.
+	env := os.Environ()
+	defaults := map[string]string{
+		"GIT_AUTHOR_NAME":     "Kai",
+		"GIT_AUTHOR_EMAIL":    "kai@local",
+		"GIT_COMMITTER_NAME":  "Kai",
+		"GIT_COMMITTER_EMAIL": "kai@local",
+	}
+	for key, val := range defaults {
+		if os.Getenv(key) == "" {
+			env = append(env, key+"="+val)
+		}
+	}
+
+	commitCmd := exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit (kai init)")
+	commitCmd.Dir = dir
+	commitCmd.Env = env
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git commit failed: %v\n%s", err, out)
+	}
+
+	return true, nil
+}
+
 func runInit(cmd *cobra.Command, args []string) error {
 	initColors()
 	te := telemetry.NewEvent("init")
@@ -5260,6 +5319,18 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating objects directory: %w", err)
 	}
 	debugf("database path: %s", filepath.Join(kaiDir, dbFile))
+
+	// Establish a git baseline if this is a git repo with NO commits yet. A
+	// freshly `git init`'d directory has no HEAD, so the spawn model has no
+	// BaseGitSHA to anchor against and the desktop Changes panel marks the
+	// whole tree as dirty. Creating the initial commit here (before the git
+	// history import reads HEAD and before the first capture snapshots the
+	// tree) gives fork-from-main a clean anchor.
+	if created, err := ensureGitBaselineCommit(cwd); err != nil {
+		return fmt.Errorf("ensuring git baseline commit: %w", err)
+	} else if created {
+		fmt.Printf("%s Created an initial git commit so workspaces fork from a clean baseline.\n", cGreen("✓"))
+	}
 
 	// Write default kai.modules.yaml in project root (not in .kai) only if it doesn't exist
 	// This file is meant to be committed to version control and shared with the team
