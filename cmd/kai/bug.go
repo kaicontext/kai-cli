@@ -1,0 +1,59 @@
+// `kai bug` — help users report issues. Prints a pre-filled bug report
+// body (version, OS, architecture) and opens the GitHub issue tracker.
+package main
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+var bugNoBrowser bool
+
+var bugCmd = &cobra.Command{
+	Use:   "bug",
+	Short: "Report a bug and open the issue tracker",
+	Long: `Prints a pre-filled bug report body (version, OS, architecture) to stdout
+and opens the GitHub issue tracker in your default browser.
+
+Copy the printed report into the issue body, then fill in the description,
+reproduction steps, and expected vs actual behavior.`,
+	RunE: runBug,
+}
+
+func init() {
+	bugCmd.Flags().BoolVar(&bugNoBrowser, "no-browser", false, "Print the report body without opening a browser")
+	rootCmd.AddCommand(bugCmd)
+}
+
+func runBug(cmd *cobra.Command, args []string) error {
+	const issuesURL = "https://github.com/kaicontext/kai-cli/issues/new/choose"
+
+	// Build the pre-filled report body.
+	var sb strings.Builder
+	sb.WriteString("## Bug Report\n\n")
+	sb.WriteString("### Description\n\n<!-- What happened? What did you expect? -->\n\n")
+	sb.WriteString("### Steps to Reproduce\n\n<!-- Minimal steps to reproduce -->\n\n")
+	sb.WriteString("### Expected Behavior\n\n<!-- What should have happened? -->\n\n")
+	sb.WriteString("### Actual Behavior\n\n<!-- What actually happened? Include error messages or output. -->\n\n")
+	sb.WriteString("### Environment\n\n")
+	fmt.Fprintf(&sb, "- kai version: %s\n", Version)
+	if GitSHA != "" && GitSHA != "nogit" && GitSHA != "unknown" {
+		fmt.Fprintf(&sb, "- git SHA: %s\n", GitSHA)
+	}
+	fmt.Fprintf(&sb, "- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	sb.WriteString("\n<!-- Run `kai doctor` and paste relevant output if applicable -->\n")
+
+	fmt.Print(sb.String())
+
+	fmt.Fprintf(os.Stdout, "\nIssue tracker: %s\n", issuesURL)
+	if !bugNoBrowser {
+		fmt.Fprintf(os.Stderr, "Opening in your browser...\n")
+		openBrowser(issuesURL)
+	}
+
+	return nil
+}
