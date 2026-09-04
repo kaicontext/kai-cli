@@ -55,6 +55,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc gcc-mingw-w64-x86-64
       - name: Test
         run: CGO_ENABLED=1 go test -timeout 5m -skip 'TestRunCompletion' ./...
+      # A deadline on a subprocess is not a bound on it: cancelling the
+      # context kills the child, but the output read blocks until the
+      # pipes close and a grandchild inherits them. Baselined, so this
+      # gates NEW calls only while the known ones burn down. The linter
+      # ships in kai-engine so every repo runs the same one.
+      - name: execlint (no unbounded subprocess)
+        run: CGO_ENABLED=1 go run github.com/kaicontext/kai-engine/cmd/execlint ./...
       # Windows cross-check: unix-only syscalls (flock, Setpgid, Kill, Exec)
       # only surface under GOOS=windows; tree-sitter needs cgo, hence mingw.
       - name: Vet windows/amd64
