@@ -25,7 +25,7 @@ func TestBugCmd_PrintsVersionAndOS(t *testing.T) {
 	}
 }
 
-func TestBugCmd_ContainsIssueTrackerURL(t *testing.T) {
+func TestBugCmd_PrintsReportBodyAndURL(t *testing.T) {
 	bugNoBrowser = true
 	defer func() { bugNoBrowser = false }()
 
@@ -46,5 +46,8 @@ func TestBugCmd_ContainsIssueTrackerURL(t *testing.T) {
 	}
 	if !strings.Contains(out, "### Environment") {
 		t.Errorf("bug output missing ### Environment section, got %q", out)
+	}
+	if !strings.Contains(out, "https://github.com/kaicontext/kai-cli/issues/new/choose") {
+		t.Errorf("bug output missing issue tracker URL, got %q", out)
 	}
 }

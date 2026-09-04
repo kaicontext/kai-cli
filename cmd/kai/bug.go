@@ -41,7 +41,7 @@ func runBug(cmd *cobra.Command, args []string) error {
 	sb.WriteString("### Actual Behavior\n\n<!-- What actually happened? Include error messages or output. -->\n\n")
 	sb.WriteString("### Environment\n\n")
 	fmt.Fprintf(&sb, "- kai version: %s\n", Version)
-	if GitSHA != "" {
+	if GitSHA != "" && GitSHA != "nogit" && GitSHA != "unknown" {
 		fmt.Fprintf(&sb, "- git SHA: %s\n", GitSHA)
 	}
 	fmt.Fprintf(&sb, "- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)
@@ -49,11 +49,10 @@ func runBug(cmd *cobra.Command, args []string) error {
 
 	fmt.Print(sb.String())
 
+	fmt.Fprintf(os.Stdout, "\nIssue tracker: %s\n", issuesURL)
 	if !bugNoBrowser {
-		fmt.Fprintf(os.Stderr, "\nOpening %s in your browser...\n", issuesURL)
+		fmt.Fprintf(os.Stderr, "Opening in your browser...\n")
 		openBrowser(issuesURL)
-	} else {
-		fmt.Fprintf(os.Stderr, "\nIssue tracker: %s\n", issuesURL)
 	}
 
 	return nil
