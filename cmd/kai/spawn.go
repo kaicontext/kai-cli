@@ -191,7 +191,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	baseGitSHA, gitDirty, kaiSnap := spawnpkg.GitHeadState(srcRepo)
+	baseGitSHA, gitDirty, kaiSnap := spawnpkg.GitHeadStateWithSnapshot(srcRepo)
 
 	if spawnDryRun {
 		printDryRun(targets, wsBase, srcSnapHex, resolved, srcRemote)
