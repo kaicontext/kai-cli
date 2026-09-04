@@ -37,6 +37,8 @@ func runBug(cmd *cobra.Command, args []string) error {
 	sb.WriteString("## Bug Report\n\n")
 	sb.WriteString("### Description\n\n<!-- What happened? What did you expect? -->\n\n")
 	sb.WriteString("### Steps to Reproduce\n\n<!-- Minimal steps to reproduce -->\n\n")
+	sb.WriteString("### Expected Behavior\n\n<!-- What should have happened? -->\n\n")
+	sb.WriteString("### Actual Behavior\n\n<!-- What actually happened? Include error messages or output. -->\n\n")
 	sb.WriteString("### Environment\n\n")
 	fmt.Fprintf(&sb, "- kai version: %s\n", Version)
 	if GitSHA != "" {
