@@ -4518,6 +4518,7 @@ func init() {
 	initCmd.GroupID = groupStart
 	captureCmd.GroupID = groupStart
 	initCmd.Flags().BoolVar(&initExplain, "explain", false, "Show detailed explanation of what this command does")
+	initCmd.Flags().BoolVar(&initNoBaselineCommit, "no-baseline-commit", false, "Do not create an initial git commit in a repo that has none. By default `kai init` commits the working tree (minus .gitignore) so workspaces fork from a clean anchor; this opts out and leaves git history untouched")
 	initCmd.Flags().BoolVar(&initGitBridge, "git-bridge", false, "Enable the kai→git direction of the bridge: kai milestones become git commits (the git→kai import hooks are installed by default; opt out with bridge.auto_import: false)")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Re-run initialization even if kai is already set up in this directory")
 	initCmd.Flags().BoolVar(&initAssumeYes, "yes", false, "Non-interactive: auto-select the personal org and link an existing repo (also implied when stdin isn't a TTY)")
@@ -4876,6 +4877,7 @@ func debugf(format string, args ...any) {
 var skipModulesFile bool
 var initExplain bool
 var initGitBridge bool
+var initNoBaselineCommit bool
 var initForce bool
 
 var initAssumeYes bool
@@ -5169,6 +5171,22 @@ func pickPersonalOrg(orgs []remote.OrgInfo, email string) *remote.OrgInfo {
 	return nil
 }
 
+// gitHasIdentity reports whether an author identity is CONFIGURED for
+// dir, in any scope git reads: repo, global, or system.
+//
+// `git var GIT_AUTHOR_IDENT` is the wrong probe even though it looks
+// like the authoritative one: with nothing configured at all it still
+// answers, with a guess assembled from the OS user and hostname, and
+// exits 0. It can therefore never report "no identity", which is the
+// one thing this helper needs to detect. `git config user.email` exits
+// non-zero when the key is genuinely unset, so that is the question.
+func gitHasIdentity(dir string) bool {
+	cmd := exec.Command("git", "config", "user.email")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return err == nil && len(bytes.TrimSpace(out)) > 0
+}
+
 // ensureGitBaselineCommit creates an initial git commit when dir is a git
 // repository that has NO commits yet. The spawn model anchors workspaces
 // against a committed BaseGitSHA; a freshly `git init`'d directory has no
@@ -5202,19 +5220,26 @@ func ensureGitBaselineCommit(dir string) (bool, error) {
 		return false, fmt.Errorf("git add failed: %v\n%s", err, out)
 	}
 
-	// Provide a git identity if none is configured so the commit succeeds
-	// even in a fresh environment with no user.name/user.email. Only append a
-	// default when the var isn't already present in the environment.
+	// Provide a git identity ONLY when the repo genuinely has none.
+	//
+	// This used to test os.Getenv("GIT_AUTHOR_NAME") == "", which is the
+	// wrong question: a git identity almost always comes from gitconfig,
+	// not the environment, so the guard fired for nearly every user — and
+	// because the GIT_* env vars OUTRANK gitconfig, the baseline commit
+	// came out authored by "Kai <kai@local>" on repos whose owner had a
+	// perfectly good identity configured. Ask git what it would actually
+	// use, and stand aside whenever it can answer.
 	env := os.Environ()
-	defaults := map[string]string{
-		"GIT_AUTHOR_NAME":     "Kai",
-		"GIT_AUTHOR_EMAIL":    "kai@local",
-		"GIT_COMMITTER_NAME":  "Kai",
-		"GIT_COMMITTER_EMAIL": "kai@local",
-	}
-	for key, val := range defaults {
-		if os.Getenv(key) == "" {
-			env = append(env, key+"="+val)
+	if !gitHasIdentity(dir) {
+		for key, val := range map[string]string{
+			"GIT_AUTHOR_NAME":     "Kai",
+			"GIT_AUTHOR_EMAIL":    "kai@local",
+			"GIT_COMMITTER_NAME":  "Kai",
+			"GIT_COMMITTER_EMAIL": "kai@local",
+		} {
+			if os.Getenv(key) == "" {
+				env = append(env, key+"="+val)
+			}
 		}
 	}
 
@@ -5326,10 +5351,21 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// whole tree as dirty. Creating the initial commit here (before the git
 	// history import reads HEAD and before the first capture snapshots the
 	// tree) gives fork-from-main a clean anchor.
-	if created, err := ensureGitBaselineCommit(cwd); err != nil {
-		return fmt.Errorf("ensuring git baseline commit: %w", err)
+	// A failure here is NOT fatal. The baseline commit is an optimisation
+	// — it gives fork-from-main a clean anchor — and `kai init` has to
+	// work on repos where committing cannot: commit.gpgsign with no
+	// usable key, a pre-commit hook from init.templateDir that rejects,
+	// a read-only object store. Aborting init over it turned a nicety
+	// into a hard stop on a common configuration.
+	if initNoBaselineCommit {
+		debugf("skipping the git baseline commit (--no-baseline-commit)")
+	} else if created, err := ensureGitBaselineCommit(cwd); err != nil {
+		fmt.Fprintf(os.Stderr, "%s Could not create a baseline git commit (%v).\n", cDim("!"), err)
+		fmt.Fprintf(os.Stderr, "  kai is initialised; workspaces forked from here will show this repo's files as\n")
+		fmt.Fprintf(os.Stderr, "  untracked until you make a first commit yourself.\n")
 	} else if created {
 		fmt.Printf("%s Created an initial git commit so workspaces fork from a clean baseline.\n", cGreen("✓"))
+		fmt.Printf("  Everything not covered by .gitignore is in it — `git reset HEAD~` undoes it.\n")
 	}
 
 	// Write default kai.modules.yaml in project root (not in .kai) only if it doesn't exist
