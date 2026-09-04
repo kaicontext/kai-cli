@@ -1,0 +1,9 @@
+# execlint baseline — subprocess call sites that predate the check.
+# Each line is file:function. The gate fails on anything NOT listed here,
+# so no NEW unbounded exec can land while these burn down.
+# Regenerate deliberately, never to silence a new finding: execlint -write-baseline
+cmd/kai/semantic.go:33
+internal/tui/fixxy/fixxy.go:246
+internal/tui/fixxy/fixxy.go:362
+internal/tui/views/auto_repair.go:160
+internal/tui/views/planner_dispatch.go:2664
