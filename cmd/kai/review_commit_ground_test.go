@@ -53,7 +53,7 @@ func TestStatedIntentAndTitleForMergeCommit(t *testing.T) {
 
 func TestParseReviewOutputEmptyListBullets(t *testing.T) {
 	raw := "Looks fine.\n\n===REVIEW-DATA===\nINTENT_MATCH: verified\nSUMMARY: ok\nISSUES:\n- (none)\nDECISIONS:\n- None.\n- Decision: the cap moves from 5 to 7 for every org\n"
-	_, risks, decisions, match, _ := rcParseReviewOutput(raw)
+	_, risks, decisions, match, _, _ := rcParseReviewOutput(raw)
 	if len(risks) != 0 {
 		t.Errorf("\"(none)\" must not become an issue, got %v", risks)
 	}

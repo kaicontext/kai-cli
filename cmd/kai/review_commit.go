@@ -79,9 +79,20 @@ Then write the review the way a good colleague would leave it on the PR:
 - Then each real concern, in plain language: where it is (path:line), what goes wrong, why it matters, and what you'd do instead. No category tags, no severity labels, no template — clear sentences addressed to the author.
 - If the change is solid, say so plainly. A sentence on what's done well is welcome; flattery is not. Style nits are not concerns.
 
+Close the prose with one line saying how ready this is to merge, in your own words, so the author reads your answer before the machinery does.
+
 Finish with this machine coda, exactly once, after everything else. INTENT_MATCH judges the change against the author's ACTUAL goal, not a stricter one: verified = does what they intended; partial = mostly, with gaps; diverges = materially different or broken. A DECISION never lowers INTENT_MATCH — a change can be verified and still need a human's yes. Omit either list entirely when it is empty.
+
+MERGE_READY answers what should happen to this branch NEXT. It is not a grade for the author, not a confidence score, and not a measure of how much you found. Score what is true of the code now:
+  5 — merge it. No defects, and nothing here needs anyone's decision.
+  4 — your call, then merge. No defects; something in it is a human's to decide (a tradeoff, a publish, a policy).
+  3 — small fixes first. Real defects, but local and quick; the change itself is sound.
+  2 — needs work. Defects in the core of what the change does.
+  1 — do not merge. It does not do what it claims, or it breaks something that works today.
+A DECISION never scores below 4, exactly as it never lowers INTENT_MATCH: a change nobody has objected to is not held back by needing a yes. A concern you could not verify is not a defect — say so and score what you did establish. Findings you raised and then judged not to be defects do not count against the score; if every concern turned out to be a decision or a non-issue, that is a 4 or a 5 and you should say so plainly.
 ===REVIEW-DATA===
 INTENT_MATCH: verified|partial|diverges
+MERGE_READY: 1|2|3|4|5
 SUMMARY: <one honest sentence — your bottom line>
 ISSUES:
 - path:line — <one-sentence version of each concern from your review>
@@ -208,7 +219,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
 
-	prose, risks, decisions, match, note := rcParseReviewOutput(raw)
+	prose, risks, decisions, match, readiness, note := rcParseReviewOutput(raw)
 
 	// An empty review is a FAILURE, not a finding. Shipping a bundle with no
 	// prose, no risks, and an unknown intent verdict green-checks a shell —
@@ -293,6 +304,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		Removed: removed,
 		Files:   len(files),
 		Verdict: finding.VerdictAwaiting,
+		// What should happen to this branch next, 1-5. Unknown when the
+		// reviewer gave no score, which renders as nothing rather than
+		// as the harsh end of the scale.
+		Readiness: readiness,
 		Intent: finding.Intent{
 			Stated: stated,
 			Match:  match,
@@ -632,14 +647,16 @@ func rcChangedSymbols(diff string) string {
 }
 
 // rcReviewDataMarker separates the human review (everything before it) from
-// the machine coda (INTENT_MATCH / SUMMARY / ISSUES) the pipeline parses.
+// the machine coda (INTENT_MATCH / MERGE_READY / SUMMARY / ISSUES) the
+// pipeline parses.
 const rcReviewDataMarker = "===REVIEW-DATA==="
 
 // rcParseReviewOutput splits the reviewer's output into the human review prose
 // and the structured fields the finding carries. Tolerant of the legacy shape
 // (no marker; FINDINGS:/NOTE: lines inline) so an old model answer still parses.
-func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, match finding.Match, note string) {
+func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, match finding.Match, readiness finding.Readiness, note string) {
 	match = finding.MatchUnknown
+	readiness = finding.ReadinessUnknown
 	coda := raw
 	if i := strings.Index(raw, rcReviewDataMarker); i >= 0 {
 		prose = strings.TrimSpace(raw[:i])
@@ -678,6 +695,24 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 					match = finding.MatchDiverges
 				}
 			}
+		case strings.HasPrefix(upper, "MERGE_READY:"):
+			section = ""
+			sawMachineLine = true
+			// First field only, same as INTENT_MATCH: the value is one
+			// digit and anything after it ("4 — pending your call") is
+			// commentary. An unparseable or out-of-range value leaves
+			// the score UNKNOWN rather than guessing an end of the
+			// scale: "the reviewer did not say" and "do not merge" are
+			// different claims, and a missing score must never render
+			// as the harsher one.
+			f := strings.Fields(strings.TrimSpace(t[len("MERGE_READY:"):]))
+			if len(f) > 0 {
+				if n, err := strconv.Atoi(strings.TrimRight(f[0], ".:")); err == nil {
+					if r := finding.Readiness(n); r.Valid() {
+						readiness = r
+					}
+				}
+			}
 		case strings.HasPrefix(upper, "SUMMARY:"):
 			section = ""
 			sawMachineLine = true
@@ -712,7 +747,7 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 		}
 		prose = strings.TrimSpace(coda[:proseEnd])
 	}
-	return prose, risks, decisions, match, note
+	return prose, risks, decisions, match, readiness, note
 }
 
 func rcCommitMeta(ref string) (hash, subject, body string, err error) {
