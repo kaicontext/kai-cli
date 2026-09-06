@@ -31,6 +31,7 @@ var (
 	spawnPrefix       string
 	spawnFrom         string
 	spawnNoGit        bool
+	spawnClean        bool
 	spawnSync         string
 	spawnAgent        string
 	spawnCopyStrategy string
@@ -103,6 +104,7 @@ func init() {
 	spawnCmd.Flags().StringVar(&spawnPrefix, "prefix", "/tmp/kai-", "Path prefix for auto-generated directories")
 	spawnCmd.Flags().StringVar(&spawnFrom, "from", "@snap:last", "Snapshot to spawn from")
 	spawnCmd.Flags().BoolVar(&spawnNoGit, "no-git", false, "Skip git init in spawned workspaces")
+	spawnCmd.Flags().BoolVar(&spawnClean, "clean", false, "Materialize committed HEAD instead of uncommitted source changes")
 	spawnCmd.Flags().StringVar(&spawnSync, "sync", "full", "Sync mode: full or none")
 	spawnCmd.Flags().StringVar(&spawnAgent, "agent", "", "Agent name (numbered if --count > 1)")
 	spawnCmd.Flags().StringVar(&spawnCopyStrategy, "copy-strategy", "auto", "Copy strategy: auto, cow, or full")
@@ -209,6 +211,15 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	if err := materializeFirst(srcRepo, first, srcSnapHex, wsName1, agent1, srcRemote, spawnDurable, resolved); err != nil {
 		return fmt.Errorf("materializing first workspace: %w", err)
 	}
+	// Durable spawns are session workspaces. They must start at committed
+	// HEAD rather than inheriting unrelated edits from the developer's main
+	// checkout. --clean exposes the same behavior to other callers.
+	if cleanSpawnRequested(spawnClean, spawnDurable) {
+		if err := cleanSpawnToGitHead(srcRepo, first); err != nil {
+			return fmt.Errorf("materializing clean workspace: %w", err)
+		}
+		gitDirty = false
+	}
 	if !spawnNoGit {
 		if err := gitInitAndCommit(first, srcSnapHex); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: git init in %s failed: %v\n", first, err)
@@ -286,6 +297,133 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	}
 	printSpawnSummary(entries, srcSnapHex, resolved)
 	return nil
+}
+
+func cleanSpawnRequested(explicit, durable bool) bool {
+	return explicit || durable
+}
+
+// cleanSpawnToGitHead replaces the snapshot's source files with the source
+// repository's committed HEAD. Kai snapshots intentionally include the working
+// tree; durable desktop sessions do not want those unrelated edits. Dependency
+// directories provisioned by materializeFirst are ignored by git and survive.
+func cleanSpawnToGitHead(srcRepo, dst string) error {
+	if _, err := gitOutput(srcRepo, "rev-parse", "--verify", "HEAD"); err != nil {
+		// A Kai repo need not be a git repo. With no committed tree there is
+		// no cleaner source to prefer, so retain the snapshot behavior.
+		return nil
+	}
+	dirty, err := gitOutput(srcRepo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return fmt.Errorf("reading source changes: %w", err)
+	}
+	for _, path := range porcelainPaths(dirty) {
+		if isDependencyPath(path) {
+			continue
+		}
+		target, err := cleanSpawnPath(dst, path)
+		if err != nil {
+			return err
+		}
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("removing inherited %s: %w", path, err)
+		}
+	}
+
+	index, err := os.CreateTemp("", "kai-clean-index-*")
+	if err != nil {
+		return err
+	}
+	indexPath := index.Name()
+	if err := index.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(indexPath); err != nil {
+		return err
+	}
+	defer os.Remove(indexPath)
+	env := append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+	if err := gitRunEnv(srcRepo, env, "read-tree", "HEAD"); err != nil {
+		return fmt.Errorf("reading committed HEAD: %w", err)
+	}
+	prefix := filepath.Clean(dst) + string(os.PathSeparator)
+	if err := gitRunEnv(srcRepo, env, "checkout-index", "--all", "--force", "--prefix="+prefix); err != nil {
+		return fmt.Errorf("checking out committed HEAD: %w", err)
+	}
+	return nil
+}
+
+func gitOutput(dir string, args ...string) ([]byte, error) {
+	c := exec.Command("git", args...)
+	c.Dir = dir
+	return c.Output()
+}
+
+func gitRunEnv(dir string, env []string, args ...string) error {
+	c := exec.Command("git", args...)
+	c.Dir = dir
+	c.Env = env
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func porcelainPaths(out []byte) []string {
+	fields := strings.Split(string(out), "\x00")
+	paths := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		entry := fields[i]
+		if len(entry) < 4 {
+			continue
+		}
+		status, path := entry[:2], entry[3:]
+		paths = append(paths, path)
+		if status[0] == 'R' || status[0] == 'C' || status[1] == 'R' || status[1] == 'C' {
+			i++ // porcelain -z emits the other rename/copy path next
+			if i < len(fields) && fields[i] != "" {
+				paths = append(paths, fields[i])
+			}
+		}
+	}
+	return paths
+}
+
+func cleanSpawnPath(root, rel string) (string, error) {
+	if rel == "" || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("unsafe inherited path %q", rel)
+	}
+	root = filepath.Clean(root)
+	target := filepath.Clean(filepath.Join(root, filepath.FromSlash(rel)))
+	if target == root || !strings.HasPrefix(target, root+string(os.PathSeparator)) {
+		return "", fmt.Errorf("unsafe inherited path %q", rel)
+	}
+	// Do not follow an inherited directory symlink while removing one of
+	// its children. The final component may itself be a symlink; RemoveAll
+	// safely removes that link rather than its target.
+	for parent := filepath.Dir(target); parent != root; parent = filepath.Dir(parent) {
+		info, err := os.Lstat(parent)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("unsafe inherited path %q traverses a symlink", rel)
+		}
+	}
+	return target, nil
+}
+
+func isDependencyPath(path string) bool {
+	path = filepath.ToSlash(filepath.Clean(path))
+	for _, dep := range depDirs {
+		if path == dep || strings.HasPrefix(path, dep+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
