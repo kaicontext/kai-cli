@@ -82,3 +82,93 @@ func TestMergeReadyDoesNotLeakIntoProse(t *testing.T) {
 		t.Errorf("readiness = %d, want 5", r)
 	}
 }
+
+// The specimen. On 2026-09-06, the first review to run on an image that
+// carried the MERGE_READY prompt answered in PROSE and emitted no coda
+// line at all — this is its closing paragraph, verbatim. The score was
+// right and unreadable: the parser saw nothing, the bundle carried no
+// readiness, and the surface built to render it rendered nothing.
+const rcProseScoreSpecimen = "The backend validation, the known-project path check, and the error " +
+	"plumbing are all solid.\n\n" +
+	"**Merge readiness:** small fixes first — the placeholder bug is real and " +
+	"quick to fix, and the rest is your call on the 300ms tradeoff.\n"
+
+func TestScoreIsReadWhereverTheModelPutIt(t *testing.T) {
+	raw := rcProseScoreSpecimen + "\n===REVIEW-DATA===\nINTENT_MATCH: verified\nSUMMARY: fine\n"
+	_, _, _, _, got, _ := rcParseReviewOutput(raw)
+	if got != finding.ReadinessSmallFixes {
+		t.Fatalf("the score the reviewer actually gave was dropped: got %d, want %d",
+			got, finding.ReadinessSmallFixes)
+	}
+}
+
+func TestProseScoreFormsThatMustParse(t *testing.T) {
+	// The model was shown Label()'s vocabulary in the prompt, so these
+	// are the words it reaches for when it writes a sentence instead of
+	// a coda line.
+	for _, c := range []struct {
+		line string
+		want finding.Readiness
+		why  string
+	}{
+		{"**Merge readiness:** small fixes first", finding.ReadinessSmallFixes, "the specimen's shape"},
+		{"Merge readiness: ready to merge", finding.ReadinessMerge, "bare, no markdown"},
+		{"MERGE READINESS: do not merge", finding.ReadinessBlocked, "shouted, spaced"},
+		{"Merge-readiness: needs work", finding.ReadinessNeedsWork, "hyphenated"},
+		{"Readiness: your call, then merge", finding.ReadinessDecideThenMerge, "the short key"},
+		{"`Merge readiness:` 2", finding.ReadinessNeedsWork, "a digit still wins in prose form"},
+		{"### Merge readiness: 5", finding.ReadinessMerge, "written as a heading"},
+	} {
+		raw := "Prose.\n\n" + c.line + "\n\n===REVIEW-DATA===\nSUMMARY: x\n"
+		if _, _, _, _, got, _ := rcParseReviewOutput(raw); got != c.want {
+			t.Errorf("%q → %d, want %d (%s)", c.line, got, c.want, c.why)
+		}
+	}
+}
+
+// The prose fallback must not manufacture a score out of a sentence.
+// Only a LABELLED line counts: the reviewer says "ready to merge" in
+// ordinary prose all the time, and reading that as a 5 would invent a
+// verdict nobody gave — the same mistake, pointed the other way.
+func TestProseScoreDoesNotInventAVerdict(t *testing.T) {
+	for _, prose := range []string{
+		"Once the placeholder bug is fixed this is ready to merge.",
+		"I do not merge things I cannot run, and I could not run this.",
+		"The concurrency comment needs work before a reader trusts it.",
+		"Your call, then merge — but the 300ms is a real cost.",
+		"readiness is not something I can judge from the diff alone",
+	} {
+		raw := prose + "\n\n===REVIEW-DATA===\nSUMMARY: x\n"
+		if _, _, _, _, got, _ := rcParseReviewOutput(raw); got != finding.ReadinessUnknown {
+			t.Errorf("%q → %d, want UNKNOWN — a sentence is not a score", prose, got)
+		}
+	}
+}
+
+// The label must sit at the START of the value. A substring match reads
+// the negation of a label as the label: "not ready to merge" contains
+// "ready to merge", and scoring that a 5 would turn the reviewer's
+// clearest refusal into its opposite.
+func TestProseScoreLabelIsAnchored(t *testing.T) {
+	for _, line := range []string{
+		"Merge readiness: this is not ready to merge without the placeholder fix",
+		"Merge readiness: I would not merge it, though nothing here is unsafe",
+		"Merge readiness: the placeholder bug means this needs work",
+	} {
+		raw := "Prose.\n\n" + line + "\n\n===REVIEW-DATA===\nSUMMARY: x\n"
+		if _, _, _, _, got, _ := rcParseReviewOutput(raw); got != finding.ReadinessUnknown {
+			t.Errorf("%q → %d, want UNKNOWN — a label buried in a sentence is not the score, "+
+				"and half of these say the OPPOSITE of the label they contain", line, got)
+		}
+	}
+}
+
+// The coda still wins. It is where the score is asked for, and a model
+// that answers there and then muses in prose must not be overridden by
+// its own musing.
+func TestCodaBeatsProse(t *testing.T) {
+	raw := "**Merge readiness:** ready to merge\n\n===REVIEW-DATA===\nMERGE_READY: 2\nSUMMARY: x\n"
+	if _, _, _, _, got, _ := rcParseReviewOutput(raw); got != finding.ReadinessNeedsWork {
+		t.Errorf("got %d, want the coda's 2 — the prose is a restatement, not a second opinion", got)
+	}
+}

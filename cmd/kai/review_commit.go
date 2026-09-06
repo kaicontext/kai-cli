@@ -698,20 +698,8 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 		case strings.HasPrefix(upper, "MERGE_READY:"):
 			section = ""
 			sawMachineLine = true
-			// First field only, same as INTENT_MATCH: the value is one
-			// digit and anything after it ("4 — pending your call") is
-			// commentary. An unparseable or out-of-range value leaves
-			// the score UNKNOWN rather than guessing an end of the
-			// scale: "the reviewer did not say" and "do not merge" are
-			// different claims, and a missing score must never render
-			// as the harsher one.
-			f := strings.Fields(strings.TrimSpace(t[len("MERGE_READY:"):]))
-			if len(f) > 0 {
-				if n, err := strconv.Atoi(strings.TrimRight(f[0], ".:")); err == nil {
-					if r := finding.Readiness(n); r.Valid() {
-						readiness = r
-					}
-				}
+			if r, ok := rcParseReadinessLine(t); ok {
+				readiness = r
 			}
 		case strings.HasPrefix(upper, "SUMMARY:"):
 			section = ""
@@ -747,7 +735,117 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 		}
 		prose = strings.TrimSpace(coda[:proseEnd])
 	}
+	// The score, wherever the model actually put it.
+	//
+	// The coda is where it is ASKED for, and when the model obeys, the
+	// loop above already has it. On 2026-09-06 it did not: the review of
+	// kai-desktop#244 ended its prose with "**Merge readiness:** small
+	// fixes first" and emitted no MERGE_READY line at all. The score was
+	// right, the parser saw nothing, the bundle carried no readiness, and
+	// the surface built to show it rendered nothing — the score was back
+	// to being prose nobody downstream can read, which is the entire
+	// failure the field exists to end.
+	//
+	// A prompt is a request. This is the part that does not depend on the
+	// model choosing to comply.
+	if readiness == finding.ReadinessUnknown {
+		for _, line := range strings.Split(prose, "\n") {
+			if r, ok := rcParseReadinessLine(strings.TrimSpace(line)); ok {
+				readiness = r
+				break
+			}
+		}
+	}
 	return prose, risks, decisions, match, readiness, note
+}
+
+// rcReadinessLabels maps the canonical phrase for each score back to the
+// score, for a model that answered in words instead of the digit. The
+// phrases are finding.Readiness.Label()'s, which is what the prompt shows
+// the model, so this recognizes the vocabulary the reviewer was taught.
+//
+// Longest first: "ready to merge" is a suffix of nothing here, but "needs
+// work" and "do not merge" both appear inside longer sentences, and an
+// anchored longest-match keeps "your call, then merge" from reading as a
+// merge.
+var rcReadinessLabels = []struct {
+	phrase string
+	score  finding.Readiness
+}{
+	{"your call, then merge", finding.ReadinessDecideThenMerge},
+	{"your call then merge", finding.ReadinessDecideThenMerge},
+	{"small fixes first", finding.ReadinessSmallFixes},
+	{"ready to merge", finding.ReadinessMerge},
+	{"do not merge", finding.ReadinessBlocked},
+	{"needs work", finding.ReadinessNeedsWork},
+}
+
+// rcReadinessKeys are the ways a line can announce the score, in the
+// canonical form rcReadinessKey produces (letters only). Only a LABELLED
+// line counts: the reviewer says "ready to merge" in ordinary prose all
+// the time, and reading that as a 5 would invent a verdict nobody gave —
+// the same mistake as dropping one, pointed the other way.
+var rcReadinessKeys = map[string]bool{
+	"mergeready":     true, // the machine coda: MERGE_READY
+	"mergereadiness": true, // what the model writes in prose
+	"readiness":      true,
+}
+
+// rcReadinessKey reduces a line's key to letters, so MERGE_READY,
+// "**Merge readiness**", "### Merge-readiness" and "merge ready" all
+// land on the same string. Underscores, spaces, hyphens and markdown are
+// decoration around the word; only the letters carry the meaning.
+func rcReadinessKey(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if r >= 'a' && r <= 'z' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// rcParseReadinessLine reads a score off one line, in either the machine
+// form ("MERGE_READY: 3") or the prose form the model actually writes
+// ("**Merge readiness:** small fixes first — ..."). Reports whether it
+// found one.
+//
+// An unparseable or out-of-range value yields nothing rather than a guess
+// at an end of the scale: "the reviewer did not say" and "do not merge"
+// are different claims, and a missing score must never render as the
+// harsher one.
+func rcParseReadinessLine(line string) (finding.Readiness, bool) {
+	i := strings.Index(line, ":")
+	if i < 0 {
+		return finding.ReadinessUnknown, false
+	}
+	if !rcReadinessKeys[rcReadinessKey(line[:i])] {
+		return finding.ReadinessUnknown, false
+	}
+	// Markdown is decoration around the value, never part of it.
+	value := strings.TrimSpace(strings.NewReplacer("*", "", "`", "", "#", "").Replace(line[i+1:]))
+	if value == "" {
+		return finding.ReadinessUnknown, false
+	}
+	// The digit, when the model gave one. First field only: anything
+	// after it ("4 — pending your call") is commentary.
+	if f := strings.Fields(value); len(f) > 0 {
+		if n, err := strconv.Atoi(strings.TrimRight(f[0], ".:,")); err == nil {
+			if r := finding.Readiness(n); r.Valid() {
+				return r, true
+			}
+			return finding.ReadinessUnknown, false
+		}
+	}
+	// Otherwise the words, anchored at the start so a label named later
+	// in a sentence about something else cannot win.
+	lower := strings.ToLower(value)
+	for _, l := range rcReadinessLabels {
+		if strings.HasPrefix(lower, l.phrase) {
+			return l.score, true
+		}
+	}
+	return finding.ReadinessUnknown, false
 }
 
 func rcCommitMeta(ref string) (hash, subject, body string, err error) {
