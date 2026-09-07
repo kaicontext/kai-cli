@@ -283,7 +283,7 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 			ent.CopySource = first
 		}
 		// Workspace ID lookup (for display) — best-effort.
-		if id, err := lookupWorkspaceID(filepath.Join(dir, kaiDir), ent.WorkspaceName); err == nil {
+		if id, err := lookupWorkspaceID(dir, ent.WorkspaceName); err == nil {
 			ent.WorkspaceID = id
 		}
 		entries = append(entries, ent)
@@ -876,7 +876,8 @@ func agentNameFor(base string, n, total int) string {
 	return fmt.Sprintf("%s-%d", base, n)
 }
 
-func lookupWorkspaceID(kaiDirPath, name string) (string, error) {
+func lookupWorkspaceID(projectRoot, name string) (string, error) {
+	kaiDirPath := kaipath.Resolve(projectRoot)
 	db, err := graph.Open(filepath.Join(kaiDirPath, dbFile),
 		filepath.Join(kaiDirPath, objectsDir))
 	if err != nil {
