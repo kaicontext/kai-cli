@@ -130,6 +130,8 @@ var (
 	reviewCommitFormat string
 	reviewCommitBase   string
 	reviewCommitBranch string
+	reviewCommitFast   bool
+	reviewCommitDeep   bool
 )
 
 var reviewCommitCmd = &cobra.Command{
@@ -142,7 +144,14 @@ var reviewCommitCmd = &cobra.Command{
 		"the review the way a colleague would — prose you can read, not a findings block. --format json emits a\n" +
 		"finding.Finding (verdict + intent + risks + diff), the same JSON the findings inbox stores, with the prose\n" +
 		"review on stderr.\n\n" +
-		"This is what the CI review workflow runs. Requires a captured graph (`kai capture`).",
+		"This is what the CI review workflow runs.\n\n" +
+		"DEFAULT: the fast pass — one model call over the diff, no agent loop, no graph, no `kai capture`\n" +
+		"required, an answer in seconds rather than minutes. It reads no callers, so it clears nothing:\n" +
+		"MERGE_READY is capped at 4 and it never reports an all-clear.\n\n" +
+		"--deep is the grounded review: the agent harness with the graph, kai_callers / kai_dependents /\n" +
+		"kai_context and web search, on a 9-minute soft budget. It is what confirms a concern is real and\n" +
+		"reachable, and it requires a captured graph (`kai capture`). In CI both run — the fast pass posts\n" +
+		"first and --deep supersedes it in place.",
 	Args: cobra.ExactArgs(1),
 	RunE: runReviewCommit,
 }
@@ -151,6 +160,12 @@ func init() {
 	reviewCommitCmd.Flags().StringVar(&reviewCommitFormat, "format", "text", "output format: text|json")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBase, "base", "", "review the aggregate diff of <base>...<commit> (PR range) instead of a single commit")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBranch, "branch", "", "branch name to record on the finding (default: GITHUB_HEAD_REF / GITHUB_REF_NAME / the checked-out branch)")
+	// --fast is the default, so the flag is only ever redundant. It stays
+	// because CI pods, scripts, and the built-in review workflow all spell it
+	// out, and a flag that silently becomes an error breaks them on the next
+	// image bump for no gain.
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default; the flag is explicit-only)")
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitDeep, "deep", false, "the grounded review: agent harness + graph, minutes not seconds — requires `kai capture`")
 	rootCmd.AddCommand(reviewCommitCmd)
 }
 
@@ -162,17 +177,42 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	ref := args[0]
 	cwd, _ := os.Getwd()
 
+	// The fast pass is the default review. --deep opts into the grounded one;
+	// --fast is the explicit spelling of the default. Asking for both is a
+	// contradiction, and guessing which one the caller meant is how a CI job
+	// silently reviews at the wrong depth for a month.
+	if reviewCommitFast && reviewCommitDeep {
+		return fmt.Errorf("--fast and --deep are opposites; pass one or neither (the default is --fast)")
+	}
+	fast := !reviewCommitDeep
+
+	// The graph is REQUIRED for the grounded review and OPTIONAL for --fast.
+	// That is the whole latency win: a fast pass that needed a captured graph
+	// would still make its CI job pay for `kai capture` before the first
+	// token, which is most of the two-minute budget it is trying to fit in.
+	// A fast run in a captured repo still uses the project's kai dir (config,
+	// credentials) and its root (identifier lookups); an uncaptured one falls
+	// back to main.go's cwd resolve and the cwd.
 	set, outcome := projects.Discover(cwd)
-	if outcome != projects.OutcomeRootsFound {
-		return fmt.Errorf("not a kai project here — run `kai capture` first")
+	switch {
+	case outcome == projects.OutcomeRootsFound:
+		if err := set.Open(); err != nil {
+			return fmt.Errorf("opening projects: %w", err)
+		}
+		defer set.Close()
+		// Point config loads and the run log at the discovered project's kai
+		// dir (main.go's default is a cwd resolve, which diverges in
+		// sub-directories).
+		kaiDir = set.Primary().KaiDir
+	case fast:
+		set = nil
+	default:
+		return fmt.Errorf("--deep needs a captured graph — run `kai capture` first, or drop --deep for the fast pass, which needs none")
 	}
-	if err := set.Open(); err != nil {
-		return fmt.Errorf("opening projects: %w", err)
+	repoRoot := cwd
+	if set != nil {
+		repoRoot = set.Primary().Path
 	}
-	defer set.Close()
-	// Point config loads and the run log at the discovered project's kai dir
-	// (main.go's default is a cwd resolve, which diverges in sub-directories).
-	kaiDir = set.Primary().KaiDir
 
 	hash, subject, body, err := rcCommitMeta(ref)
 	if err != nil {
@@ -202,24 +242,57 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no LLM provider available (run `kai login`)")
 	}
 
-	fmt.Fprintf(os.Stderr, "kai review-commit %s · %s\n", rcShort(hash), subject)
-	fmt.Fprintf(os.Stderr, "  reconstructing intent (model %s)…\n", model)
-	phase := time.Now()
-	intent, err := rcInferIntent(ctx, prov, model, stated, intentBody, diff)
-	if err != nil {
-		return fmt.Errorf("infer intent: %w", err)
+	// Diff stat up front: it is pure git, and --fast hands the changed paths to
+	// the model so its ISSUES bullets name a file the pipeline can resolve. The
+	// first live fast run wrote both of its real defects as bare line numbers
+	// ("2152 — ..."), which rcGroundIssue holds — visible in the inbox, but not
+	// counted, so two genuine bugs would have shipped under a green badge.
+	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
+	changedPaths := make([]string, 0, len(files))
+	for _, df := range files {
+		changedPaths = append(changedPaths, df.Path)
 	}
-	fmt.Fprintf(os.Stderr, "  timing: intent=%s\n", time.Since(phase).Round(time.Second))
 
-	fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
-	phase = time.Now()
-	raw, err := rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff)
-	if err != nil {
-		return err
+	mode := "review-commit --deep"
+	if fast {
+		mode = "review-commit (fast)"
 	}
-	fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
+	fmt.Fprintf(os.Stderr, "kai %s %s · %s\n", mode, rcShort(hash), subject)
+
+	var raw string
+	if fast {
+		fastModel := rcFastModel(model)
+		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (model %s, budget %s)…\n",
+			fastModel, rcFastHardDeadline)
+		phase := time.Now()
+		raw, err = rcRunFastReview(ctx, prov, fastModel, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "  timing: fast-review=%s\n", time.Since(phase).Round(time.Second))
+	} else {
+		fmt.Fprintf(os.Stderr, "  reconstructing intent (model %s)…\n", model)
+		phase := time.Now()
+		intent, ierr := rcInferIntent(ctx, prov, model, stated, intentBody, diff)
+		if ierr != nil {
+			return fmt.Errorf("infer intent: %w", ierr)
+		}
+		fmt.Fprintf(os.Stderr, "  timing: intent=%s\n", time.Since(phase).Round(time.Second))
+
+		fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
+		phase = time.Now()
+		raw, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
+	}
 
 	prose, risks, decisions, match, readiness, note := rcParseReviewOutput(raw)
+	if fast {
+		readiness = rcCapFastReadiness(readiness)
+		risks = rcFilterFastIssues(risks)
+	}
 
 	// An empty review is a FAILURE, not a finding. Shipping a bundle with no
 	// prose, no risks, and an unknown intent verdict green-checks a shell —
@@ -230,19 +303,20 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("review produced no content (no prose, no risks, intent unknown) — failing instead of posting an empty finding")
 	}
 
-	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
-
 	// Blast radius: walk the captured graph outward from the changed files so the
 	// finding shows what the change reaches (callers/importers), not just the diff.
 	// headHex="" walks the freshly-captured (single-snapshot) graph unscoped.
 	// Non-fatal — blast is a panel, not the review itself.
-	changedPaths := make([]string, 0, len(files))
-	for _, df := range files {
-		changedPaths = append(changedPaths, df.Path)
-	}
-	blast, berr := reviewanalyze.BlastFor(ctx, set.Primary().DB, changedPaths, "")
-	if berr != nil {
-		fmt.Fprintf(os.Stderr, "  blast radius unavailable: %v\n", berr)
+	//
+	// A --fast run in an uncaptured repo has no graph to walk; the panel is
+	// simply absent, which is honest for a pass that read no callers.
+	var blast finding.Blast
+	if set != nil {
+		b, berr := reviewanalyze.BlastFor(ctx, set.Primary().DB, changedPaths, "")
+		if berr != nil {
+			fmt.Fprintf(os.Stderr, "  blast radius unavailable: %v\n", berr)
+		}
+		blast = b
 	}
 
 	from := rcShort(rcParentHash(hash))
@@ -329,10 +403,22 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// server stores the bundle verbatim (json.RawMessage), so the field
 		// round-trips to `kai findings get` and the inbox without any server
 		// or finding-package change; finding.Finding can adopt it later.
+		// Depth rides alongside Review, for the same reason and by the same
+		// mechanism: the server stores the bundle verbatim, so a new field
+		// round-trips to `kai findings get` and the inbox with no server or
+		// finding-package change. It is what lets the two-pass flow tell a
+		// shallow finding from the grounded one that supersedes it — without
+		// it, a 60-second skim renders in the inbox identically to a
+		// nine-minute callers-checked review, which is worse than being slow.
+		depth := "grounded"
+		if fast {
+			depth = "fast"
+		}
 		out, err := json.MarshalIndent(struct {
 			finding.Finding
 			Review string `json:"review,omitempty"`
-		}{f, prose}, "", "  ")
+			Depth  string `json:"depth,omitempty"`
+		}{f, prose, depth}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
