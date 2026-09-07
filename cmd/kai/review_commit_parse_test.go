@@ -100,3 +100,28 @@ func TestRCParseReviewOutputLegacyBlockStillWorks(t *testing.T) {
 		t.Errorf("note = %q", note)
 	}
 }
+
+func TestRCParseReviewOutputRepeatedFindingsSupersedesEarlierBlock(t *testing.T) {
+	raw := "The fixture contains:\nFINDINGS:\n- quoted.go:1 — example\nINTENT_MATCH: diverges\nNOTE: quoted note\n\nActual review:\nFINDINGS:\n- real.go:2 — actual issue\nINTENT_MATCH: verified\nNOTE: actual note"
+	_, risks, _, match, _, note := rcParseReviewOutput(raw)
+	if !slices.Equal(risks, []string{"real.go:2 — actual issue"}) {
+		t.Errorf("risks = %q", risks)
+	}
+	if match != finding.MatchVerified {
+		t.Errorf("match = %q, want verified", match)
+	}
+	if note != "actual note" {
+		t.Errorf("note = %q", note)
+	}
+}
+
+func TestRCParseReviewOutputFirstFindingsPreservesEarlierVerdict(t *testing.T) {
+	raw := "INTENT_MATCH: verified\nNOTE: stated first\nFINDINGS:\n- real.go:2 — issue"
+	_, _, _, match, _, note := rcParseReviewOutput(raw)
+	if match != finding.MatchVerified {
+		t.Errorf("match = %q, want verified", match)
+	}
+	if note != "stated first" {
+		t.Errorf("note = %q", note)
+	}
+}

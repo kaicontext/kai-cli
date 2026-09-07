@@ -859,11 +859,24 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 	section := ""
 	var proseEnd int // legacy: prose runs until the first machine line
 	sawMachineLine := false
+	seenIssuesHeader := false
 	for _, line := range strings.Split(coda, "\n") {
 		t := strings.TrimSpace(line)
 		key, value, labelled := rcMachineLine(t)
 		switch {
 		case labelled && (key == "issues" || key == "findings"):
+			// The reviewer sometimes quotes an example block before its real
+			// closing block. A repeated header supersedes that earlier block as a
+			// unit; otherwise quoted risks, verdicts, and notes leak into the
+			// finding. Do not reset on the first header, because legacy output may
+			// put its verdict before FINDINGS.
+			if seenIssuesHeader {
+				risks = nil
+				statedMatch = ""
+				matchConflict = false
+				note = ""
+			}
+			seenIssuesHeader = true
 			section = "issues"
 			sawMachineLine = true
 		case labelled && key == "decisions":
