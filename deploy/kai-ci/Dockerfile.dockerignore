@@ -1,9 +1,14 @@
 # Per-Dockerfile ignore (BuildKit) — paths relative to the build context root
-# (the workspace dir holding kai-cli/ kai-core/ kai-engine/). The Dockerfile
-# COPYs only those three module dirs, so just prune heavy siblings + non-source
-# weight from the context upload. (No `*` whitelist — it can strip the local
-# module contents and make the replace/workspace build fetch the pinned tag.)
-kai-tui/
+# (the workspace dir holding kai-cli/ kai-core/ kai-engine/ kai-tui/). The
+# Dockerfile COPYs only those four module dirs, so just prune heavy siblings +
+# non-source weight from the context upload. (No `*` whitelist — it can strip
+# the local module contents and make the replace/workspace build fetch the
+# pinned tag.)
+#
+# kai-tui is NOT excluded: `kit`, the coding harness a Cloud Agent job runs, is
+# built from it. Excluding it made the build fail with a bare
+# "/kai-tui: not found" on the COPY, which reads as a missing directory rather
+# than an ignored one.
 kai-server/
 old-kai/
 bench/
