@@ -431,11 +431,27 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// SendUsageWarning — a name sitting in the diff it had been given —
 	// because brand-new symbols resolve poorly through graph search. The
 	// reviewer must never spend turns discovering what its input states.
+	declared := map[string]bool{}
 	if symbols := rcChangedSymbols(diff); symbols != "" {
 		user.WriteString("CHANGED SYMBOLS (extracted from this diff — these are new or modified IN THIS CHANGE. ")
 		user.WriteString("Do not search the graph for these names; open the listed files directly):\n")
 		user.WriteString(symbols)
 		user.WriteString("\n\n")
+		for _, ln := range strings.Split(symbols, "\n") {
+			if i := strings.LastIndex(ln, ": "); i >= 0 {
+				declared[strings.TrimSpace(ln[i+2:])] = true
+			}
+		}
+	}
+	// The lookups the reviewer would otherwise spend a turn each on. Only the
+	// identifiers this change reads or assigns, only where they live, and only
+	// when the answer is short enough to be a shortcut. See
+	// review_commit_lookups.go for why the graph cannot cover these.
+	if lookups := rcIdentifierLookups(diff, primary.Path, declared); lookups != "" {
+		user.WriteString("WHERE THESE LIVE (resolved from the repository before this review started — ")
+		user.WriteString("treat as already-run searches; do not re-run them):\n")
+		user.WriteString(lookups)
+		user.WriteString("\n")
 	}
 	user.WriteString("INTENT:\n")
 	user.WriteString(strings.TrimSpace(intent))
