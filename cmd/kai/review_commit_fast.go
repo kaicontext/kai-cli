@@ -226,16 +226,33 @@ const rcFastDefaultModel = "anthropic/claude-haiku-4-5"
 // reviewing on a different model than `kai config show` reports is exactly the
 // kind of divergence that makes a benchmark unreproducible — and a
 // non-reasoning one is kept as-is.
-func rcFastModel(reviewModel string) string {
+//
+// The substitution is only legal where rcFastDefaultModel actually resolves.
+// It is an OpenRouter-style namespaced id, which kailab (proxying OpenRouter)
+// and OpenRouter itself both serve. KindOpenAI is every OpenAI-COMPATIBLE
+// endpoint — Together, Groq, Ollama, vLLM and LM Studio all normalize to it —
+// and those serve their own namespaces, so handing one an "anthropic/..." id
+// fails the request. Since the fast pass is now the DEFAULT review, that
+// failure would not be a slow review, it would be no review at all. On such a
+// provider the configured model is kept and the cost is announced instead;
+// this repo has been bitten by the same prefix-decides-the-route mechanism
+// before (kai-cli #63: a bare id routed DIRECT to api.anthropic.com).
+func rcFastModel(reviewModel string, kind provider.Kind) string {
 	if m := strings.TrimSpace(os.Getenv("KAI_FAST_MODEL")); m != "" {
 		return m
 	}
-	if provider.IsReasoningModel(reviewModel) {
-		fmt.Fprintf(os.Stderr, "  %s is a reasoning model (hidden chain-of-thought); fast pass uses %s — override with KAI_FAST_MODEL\n",
-			reviewModel, rcFastDefaultModel)
-		return rcFastDefaultModel
+	if !provider.IsReasoningModel(reviewModel) {
+		return reviewModel
 	}
-	return reviewModel
+	if kind != provider.KindKailab && kind != provider.KindOpenRouter {
+		fmt.Fprintf(os.Stderr, "  %s is a reasoning model (hidden chain-of-thought) and this fast pass may be slow; "+
+			"the %s provider serves its own model namespace, so %s cannot be substituted — set KAI_FAST_MODEL to a fast model it serves\n",
+			reviewModel, kind, rcFastDefaultModel)
+		return reviewModel
+	}
+	fmt.Fprintf(os.Stderr, "  %s is a reasoning model (hidden chain-of-thought); fast pass uses %s — override with KAI_FAST_MODEL\n",
+		reviewModel, rcFastDefaultModel)
+	return rcFastDefaultModel
 }
 
 // rcFastMaxIssues is the ceiling the prompt states. Three is not a style

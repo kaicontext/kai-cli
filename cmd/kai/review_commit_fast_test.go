@@ -2,10 +2,12 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kaicontext/kai-engine/finding"
+	"github.com/kaicontext/kai-engine/provider"
 )
 
 // A fast pass read no callers, so it may not clear a change. The prompt says
@@ -102,15 +104,67 @@ func TestFilterFastIssuesKeepsAssertiveBullets(t *testing.T) {
 func TestFastModelAvoidsReasoningModels(t *testing.T) {
 	t.Setenv("KAI_FAST_MODEL", "")
 	os.Unsetenv("KAI_FAST_MODEL")
-	if got := rcFastModel("z-ai/glm-5.2"); got != rcFastDefaultModel {
+	if got := rcFastModel("z-ai/glm-5.2", provider.KindKailab); got != rcFastDefaultModel {
 		t.Errorf("rcFastModel(glm-5.2) = %q, want the non-reasoning default %q", got, rcFastDefaultModel)
 	}
-	if got := rcFastModel("anthropic/claude-haiku-4-5"); got != "anthropic/claude-haiku-4-5" {
+	if got := rcFastModel("anthropic/claude-haiku-4-5", provider.KindKailab); got != "anthropic/claude-haiku-4-5" {
 		t.Errorf("rcFastModel kept-model = %q, want it unchanged", got)
 	}
 	t.Setenv("KAI_FAST_MODEL", "some/other-model")
-	if got := rcFastModel("z-ai/glm-5.2"); got != "some/other-model" {
+	if got := rcFastModel("z-ai/glm-5.2", provider.KindKailab); got != "some/other-model" {
 		t.Errorf("KAI_FAST_MODEL override = %q, want it to win outright", got)
+	}
+}
+
+// KindOpenAI is every OpenAI-COMPATIBLE endpoint — Together, Groq, Ollama,
+// vLLM, LM Studio — and each serves its own model namespace. Substituting an
+// "anthropic/..." id there fails the request, and since the fast pass is the
+// DEFAULT review that is no review at all rather than a slow one.
+func TestFastModelDoesNotSubstituteOnForeignProviders(t *testing.T) {
+	t.Setenv("KAI_FAST_MODEL", "")
+	os.Unsetenv("KAI_FAST_MODEL")
+	for _, kind := range []provider.Kind{provider.KindOpenAI, provider.KindAnthropic} {
+		if got := rcFastModel("z-ai/glm-5.2", kind); got != "z-ai/glm-5.2" {
+			t.Errorf("rcFastModel(glm-5.2, %s) = %q, want the configured model kept — %q is not in that provider's namespace",
+				kind, got, rcFastDefaultModel)
+		}
+	}
+	// OpenRouter serves the namespaced id, so the swap is legal there.
+	if got := rcFastModel("z-ai/glm-5.2", provider.KindOpenRouter); got != rcFastDefaultModel {
+		t.Errorf("rcFastModel(glm-5.2, openrouter) = %q, want %q", got, rcFastDefaultModel)
+	}
+	// An explicit override still wins everywhere: the user named the model.
+	t.Setenv("KAI_FAST_MODEL", "local/fast")
+	if got := rcFastModel("z-ai/glm-5.2", provider.KindOpenAI); got != "local/fast" {
+		t.Errorf("KAI_FAST_MODEL on a foreign provider = %q, want it to win", got)
+	}
+}
+
+// The identifier lookups must grep the same tree the diff was taken from. A
+// run from a subdirectory of an uncaptured repo would otherwise scope the grep
+// to that subtree while reviewing the whole change.
+func TestWorktreeRootNormalizesASubdirectory(t *testing.T) {
+	// `go test` runs in the package directory, so "." is cmd/kai — itself a
+	// subdirectory of the worktree — and ".." is cmd. Both must resolve to
+	// the same root, and neither may resolve to itself.
+	here := rcWorktreeRoot(".")
+	up := rcWorktreeRoot("..")
+	if here == "" || up == "" {
+		t.Fatal("rcWorktreeRoot returned empty")
+	}
+	if here != up {
+		t.Errorf("rcWorktreeRoot(\".\") = %q but rcWorktreeRoot(\"..\") = %q; both are inside one worktree", here, up)
+	}
+	if here == "." {
+		t.Error("rcWorktreeRoot fell back to the cwd inside a real repo — the lookups would grep a subtree of the diff")
+	}
+	if !filepath.IsAbs(here) {
+		t.Errorf("rcWorktreeRoot = %q, want the absolute worktree root", here)
+	}
+	// Not a repo (and no parent repo): fall back to the directory itself.
+	tmp := t.TempDir()
+	if got := rcWorktreeRoot(tmp); got != tmp && !strings.HasSuffix(got, tmp) {
+		t.Logf("rcWorktreeRoot(%q) = %q — acceptable if the temp dir sits inside a repo", tmp, got)
 	}
 }
 

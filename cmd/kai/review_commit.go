@@ -209,7 +209,13 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	default:
 		return fmt.Errorf("--deep needs a captured graph — run `kai capture` first, or drop --deep for the fast pass, which needs none")
 	}
-	repoRoot := cwd
+	// The root the fast pass greps for identifier lookups. A captured project
+	// knows its own root; an uncaptured one must ask git, NOT assume the cwd.
+	// The diff comes from git and its paths are worktree-relative, so a run
+	// from a subdirectory would grep a subtree while reviewing the whole
+	// change — the lookups would quietly cover less than the diff, which is
+	// the one thing they exist to prevent.
+	repoRoot := rcWorktreeRoot(cwd)
 	if set != nil {
 		repoRoot = set.Primary().Path
 	}
@@ -237,7 +243,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("commit %s has an empty diff (merge commit? try a child, or pass --base)", rcShort(hash))
 	}
 
-	prov, model := rcReviewProvider()
+	prov, model, provKind := rcReviewProvider()
 	if prov == nil {
 		return fmt.Errorf("no LLM provider available (run `kai login`)")
 	}
@@ -261,7 +267,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 
 	var raw string
 	if fast {
-		fastModel := rcFastModel(model)
+		fastModel := rcFastModel(model, provKind)
 		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (model %s, budget %s)…\n",
 			fastModel, rcFastHardDeadline)
 		phase := time.Now()
@@ -450,18 +456,42 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// rcWorktreeRoot resolves the git worktree root for dir, falling back to dir
+// itself when git cannot answer (not a repo, or git missing). Only the
+// uncaptured fast path needs this — a captured project already carries its
+// root — and it is what keeps the identifier lookups covering the same tree
+// the diff was taken from.
+func rcWorktreeRoot(dir string) string {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return dir
+	}
+	if root := strings.TrimSpace(string(out)); root != "" {
+		return root
+	}
+	return dir
+}
+
 // rcReviewProvider builds the LLM provider (kailab creds → OpenRouter, or an
 // ANTHROPIC_API_KEY fallback), reusing the gate/planner plumbing.
-func rcReviewProvider() (provider.Provider, string) {
+func rcReviewProvider() (provider.Provider, string, provider.Kind) {
 	cfg, err := config.Load(kaiDir)
 	if err != nil {
-		return nil, ""
+		return nil, "", ""
 	}
 	prov, reviewModel, _, err := buildGateProvider(cfg)
 	if err != nil {
-		return nil, ""
+		return nil, "", ""
 	}
-	return prov, reviewModel
+	// The kind, not just the model: it decides whether the fast pass may
+	// substitute a model at all. An OpenAI-compatible endpoint (Together,
+	// Groq, Ollama, vLLM, LM Studio all normalize to KindOpenAI) serves its
+	// own namespace, and handing it an OpenRouter-style id would fail the
+	// DEFAULT review outright. See rcFastModel.
+	base, token := kailabCreds()
+	return prov, reviewModel, provider.FromEnv(base, token, cfg.Planner.Model).Kind
 }
 
 func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, body, diff string) (string, error) {
