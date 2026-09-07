@@ -181,8 +181,17 @@ func rcFileLines(hash, path string) (lines []string, ok bool) {
 // rcTreeFiles lists every path in the tree at hash, for resolving the short
 // file names the reviewer writes. nil when git fails (callers then take the
 // bullet's path as written).
+// --full-tree is load-bearing, not tidiness. Without it `git ls-tree` lists
+// paths relative to the CURRENT DIRECTORY and omits everything outside it, so
+// running review-commit from a subdirectory hands rcResolvePath a partial tree
+// with truncated names — every claim then fails to resolve and is HELD, which
+// means RiskCount 0 and a green badge over real defects. Seen 2026-09-07:
+// reviewing kai-desktop 94dbbe8 from frontend/ held all three findings
+// ("frontend/dist/panel-changes.js does not exist at 94dbbe8") because the
+// tree it was matched against only had 119 of the commit's 302 paths, spelled
+// from frontend/ down. Affects the grounded path identically.
 func rcTreeFiles(hash string) []string {
-	out, err := exec.Command("git", "ls-tree", "-r", "--name-only", hash).Output()
+	out, err := exec.Command("git", "ls-tree", "-r", "--full-tree", "--name-only", hash).Output()
 	if err != nil {
 		return nil
 	}
