@@ -455,10 +455,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// not finish" (kai-desktop#304, kai-server#186, 2026-09-08).
 		out, err := json.MarshalIndent(struct {
 			finding.Finding
-			Review     string `json:"review,omitempty"`
-			Depth      string `json:"depth,omitempty"`
-			Incomplete bool   `json:"incomplete,omitempty"`
-		}{f, prose, depth, incomplete}, "", "  ")
+			Review     string      `json:"review,omitempty"`
+			Depth      string      `json:"depth,omitempty"`
+			Incomplete bool        `json:"incomplete,omitempty"`
+			Coverage   *rcCoverage `json:"coverage,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc)}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -800,6 +801,39 @@ type rcIncomplete struct {
 	Elapsed      time.Duration
 	Turns        int
 	FilesRead    []string
+}
+
+// rcCoverage is the machine-written record of what a review actually did:
+// which files it opened, over how many turns, in how long.
+//
+// It exists because the reviewer's own "Scope:" paragraph is model-authored
+// prose, and prose can be wrong about itself — reviews on kai-desktop#288 and
+// #300 named the repository they were reading as kai-engine and kai-server.
+// A reader cannot tell a confident clean verdict that read everything from a
+// confident clean verdict that read two files, and neither can we. This is the
+// half of the answer that cannot hallucinate.
+//
+// These facts were already gathered on every grounded run and thrown away
+// unless the run died (see rcIncomplete). Now they always ship.
+type rcCoverage struct {
+	FilesRead []string `json:"filesRead,omitempty"`
+	Turns     int      `json:"turns,omitempty"`
+	Seconds   int      `json:"seconds,omitempty"`
+}
+
+// rcCoverageOf converts the run's own account of itself into the bundle's
+// coverage record. Nil in, nil out: the fast pass makes one call over the diff
+// and opens nothing, so it has no manifest to publish and omitempty drops the
+// field entirely rather than claiming it read zero files.
+func rcCoverageOf(inc *rcIncomplete) *rcCoverage {
+	if inc == nil {
+		return nil
+	}
+	return &rcCoverage{
+		FilesRead: inc.FilesRead,
+		Turns:     inc.Turns,
+		Seconds:   int(inc.Elapsed.Round(time.Second).Seconds()),
+	}
 }
 
 // rcFilesRead pulls the distinct paths the run actually opened out of its tool
