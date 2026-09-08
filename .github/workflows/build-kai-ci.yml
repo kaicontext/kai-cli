@@ -37,21 +37,21 @@ on:
   workflow_dispatch:
     inputs:
       kai_cli_ref:
-        description: 'kai-cli ref to build `kai` from'
-        required: true
-        default: main
+        description: 'kai-cli ref for `kai` — blank = newest released tag'
+        required: false
+        default: ''
       kai_tui_ref:
-        description: 'kai-tui ref to build `kit` from'
-        required: true
-        default: main
+        description: 'kai-tui ref for `kit` — blank = newest released tag'
+        required: false
+        default: ''
       kai_engine_ref:
-        description: 'kai-engine ref (replaced into both builds)'
-        required: true
-        default: main
+        description: 'kai-engine ref — blank = newest released tag'
+        required: false
+        default: ''
       kai_core_ref:
-        description: 'kai-core ref (replaced into both builds)'
-        required: true
-        default: main
+        description: 'kai-core ref — blank = newest released tag'
+        required: false
+        default: ''
       pin:
         description: 'Open a kai-server PR pinning the new digest'
         required: true
@@ -97,6 +97,45 @@ jobs:
           owner: kaicontext
           repositories: kai-cli,kai-tui,kai-engine,kai-core
 
+      # Blank inputs resolve to each repo's newest released tag. Typing "main"
+      # into four boxes was the common case and the wrong default: a pin is
+      # described by version ("kai-cli v0.35.65 on kai-engine v0.6.55"), so the
+      # build should default to versions too, and a branch tip is not a thing
+      # anyone can point at later.
+      #
+      # Newest SEMVER TAG, not GitHub's "latest release": those disagree here.
+      # kai-engine's newest tag is v0.6.58 while its releases/latest still reads
+      # v0.3.0, and kai-core publishes no releases at all — so that endpoint
+      # would have silently pinned an engine 55 minor versions stale.
+      - name: Resolve refs
+        id: resolve
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+          # What the operator typed — blank for the common case.
+          KAI_CLI_REF: ${{ inputs.kai_cli_ref }}
+          KAI_TUI_REF: ${{ inputs.kai_tui_ref }}
+          KAI_ENGINE_REF: ${{ inputs.kai_engine_ref }}
+          KAI_CORE_REF: ${{ inputs.kai_core_ref }}
+        run: |
+          set -euo pipefail
+          latest_tag() {
+            git ls-remote --tags --refs --sort=-v:refname \
+              "https://x-access-token:${TOKEN}@github.com/kaicontext/$1" 'v*' \
+              | head -1 | sed 's#.*refs/tags/##'
+          }
+          for m in kai-cli kai-tui kai-engine kai-core; do
+            var="$(echo "$m" | tr 'a-z-' 'A-Z_')_REF"
+            want="${!var}"
+            if [ -z "$want" ]; then
+              want="$(latest_tag "$m")"
+              [ -n "$want" ] || { echo "no v* tag found for $m — pass a ref explicitly"; exit 1; }
+              echo "$m: no ref given, using newest tag $want"
+            else
+              echo "$m: using the ref you gave, $want"
+            fi
+            echo "$(echo "$m" | tr 'a-z-' 'a-z_')_ref=$want" >> "$GITHUB_OUTPUT"
+          done
+
       # The Dockerfile's build context is a WORKSPACE ROOT holding the four
       # module dirs side by side, because it rewrites the pinned versions with
       # `go mod edit -replace` to point at them. Reproducing that layout here is
@@ -104,25 +143,25 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-cli
-          ref: ${{ inputs.kai_cli_ref }}
+          ref: ${{ steps.resolve.outputs.kai_cli_ref }}
           path: ws/kai-cli
           token: ${{ steps.token.outputs.token }}
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-tui
-          ref: ${{ inputs.kai_tui_ref }}
+          ref: ${{ steps.resolve.outputs.kai_tui_ref }}
           path: ws/kai-tui
           token: ${{ steps.token.outputs.token }}
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-engine
-          ref: ${{ inputs.kai_engine_ref }}
+          ref: ${{ steps.resolve.outputs.kai_engine_ref }}
           path: ws/kai-engine
           token: ${{ steps.token.outputs.token }}
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-core
-          ref: ${{ inputs.kai_core_ref }}
+          ref: ${{ steps.resolve.outputs.kai_core_ref }}
           path: ws/kai-core
           token: ${{ steps.token.outputs.token }}
 
@@ -139,10 +178,10 @@ jobs:
         # can poison the image build" is not a defence a provenance workflow
         # gets to make.
         env:
-          KAI_CLI_REF: ${{ inputs.kai_cli_ref }}
-          KAI_TUI_REF: ${{ inputs.kai_tui_ref }}
-          KAI_ENGINE_REF: ${{ inputs.kai_engine_ref }}
-          KAI_CORE_REF: ${{ inputs.kai_core_ref }}
+          KAI_CLI_REF: ${{ steps.resolve.outputs.kai_cli_ref }}
+          KAI_TUI_REF: ${{ steps.resolve.outputs.kai_tui_ref }}
+          KAI_ENGINE_REF: ${{ steps.resolve.outputs.kai_engine_ref }}
+          KAI_CORE_REF: ${{ steps.resolve.outputs.kai_core_ref }}
         run: |
           set -euo pipefail
           {
