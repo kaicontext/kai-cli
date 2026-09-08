@@ -69,6 +69,12 @@ env:
   WIF_PROVIDER: projects/180761347860/locations/global/workloadIdentityPools/github/providers/github
   WIF_SA: gh-deployer@kaicontext.iam.gserviceaccount.com
 
+# Actions are pinned to commit SHAs, not the @vN tags the rest of this repo
+# uses. Deliberate divergence, for this workflow only: it mints repository
+# tokens and publishes the image production runs on, so a moving tag means a
+# later run can execute action code nobody reviewed — which would hollow out
+# the provenance this workflow exists to provide. The trailing comment carries
+# the version, and there is no dependabot here, so these need bumping by hand.
 permissions:
   contents: read
   id-token: write # required for Workload Identity Federation
@@ -83,7 +89,7 @@ jobs:
       # One token for every private checkout below. Scoped to the four module
       # repos, same pattern as ci.yml's builds.
       - name: Mint App token for the private repos
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: token
         with:
           client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
@@ -95,25 +101,25 @@ jobs:
       # module dirs side by side, because it rewrites the pinned versions with
       # `go mod edit -replace` to point at them. Reproducing that layout here is
       # what moves the build off a laptop without changing the Dockerfile.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-cli
           ref: ${{ inputs.kai_cli_ref }}
           path: ws/kai-cli
           token: ${{ steps.token.outputs.token }}
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-tui
           ref: ${{ inputs.kai_tui_ref }}
           path: ws/kai-tui
           token: ${{ steps.token.outputs.token }}
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-engine
           ref: ${{ inputs.kai_engine_ref }}
           path: ws/kai-engine
           token: ${{ steps.token.outputs.token }}
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-core
           ref: ${{ inputs.kai_core_ref }}
@@ -125,6 +131,18 @@ jobs:
       # afternoon" cannot be audited or rebuilt.
       - name: Record what is going into the image
         id: refs
+        # The refs arrive through env, NOT `${{ }}` inside the script. GitHub
+        # substitutes an expression into the script TEXT before bash parses it,
+        # so a ref containing a quote closes the assignment and the rest runs as
+        # commands — in this job, before it authenticates and pushes to the
+        # production registry. Dispatch needs write access, but "only a writer
+        # can poison the image build" is not a defence a provenance workflow
+        # gets to make.
+        env:
+          KAI_CLI_REF: ${{ inputs.kai_cli_ref }}
+          KAI_TUI_REF: ${{ inputs.kai_tui_ref }}
+          KAI_ENGINE_REF: ${{ inputs.kai_engine_ref }}
+          KAI_CORE_REF: ${{ inputs.kai_core_ref }}
         run: |
           set -euo pipefail
           {
@@ -136,10 +154,10 @@ jobs:
           SUMMARY=""
           for m in kai-cli kai-tui kai-engine kai-core; do
             case "$m" in
-              kai-cli)    REF='${{ inputs.kai_cli_ref }}' ;;
-              kai-tui)    REF='${{ inputs.kai_tui_ref }}' ;;
-              kai-engine) REF='${{ inputs.kai_engine_ref }}' ;;
-              kai-core)   REF='${{ inputs.kai_core_ref }}' ;;
+              kai-cli)    REF="$KAI_CLI_REF" ;;
+              kai-tui)    REF="$KAI_TUI_REF" ;;
+              kai-engine) REF="$KAI_ENGINE_REF" ;;
+              kai-core)   REF="$KAI_CORE_REF" ;;
             esac
             SHA="$(git -C "ws/$m" rev-parse HEAD)"
             echo "| $m | $REF | \`${SHA:0:12}\` |" >> "$GITHUB_STEP_SUMMARY"
@@ -149,14 +167,14 @@ jobs:
           echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP (keyless WIF)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.WIF_SA }}
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
       - name: Configure docker for Artifact Registry
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       # linux/amd64 only: that is the cluster's arch, and the Dockerfile
       # cross-compiles rather than emulating (emulated CGO builds crash the Go
@@ -165,7 +183,7 @@ jobs:
       # fails if the review workflow ever references one.
       - name: Build & push
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: ws
           file: ws/kai-cli/deploy/kai-ci/Dockerfile
@@ -211,14 +229,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Mint App token for kai-server
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: token
         with:
           client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
           private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
           owner: kaicontext
           repositories: kai-server
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-server
           token: ${{ steps.token.outputs.token }}
@@ -227,9 +245,11 @@ jobs:
         env:
           DIGEST: ${{ needs.build.outputs.digest }}
           PROVENANCE: ${{ needs.build.outputs.provenance }}
+          IMAGE: ${{ env.IMAGE }}
+          PIN: ${{ inputs.pin }}
         run: |
           set -euo pipefail
-          NEW="${{ env.IMAGE }}@${DIGEST}"
+          NEW="${IMAGE}@${DIGEST}"
           BR="kai-ci/pin-${DIGEST:7:12}"
           git config user.name "kai-ci"
           git config user.email "noreply@kaicontext.com"
@@ -247,14 +267,14 @@ jobs:
             grep -qF "$NEW" "$1" || { echo "failed to bump $2 in $1"; exit 1; }
           }
           F=kailab-control/internal/api
-          case "${{ inputs.pin }}" in
+          case "$PIN" in
             agent)  bump "$F/agent_default_workflow.go"  defaultAgentImage ;;
             review) bump "$F/review_default_workflow.go" defaultReviewImage ;;
             both)   bump "$F/agent_default_workflow.go"  defaultAgentImage
                     bump "$F/review_default_workflow.go" defaultReviewImage ;;
           esac
 
-          git commit -aqm "build(kai-ci): pin ${{ inputs.pin }} image to ${DIGEST:7:12}
+          git commit -aqm "build(kai-ci): pin $PIN image to ${DIGEST:7:12}
 
           Built by kai-cli's build-kai-ci workflow, run ${{ github.run_number }}.
 
@@ -269,16 +289,18 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           DIGEST: ${{ needs.build.outputs.digest }}
           PROVENANCE: ${{ needs.build.outputs.provenance }}
+          IMAGE: ${{ env.IMAGE }}
+          PIN: ${{ inputs.pin }}
         run: |
           set -euo pipefail
           gh pr create --repo kaicontext/kai-server \
             --head "kai-ci/pin-${DIGEST:7:12}" --base main \
-            --title "build(kai-ci): pin the ${{ inputs.pin }} image to ${DIGEST:7:12}" \
+            --title "build(kai-ci): pin the $PIN image to ${DIGEST:7:12}" \
             --body "$(cat <<EOF
           A new \`kai-ci\` image, built from known refs by [run ${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
           \`\`\`
-          ${{ env.IMAGE }}@${DIGEST}
+          ${IMAGE}@${DIGEST}
           \`\`\`
 
           **Built from:** ${PROVENANCE}
