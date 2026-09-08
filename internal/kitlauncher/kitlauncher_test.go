@@ -797,3 +797,24 @@ func TestResolveKitPath_EnvOverride(t *testing.T) {
 		t.Fatal("a broken override must error, not fall back")
 	}
 }
+
+func TestDefaultDataDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("KAI_DATA_DIR", "")
+	t.Setenv("KAI_INSTALL_DIR", "")
+	if got := Default().BinDir; got != filepath.Join(home, ".kai", "bin") {
+		t.Fatal(got)
+	}
+	dev := t.TempDir()
+	t.Setenv("KAI_DATA_DIR", dev)
+	if got := Default().BinDir; got != filepath.Join(dev, "bin") {
+		t.Fatal(got)
+	}
+	bundle := t.TempDir()
+	t.Setenv("KAI_INSTALL_DIR", bundle)
+	if got := Default().BinDir; got != bundle {
+		t.Fatalf("bundle override lost: %s", got)
+	}
+}

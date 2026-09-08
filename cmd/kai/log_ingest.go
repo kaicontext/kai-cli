@@ -19,7 +19,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"github.com/kaicontext/kai-engine/kaipath"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kaicontext/kai-engine/kaipath"
 	"github.com/spf13/cobra"
 )
 

@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/kaicontext/kai-engine/kaipath"
 	"io"
 	"net/http"
 	"os"
@@ -28,6 +27,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/kaicontext/kai-engine/kaipath"
 )
 
 // Sentinel errors classify resolveKitPath / install outcomes so callers
