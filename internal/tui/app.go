@@ -9,6 +9,7 @@
 package tui
 
 import (
+	"github.com/kaicontext/kai-engine/kaipath"
 	"context"
 	"fmt"
 	"log"
@@ -986,7 +987,7 @@ func logTUIPanic(m model, msg tea.Msg, panicVal any) {
 	}
 	if dir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			dir = filepath.Join(home, ".kai")
+			dir = kaipath.UserPath(home)
 		}
 	}
 	if dir == "" {
