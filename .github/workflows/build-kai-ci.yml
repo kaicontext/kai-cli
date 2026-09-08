@@ -271,6 +271,7 @@ jobs:
           token: ${{ steps.token.outputs.token }}
 
       - name: Bump the pinned digest
+        id: bump
         env:
           DIGEST: ${{ needs.build.outputs.digest }}
           PROVENANCE: ${{ needs.build.outputs.provenance }}
@@ -280,6 +281,23 @@ jobs:
           set -euo pipefail
           NEW="${IMAGE}@${DIGEST}"
           BR="kai-ci/pin-${DIGEST:7:12}"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+
+          # RE-RUNNABLE. The branch name is derived from the digest, so a re-run
+          # of the same build computes the same name — and the first attempt may
+          # already have pushed it and then failed later (which is exactly how
+          # this was found: attempt 1 pushed the branch and died opening the PR,
+          # attempt 2 rebuilt an identical commit and was rejected non-fast-
+          # forward). Same digest means the same edit, so an existing branch is
+          # already the right branch: reuse it and move on to the PR.
+          #
+          # Not a force-push. Overwriting a branch someone may have reviewed, to
+          # replace it with identical content, is all cost and no benefit.
+          if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
+            echo "$BR already exists — an earlier attempt pushed it; reusing"
+            exit 0
+          fi
+
           git config user.name "kai-ci"
           git config user.email "noreply@kaicontext.com"
           git checkout -b "$BR"
@@ -322,8 +340,19 @@ jobs:
           PIN: ${{ inputs.pin }}
         run: |
           set -euo pipefail
+          BR="kai-ci/pin-${DIGEST:7:12}"
+
+          # Same idempotency question, other end: a re-run whose branch already
+          # carries a PR must not fail trying to open a second one.
+          EXISTING="$(gh pr list --repo kaicontext/kai-server --head "$BR" \
+                        --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            echo "PR #$EXISTING already open for $BR — nothing to do"
+            exit 0
+          fi
+
           gh pr create --repo kaicontext/kai-server \
-            --head "kai-ci/pin-${DIGEST:7:12}" --base main \
+            --head "$BR" --base main \
             --title "build(kai-ci): pin the $PIN image to ${DIGEST:7:12}" \
             --body "$(cat <<EOF
           A new \`kai-ci\` image, built from known refs by [run ${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
