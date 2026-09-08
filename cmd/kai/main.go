@@ -4525,6 +4525,7 @@ func init() {
 	initCmd.Flags().StringVar(&initOrg, "org", "", "Org slug to initialize under (default: your personal org; also via KAI_ORG)")
 	initCmd.Flags().StringVar(&initEmail, "email", "", "Email to sign up / log in with non-interactively (also via KAI_INIT_EMAIL)")
 	initCmd.Flags().BoolVar(&initNoRemote, "no-remote", false, "Build the local semantic graph only: skip kaicontext.com signup/login and the automatic push")
+	initCmd.Flags().BoolVar(&initNoHistory, "no-history", false, "Skip the git-history import: build the graph for the working tree only. For one-shot checkouts (CI review pods, ephemeral workspaces) that read the head graph and never query past snapshots")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(captureCmd)
 
@@ -4890,6 +4891,13 @@ var initEmail string
 // (kai-correction-<nano> × 2,470 by the time anyone looked,
 // 2026-08-23).
 var initNoRemote bool
+
+// initNoHistory: skip replaying git history as snapshots. The import is the
+// bulk of `kai init` on any real repo — 50 commits, each a full snapshot — and
+// a one-shot checkout never reads them: the review's blast walk uses the
+// freshly-captured single-snapshot graph, and base...head comes from git.
+// Measured on kai-server at ba7e4c2: 83.7s with the import, 4.1s without.
+var initNoHistory bool
 
 // initOrgOverride returns an explicit org slug from --org or KAI_ORG, else "".
 func initOrgOverride() string {
@@ -5852,11 +5860,18 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 
 		// Auto-import git history. runGitImport caps at importMaxCommits (default 50)
 		// so large repos only import the most recent slice.
-		if countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output(); err == nil {
-			if count, _ := strconv.Atoi(strings.TrimSpace(string(countOut))); count > 0 {
-				stop := spinner("Importing git history")
-				importErr := runGitImport(db)
-				stop(importErr)
+		//
+		// --no-history skips it outright. Those snapshots are what make `kai
+		// log`, blame and bisect useful to a person, and they cost nearly all of
+		// init's wall clock; a checkout that is deleted at the end of one review
+		// pays that price for history nothing will ever read.
+		if !initNoHistory {
+			if countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output(); err == nil {
+				if count, _ := strconv.Atoi(strings.TrimSpace(string(countOut))); count > 0 {
+					stop := spinner("Importing git history")
+					importErr := runGitImport(db)
+					stop(importErr)
+				}
 			}
 		}
 
