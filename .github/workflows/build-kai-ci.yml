@@ -1,0 +1,290 @@
+name: build-kai-ci
+
+# Builds the kai-ci toolbox image — the container every Kai CI job pod runs in
+# (the PR reviewer via kai-review.yml, the Cloud Agent via kai-agent.yml) — and
+# optionally opens the PR that pins the new digest in kai-server.
+#
+# WHY THIS EXISTS. Until now nothing built this image: it came from whoever ran
+# deploy/kai-ci/build.sh on their laptop, against whatever they happened to have
+# checked out. The image that runs in production therefore corresponded to no
+# commit — the agent image pinned on 2026-09-08 was built with a colleague's
+# uncommitted terminal-bridge work in the tree and kai-engine on a feature
+# branch. That is not a convenience problem, it is a provenance one: the binary
+# deciding what Kai says on a customer's pull request was not reproducible.
+#
+# WHY IT IS DISPATCH-ONLY. The image spans FOUR repos (kai-cli and kai-tui
+# supply the binaries, kai-engine and kai-core the libraries), so no single
+# repo's push means "the image is stale" — a kai-tui change invalidates it just
+# as much as a kai-cli one. Rather than guess, the refs are inputs. That also
+# makes every build answer "built from what?" in its own run log.
+#
+# WHY IT OPENS A PR RATHER THAN PUSHING. The pin is deliberately a human act.
+# From review_default_workflow.go: ":latest meant each rebuild upgraded
+# production reviews silently, unbenchmarked. Pinning makes the upgrade a
+# deliberate act." This keeps the approval and removes only the typing.
+#
+# FIRST-RUN PREREQUISITES (both are one-time, and will fail loudly if missing):
+#   1. The WIF provider must admit this repository. kai-server's build-ar.yml
+#      already assumes gh-deployer via the same provider; if its attribute
+#      condition names repositories rather than the owner, kai-cli has to be
+#      added. Symptom: the "Authenticate to GCP" step fails with a permission
+#      error naming the workload identity pool.
+#   2. The Kai App must be installed on kai-server for the pin PR. Symptom: the
+#      token step fails saying the repository is not accessible. Building still
+#      works — only pin=none is affected.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kai_cli_ref:
+        description: 'kai-cli ref to build `kai` from'
+        required: true
+        default: main
+      kai_tui_ref:
+        description: 'kai-tui ref to build `kit` from'
+        required: true
+        default: main
+      kai_engine_ref:
+        description: 'kai-engine ref (replaced into both builds)'
+        required: true
+        default: main
+      kai_core_ref:
+        description: 'kai-core ref (replaced into both builds)'
+        required: true
+        default: main
+      pin:
+        description: 'Open a kai-server PR pinning the new digest'
+        required: true
+        type: choice
+        default: none
+        options: [none, agent, review, both]
+
+concurrency:
+  group: build-kai-ci
+  cancel-in-progress: false
+
+env:
+  AR: us-central1-docker.pkg.dev/kaicontext/kai
+  IMAGE: us-central1-docker.pkg.dev/kaicontext/kai/kai-ci
+  WIF_PROVIDER: projects/180761347860/locations/global/workloadIdentityPools/github/providers/github
+  WIF_SA: gh-deployer@kaicontext.iam.gserviceaccount.com
+
+permissions:
+  contents: read
+  id-token: write # required for Workload Identity Federation
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      provenance: ${{ steps.refs.outputs.summary }}
+    steps:
+      # One token for every private checkout below. Scoped to the four module
+      # repos, same pattern as ci.yml's builds.
+      - name: Mint App token for the private repos
+        uses: actions/create-github-app-token@v3
+        id: token
+        with:
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-cli,kai-tui,kai-engine,kai-core
+
+      # The Dockerfile's build context is a WORKSPACE ROOT holding the four
+      # module dirs side by side, because it rewrites the pinned versions with
+      # `go mod edit -replace` to point at them. Reproducing that layout here is
+      # what moves the build off a laptop without changing the Dockerfile.
+      - uses: actions/checkout@v6
+        with:
+          repository: kaicontext/kai-cli
+          ref: ${{ inputs.kai_cli_ref }}
+          path: ws/kai-cli
+          token: ${{ steps.token.outputs.token }}
+      - uses: actions/checkout@v6
+        with:
+          repository: kaicontext/kai-tui
+          ref: ${{ inputs.kai_tui_ref }}
+          path: ws/kai-tui
+          token: ${{ steps.token.outputs.token }}
+      - uses: actions/checkout@v6
+        with:
+          repository: kaicontext/kai-engine
+          ref: ${{ inputs.kai_engine_ref }}
+          path: ws/kai-engine
+          token: ${{ steps.token.outputs.token }}
+      - uses: actions/checkout@v6
+        with:
+          repository: kaicontext/kai-core
+          ref: ${{ inputs.kai_core_ref }}
+          path: ws/kai-core
+          token: ${{ steps.token.outputs.token }}
+
+      # Resolve the refs to SHAs and keep them. This is the record the manual
+      # process never produced: a pin whose provenance is "someone's laptop, one
+      # afternoon" cannot be audited or rebuilt.
+      - name: Record what is going into the image
+        id: refs
+        run: |
+          set -euo pipefail
+          {
+            echo "### kai-ci build inputs"
+            echo
+            echo "| module | ref | sha |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          SUMMARY=""
+          for m in kai-cli kai-tui kai-engine kai-core; do
+            case "$m" in
+              kai-cli)    REF='${{ inputs.kai_cli_ref }}' ;;
+              kai-tui)    REF='${{ inputs.kai_tui_ref }}' ;;
+              kai-engine) REF='${{ inputs.kai_engine_ref }}' ;;
+              kai-core)   REF='${{ inputs.kai_core_ref }}' ;;
+            esac
+            SHA="$(git -C "ws/$m" rev-parse HEAD)"
+            echo "| $m | $REF | \`${SHA:0:12}\` |" >> "$GITHUB_STEP_SUMMARY"
+            SUMMARY="${SUMMARY}${m}=${REF}@${SHA:0:12} "
+            echo "${m//-/_}_sha=$SHA" >> "$GITHUB_OUTPUT"
+          done
+          echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GCP (keyless WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - uses: docker/setup-buildx-action@v4
+
+      # linux/amd64 only: that is the cluster's arch, and the Dockerfile
+      # cross-compiles rather than emulating (emulated CGO builds crash the Go
+      # toolchain). NO `:latest` tag, deliberately — a moving tag is the thing
+      # digest pinning exists to prevent, and there is a test in kai-server that
+      # fails if the review workflow ever references one.
+      - name: Build & push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ws
+          file: ws/kai-cli/deploy/kai-ci/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:cli-${{ steps.refs.outputs.kai_cli_sha }}
+            ${{ env.IMAGE }}:run-${{ github.run_number }}
+          labels: |
+            com.kaicontext.kai-cli=${{ steps.refs.outputs.kai_cli_sha }}
+            com.kaicontext.kai-tui=${{ steps.refs.outputs.kai_tui_sha }}
+            com.kaicontext.kai-engine=${{ steps.refs.outputs.kai_engine_sha }}
+            com.kaicontext.kai-core=${{ steps.refs.outputs.kai_core_sha }}
+
+      # Prove the image can actually run what the workflows invoke. A missing or
+      # broken kit surfaces otherwise as a red agent run, minutes into a paid
+      # engagement — the failure this whole image exists to avoid.
+      - name: Smoke-test the binaries
+        run: |
+          set -euo pipefail
+          REF="${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
+          docker run --rm --platform linux/amd64 "$REF" sh -c '
+            set -e
+            for b in kai kit git jq curl; do command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }; done
+            kai --version && kit --version'
+
+      - name: Report the digest to pin
+        run: |
+          {
+            echo
+            echo "### Pin this"
+            echo
+            echo '```go'
+            echo '${{ env.IMAGE }}@${{ steps.build.outputs.digest }}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Separate job so a failed pin never casts doubt on a good image: the build
+  # above has already pushed and smoke-tested it.
+  pin:
+    needs: build
+    if: ${{ inputs.pin != 'none' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint App token for kai-server
+        uses: actions/create-github-app-token@v3
+        id: token
+        with:
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-server
+      - uses: actions/checkout@v6
+        with:
+          repository: kaicontext/kai-server
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Bump the pinned digest
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+          PROVENANCE: ${{ needs.build.outputs.provenance }}
+        run: |
+          set -euo pipefail
+          NEW="${{ env.IMAGE }}@${DIGEST}"
+          BR="kai-ci/pin-${DIGEST:7:12}"
+          git config user.name "kai-ci"
+          git config user.email "noreply@kaicontext.com"
+          git checkout -b "$BR"
+
+          # The value goes in through the ENVIRONMENT, not interpolated into the
+          # perl program: a digest contains "@sha256", and perl reads a bare @word
+          # in a replacement as an array — it silently expands to nothing and
+          # turns the pin into a TAG reference. Caught by testing this line
+          # against the real files before shipping the workflow.
+          # grep -F for the same reason: the digest is not a regex.
+          bump() { # file, const
+            # Anchored on the const so nothing else in the file can match.
+            NEW="$NEW" perl -0pi -e 's{(const '"$2"' = ")[^"]+(")}{$1$ENV{NEW}$2}' "$1"
+            grep -qF "$NEW" "$1" || { echo "failed to bump $2 in $1"; exit 1; }
+          }
+          F=kailab-control/internal/api
+          case "${{ inputs.pin }}" in
+            agent)  bump "$F/agent_default_workflow.go"  defaultAgentImage ;;
+            review) bump "$F/review_default_workflow.go" defaultReviewImage ;;
+            both)   bump "$F/agent_default_workflow.go"  defaultAgentImage
+                    bump "$F/review_default_workflow.go" defaultReviewImage ;;
+          esac
+
+          git commit -aqm "build(kai-ci): pin ${{ inputs.pin }} image to ${DIGEST:7:12}
+
+          Built by kai-cli's build-kai-ci workflow, run ${{ github.run_number }}.
+
+          Modules: ${PROVENANCE}
+
+          The image was smoke-tested before this PR was opened: kai, kit, git,
+          jq and curl all resolve inside it and both binaries report a version."
+          git push -q origin "$BR"
+
+      - name: Open the pin PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          PROVENANCE: ${{ needs.build.outputs.provenance }}
+        run: |
+          set -euo pipefail
+          gh pr create --repo kaicontext/kai-server \
+            --head "kai-ci/pin-${DIGEST:7:12}" --base main \
+            --title "build(kai-ci): pin the ${{ inputs.pin }} image to ${DIGEST:7:12}" \
+            --body "$(cat <<EOF
+          A new \`kai-ci\` image, built from known refs by [run ${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+          \`\`\`
+          ${{ env.IMAGE }}@${DIGEST}
+          \`\`\`
+
+          **Built from:** ${PROVENANCE}
+
+          Smoke-tested inside the image before this was opened: \`kai\`, \`kit\`, \`git\`, \`jq\` and \`curl\` all resolve, and both binaries report a version.
+
+          Pinning stays a human decision on purpose — this PR removes the laptop build and the hand-copied digest, not the review. Check what changed in the binaries before merging: the reviewer's prompts, model choice and budgets live inside this image, so a bump can change what Kai says on every pull request.
+          EOF
+          )"
