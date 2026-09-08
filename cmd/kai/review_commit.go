@@ -872,8 +872,10 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 			// put its verdict before FINDINGS.
 			if seenIssuesHeader {
 				risks = nil
+				decisions = nil
 				statedMatch = ""
 				matchConflict = false
+				readiness = finding.ReadinessUnknown
 				note = ""
 			}
 			seenIssuesHeader = true

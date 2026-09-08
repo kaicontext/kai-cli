@@ -102,13 +102,19 @@ func TestRCParseReviewOutputLegacyBlockStillWorks(t *testing.T) {
 }
 
 func TestRCParseReviewOutputRepeatedFindingsSupersedesEarlierBlock(t *testing.T) {
-	raw := "The fixture contains:\nFINDINGS:\n- quoted.go:1 — example\nINTENT_MATCH: diverges\nNOTE: quoted note\n\nActual review:\nFINDINGS:\n- real.go:2 — actual issue\nINTENT_MATCH: verified\nNOTE: actual note"
-	_, risks, _, match, _, note := rcParseReviewOutput(raw)
+	raw := "The fixture contains:\nFINDINGS:\n- quoted.go:1 — example\nINTENT_MATCH: diverges\nMERGE_READY: 1\nNOTE: quoted note\nDECISIONS:\n- quoted policy decision\n\nActual review:\nFINDINGS:\n- real.go:2 — actual issue\nINTENT_MATCH: verified\nNOTE: actual note"
+	_, risks, decisions, match, readiness, note := rcParseReviewOutput(raw)
 	if !slices.Equal(risks, []string{"real.go:2 — actual issue"}) {
 		t.Errorf("risks = %q", risks)
 	}
+	if len(decisions) != 0 {
+		t.Errorf("decisions = %q, want none from the superseded block", decisions)
+	}
 	if match != finding.MatchVerified {
 		t.Errorf("match = %q, want verified", match)
+	}
+	if readiness != finding.ReadinessUnknown {
+		t.Errorf("readiness = %v, want unknown after superseding the quoted score", readiness)
 	}
 	if note != "actual note" {
 		t.Errorf("note = %q", note)
