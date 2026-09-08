@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -783,12 +784,69 @@ func rcChangedSymbols(diff string) string {
 // pipeline parses.
 const rcReviewDataMarker = "===REVIEW-DATA==="
 
+var rcIntentVerdicts = map[string]finding.Match{
+	"verified": finding.MatchVerified,
+	"matches":  finding.MatchVerified,
+	"partial":  finding.MatchPartial,
+	"diverges": finding.MatchDiverges,
+}
+
+func rcMachineLine(line string) (key, value string, ok bool) {
+	i := strings.Index(line, ":")
+	if i < 0 {
+		return "", "", false
+	}
+	key = strings.ToLower(strings.TrimSpace(strings.Trim(strings.TrimSpace(line[:i]), "#*`")))
+	if key == "" {
+		return "", "", false
+	}
+	value = strings.TrimSpace(line[i+1:])
+	if opener := rcMarkdownOpener(line); opener != "" {
+		value = strings.TrimSpace(strings.TrimPrefix(value, opener))
+		value = strings.TrimSpace(strings.TrimSuffix(value, opener))
+	}
+	return key, value, true
+}
+
+func rcMarkdownOpener(line string) string {
+	t := strings.TrimSpace(line)
+	i := 0
+	for i < len(t) && (t[i] == '*' || t[i] == '`') {
+		i++
+	}
+	return t[:i]
+}
+
+func rcUnwrapMachineBullet(line string) string {
+	t := strings.TrimSpace(line)
+	if opener := rcMarkdownOpener(t); opener != "" {
+		t = strings.TrimSpace(strings.TrimPrefix(t, opener))
+		t = strings.TrimSpace(strings.TrimSuffix(t, opener))
+	}
+	return t
+}
+
+// rcIntentVerdict reads only the first word after INTENT_MATCH. This accepts a
+// trailing period or explanation without turning "not verified" into verified.
+func rcIntentVerdict(value string) (finding.Match, bool) {
+	words := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+	if len(words) == 0 {
+		return finding.MatchUnknown, false
+	}
+	m, ok := rcIntentVerdicts[words[0]]
+	return m, ok
+}
+
 // rcParseReviewOutput splits the reviewer's output into the human review prose
 // and the structured fields the finding carries. Tolerant of the legacy shape
 // (no marker; FINDINGS:/NOTE: lines inline) so an old model answer still parses.
 func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, match finding.Match, readiness finding.Readiness, note string) {
 	match = finding.MatchUnknown
 	readiness = finding.ReadinessUnknown
+	var statedMatch finding.Match
+	matchConflict := false
 	coda := raw
 	if i := strings.Index(raw, rcReviewDataMarker); i >= 0 {
 		prose = strings.TrimSpace(raw[:i])
@@ -801,51 +859,62 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 	section := ""
 	var proseEnd int // legacy: prose runs until the first machine line
 	sawMachineLine := false
+	seenIssuesHeader := false
+	supersededBlock := false
 	for _, line := range strings.Split(coda, "\n") {
 		t := strings.TrimSpace(line)
-		upper := strings.ToUpper(t)
+		key, value, labelled := rcMachineLine(t)
 		switch {
-		case strings.EqualFold(t, "ISSUES:") || strings.EqualFold(t, "FINDINGS:"):
+		case labelled && (key == "issues" || key == "findings"):
+			// The reviewer sometimes quotes an example block before its real
+			// closing block. A repeated header supersedes that earlier block as a
+			// unit; otherwise quoted risks, verdicts, and notes leak into the
+			// finding. Do not reset on the first header, because legacy output may
+			// put its verdict before FINDINGS.
+			if seenIssuesHeader {
+				supersededBlock = true
+				risks = nil
+				decisions = nil
+				statedMatch = ""
+				matchConflict = false
+				readiness = finding.ReadinessUnknown
+				note = ""
+			}
+			seenIssuesHeader = true
 			section = "issues"
 			sawMachineLine = true
-		case strings.EqualFold(t, "DECISIONS:"):
+		case labelled && key == "decisions":
 			section = "decisions"
 			sawMachineLine = true
-		case strings.HasPrefix(upper, "INTENT_MATCH:"):
+		case labelled && key == "intent_match":
 			section = ""
 			sawMachineLine = true
-			// First field only — the value is one word; anything after
-			// ("partial — see above") is commentary, not the verdict.
-			v := strings.Fields(strings.ToLower(strings.TrimSpace(t[len("INTENT_MATCH:"):])))
-			if len(v) > 0 {
-				switch v[0] {
-				case "verified":
-					match = finding.MatchVerified
-				case "partial":
-					match = finding.MatchPartial
-				case "diverges":
-					match = finding.MatchDiverges
+			if m, ok := rcIntentVerdict(value); ok {
+				if statedMatch != "" && statedMatch != m {
+					matchConflict = true
 				}
+				statedMatch = m
 			}
-		case strings.HasPrefix(upper, "MERGE_READY:"):
+		case labelled && key == "merge_ready":
 			section = ""
 			sawMachineLine = true
 			if r, ok := rcParseReadinessLine(t); ok {
 				readiness = r
 			}
-		case strings.HasPrefix(upper, "SUMMARY:"):
+		case labelled && key == "summary":
 			section = ""
 			sawMachineLine = true
-			note = strings.TrimSpace(t[len("SUMMARY:"):])
-		case strings.HasPrefix(upper, "NOTE:"): // legacy spelling
+			note = value
+		case labelled && key == "note": // legacy spelling
 			section = ""
 			sawMachineLine = true
-			note = strings.TrimSpace(t[len("NOTE:"):])
-		case section != "" && strings.HasPrefix(t, "-"):
+			note = value
+		case section != "" && strings.HasPrefix(rcUnwrapMachineBullet(t), "-"):
 			// "- (none)" under a header the model was told to omit when
 			// empty is an empty list, not a finding (kai-server
 			// rc-d93f2dc3595c38e0 shipped one as a verified claim).
-			if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); item != "" && !rcIsEmptyListItem(item) {
+			bullet := rcUnwrapMachineBullet(t)
+			if item := strings.TrimSpace(strings.TrimPrefix(bullet, "-")); item != "" && !rcIsEmptyListItem(item) {
 				if section == "decisions" {
 					decisions = append(decisions, item)
 				} else {
@@ -857,6 +926,9 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 				proseEnd += len(line) + 1
 			}
 		}
+	}
+	if !matchConflict && statedMatch != "" {
+		match = statedMatch
 	}
 	// Legacy shape: no marker — whatever preceded the first machine line is
 	// the review prose (may be empty for the old strict-block output). The
@@ -880,7 +952,10 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 	//
 	// A prompt is a request. This is the part that does not depend on the
 	// model choosing to comply.
-	if readiness == finding.ReadinessUnknown {
+	// Once a repeated findings header supersedes an earlier block, prose before
+	// that block is not a safe fallback: it may be the quoted example's prose
+	// readiness, which would restore the score we deliberately cleared above.
+	if readiness == finding.ReadinessUnknown && !supersededBlock {
 		for _, line := range strings.Split(prose, "\n") {
 			if r, ok := rcParseReadinessLine(strings.TrimSpace(line)); ok {
 				readiness = r
