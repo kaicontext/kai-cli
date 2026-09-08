@@ -860,6 +860,7 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 	var proseEnd int // legacy: prose runs until the first machine line
 	sawMachineLine := false
 	seenIssuesHeader := false
+	supersededBlock := false
 	for _, line := range strings.Split(coda, "\n") {
 		t := strings.TrimSpace(line)
 		key, value, labelled := rcMachineLine(t)
@@ -871,6 +872,7 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 			// finding. Do not reset on the first header, because legacy output may
 			// put its verdict before FINDINGS.
 			if seenIssuesHeader {
+				supersededBlock = true
 				risks = nil
 				decisions = nil
 				statedMatch = ""
@@ -950,7 +952,10 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 	//
 	// A prompt is a request. This is the part that does not depend on the
 	// model choosing to comply.
-	if readiness == finding.ReadinessUnknown {
+	// Once a repeated findings header supersedes an earlier block, prose before
+	// that block is not a safe fallback: it may be the quoted example's prose
+	// readiness, which would restore the score we deliberately cleared above.
+	if readiness == finding.ReadinessUnknown && !supersededBlock {
 		for _, line := range strings.Split(prose, "\n") {
 			if r, ok := rcParseReadinessLine(strings.TrimSpace(line)); ok {
 				readiness = r

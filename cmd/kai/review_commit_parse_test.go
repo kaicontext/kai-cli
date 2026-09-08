@@ -131,3 +131,11 @@ func TestRCParseReviewOutputFirstFindingsPreservesEarlierVerdict(t *testing.T) {
 		t.Errorf("note = %q", note)
 	}
 }
+
+func TestRCParseReviewOutputSupersededProseReadinessStaysUnknown(t *testing.T) {
+	raw := "Example review:\n**Merge readiness:** do not merge\nFINDINGS:\n- quoted.go:1 — example\n\nActual review:\nFINDINGS:\n- real.go:2 — actual issue\nINTENT_MATCH: partial\nNOTE: actual note"
+	_, _, _, _, readiness, _ := rcParseReviewOutput(raw)
+	if readiness != finding.ReadinessUnknown {
+		t.Errorf("readiness = %v, want unknown after the quoted block was superseded", readiness)
+	}
+}
