@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -267,6 +269,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "kai %s %s · %s\n", mode, rcShort(hash), subject)
 
 	var raw string
+	// Non-nil only on the grounded path, and only describes HOW the run ended
+	// — see rcIncomplete. Used solely when the review produced nothing to parse.
+	var inc *rcIncomplete
 	if fast {
 		fastModel := rcFastModel(model, provKind)
 		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (model %s, budget %s)…\n",
@@ -288,7 +293,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 
 		fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
 		phase = time.Now()
-		raw, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff)
+		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff)
 		if err != nil {
 			return err
 		}
@@ -304,10 +309,28 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// An empty review is a FAILURE, not a finding. Shipping a bundle with no
 	// prose, no risks, and an unknown intent verdict green-checks a shell —
 	// the CI job succeeds, the inbox shows nothing, and nobody learns the
-	// review never happened (PRs #89/#90, 2026-08-26). Exit non-zero so the
-	// job fails visibly and the intake's retry machinery gets its chance.
+	// review never happened (PRs #89/#90, 2026-08-26). That invariant holds:
+	// this run still exits non-zero.
+	//
+	// What changed is that failing no longer means vanishing. Returning here
+	// emitted NOTHING, and the review step runs this CLI unguarded under
+	// set -eu, so the job died before the ingest and the PR was told the
+	// review could not be finished — with no hint that twelve minutes of
+	// reviewing had happened (kai-server#184, 2026-09-08). When the run left
+	// us facts about its own ending, write those down as the review, keep
+	// match/readiness Unknown (the value that means "no opinion", never a
+	// point on the merge scale), emit the bundle so it can be delivered, and
+	// THEN fail. A reader gets "did not finish, here is how far it got"
+	// instead of silence.
+	incomplete := false
 	if strings.TrimSpace(prose) == "" && len(risks) == 0 && len(decisions) == 0 && match == finding.MatchUnknown {
-		return fmt.Errorf("review produced no content (no prose, no risks, intent unknown) — failing instead of posting an empty finding")
+		salvaged := rcIncompleteProse(inc)
+		if salvaged == "" {
+			return fmt.Errorf("review produced no content (no prose, no risks, intent unknown) — failing instead of posting an empty finding")
+		}
+		prose = salvaged
+		incomplete = true
+		fmt.Fprintf(os.Stderr, "  review produced no conclusion — emitting an incomplete-review finding, then failing\n")
 	}
 
 	// Blast radius: walk the captured graph outward from the changed files so the
@@ -430,6 +453,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), string(out))
+		// Emitted first, failed second, and the order is the entire point: the
+		// bundle is on stdout (so the workflow's `> finding.json` has content to
+		// ingest) before the non-zero exit tells CI the review did not finish.
+		if incomplete {
+			return rcErrIncompleteReview
+		}
 		return nil
 	}
 
@@ -439,6 +468,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Println(prose)
 		if note != "" {
 			fmt.Printf("\nBottom line: %s\n", note)
+		}
+		if incomplete {
+			return rcErrIncompleteReview
 		}
 		return nil
 	}
@@ -454,6 +486,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		}
 	}
 	fmt.Printf("\nIntent match: %s\n", f.Intent.Match)
+	if incomplete {
+		return rcErrIncompleteReview
+	}
 	return nil
 }
 
@@ -530,7 +565,7 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 // injection seeds turn 0 with real context, the session store and run log make
 // the run inspectable (`kai run summary`), and ApplyEffort honors KAI_SPEED.
 // rcReviewSystem rides in Options.System underneath the mode prompt.
-func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, diff string) (string, error) {
+func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, diff string) (string, *rcIncomplete, error) {
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
 
@@ -644,12 +679,22 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// tightens. Zero-value Speed resolves KAI_SPEED → thorough (a no-op).
 	agent.ApplyEffort(&opts, 0)
 
+	started := time.Now()
 	res, err := agent.Run(ctx, opts)
 	if err != nil {
-		return "", fmt.Errorf("review run: %w", err)
+		return "", nil, fmt.Errorf("review run: %w", err)
 	}
 	fmt.Fprintln(os.Stderr)
 
+	// Facts about how the run ENDED, gathered whether or not it wrote itself
+	// down. When the write-down is missing these are the whole report the PR
+	// gets, so they are collected unconditionally and cost nothing.
+	inc := &rcIncomplete{
+		FinishReason: string(res.FinishReason),
+		Elapsed:      time.Since(started),
+		Turns:        len(res.Transcript),
+		FilesRead:    rcFilesRead(res.Transcript),
+	}
 	raw := strings.TrimSpace(res.FinalText)
 	// A run that ran out of road — the soft time budget fired, or the loop
 	// ended without ever emitting the structured coda — has read the code
@@ -664,7 +709,102 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			raw = concluded
 		}
 	}
-	return raw, nil
+	return raw, inc, nil
+}
+
+// rcConclusionTailMessages bounds the retry's prompt when a conclusion over
+// the whole transcript blew its deadline. Big enough to hold the run's late
+// reasoning (where its actual findings are), small enough that the second call
+// is cheap. The first message is always kept: it carries the review task.
+const rcConclusionTailMessages = 40
+
+// rcIncomplete records how a review run ENDED, so a run that never wrote
+// itself down can still say something true about itself.
+//
+// The 2026-09-08 kai-server#184 shape: 12m7s of real reviewing against a
+// 39-file diff, the soft budget expires at a turn boundary
+// (FinishReasonTimeBudget), the transcript-conclusion fallback then blows its
+// own deadline, and rcParseReviewOutput sees nothing. The old behaviour was to
+// return an error here — which, because the review step runs the CLI unguarded
+// under set -eu, aborted the job BEFORE the ingest and left the PR with
+// "Couldn't finish reviewing this change" and no trace of the twelve minutes.
+// Losing the work is not the same as reporting that it did not finish.
+type rcIncomplete struct {
+	FinishReason string
+	Elapsed      time.Duration
+	Turns        int
+	FilesRead    []string
+}
+
+// rcFilesRead pulls the distinct paths the run actually opened out of its tool
+// calls. Deliberately cheap and schema-loose, like rcChangedSymbols: any tool
+// that names a file names it in a "path" or "file_path" field, and a missed one
+// only shortens a list that is already a courtesy.
+func rcFilesRead(transcript []message.Message) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range transcript {
+		for _, pt := range m.Parts {
+			tc, ok := pt.(message.ToolCall)
+			if !ok {
+				continue
+			}
+			var args struct {
+				FilePath string `json:"file_path"`
+				Path     string `json:"path"`
+			}
+			if json.Unmarshal([]byte(tc.Input), &args) != nil {
+				continue
+			}
+			for _, p := range []string{args.FilePath, args.Path} {
+				if p == "" || seen[p] {
+					continue
+				}
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// rcIncompleteProse is the review of last resort: not a review at all, but an
+// honest account of a run that read code and ran out of road. It exists so the
+// finding still carries something a human can act on — how long it ran, why it
+// stopped, and what it had opened when it did — instead of the PR being told
+// the review could not be started.
+//
+// It never guesses a verdict. The caller leaves match and readiness Unknown,
+// which is the one value that means "I have no opinion" rather than any point
+// on the merge/do-not-merge scale.
+func rcIncompleteProse(inc *rcIncomplete) string {
+	if inc == nil {
+		return ""
+	}
+	reason := "the run ended without writing its review down"
+	if inc.FinishReason == string(message.FinishReasonTimeBudget) {
+		reason = "the review ran out of time before it could write its conclusion"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "**This review did not finish.** After %s and %d turns, %s, and the follow-up request for a conclusion from the transcript also failed.\n\n",
+		inc.Elapsed.Round(time.Second), inc.Turns, reason)
+	if n := len(inc.FilesRead); n > 0 {
+		const cap = 20
+		shown := inc.FilesRead
+		more := ""
+		if n > cap {
+			shown = shown[:cap]
+			more = fmt.Sprintf("\n- …and %d more", n-cap)
+		}
+		fmt.Fprintf(&b, "It had opened %d file(s) before it stopped:\n\n- %s%s\n\n", n, strings.Join(shown, "\n- "), more)
+	} else {
+		b.WriteString("It had not opened any files before it stopped.\n\n")
+	}
+	b.WriteString("Nothing here is a verdict on the change: no claim was checked to completion, " +
+		"so treat this as \"not reviewed\" rather than \"reviewed and clean\". Re-run the review, " +
+		"or split the change into smaller pieces if it keeps exhausting the budget.")
+	return b.String()
 }
 
 // rcConcludeFromTranscript makes one non-tool completion over the review
@@ -705,17 +845,37 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 	// scraps remained of the 12-minute hard deadline, which after a 9-minute
 	// review was not enough for one completion (the PR#90 failure).
 	_ = ctx
-	cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	resp, err := prov.Send(cctx, provider.Request{
-		Model:     model,
-		System:    rcReviewSystem,
-		MaxTokens: 2500,
-		Messages:  msgs,
-	})
+	send := func(m []message.Message) (provider.Response, error) {
+		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		return prov.Send(cctx, provider.Request{
+			Model:     model,
+			System:    rcReviewSystem,
+			MaxTokens: 2500,
+			Messages:  m,
+		})
+	}
+	resp, err := send(msgs)
 	if err != nil {
+		// One completion over a long review's history can itself exceed the
+		// grace period — kai-server#184 (2026-09-08) reviewed a 39-file diff
+		// for 12m7s and the conclusion call died with "context deadline
+		// exceeded", losing everything. Trimming tool-result BODIES was not
+		// enough there: the message COUNT is the cost. Retry over the tail,
+		// which is where the run's conclusions live anyway; a short prompt has
+		// a real chance inside the same 3 minutes, and the alternative is not
+		// a slower answer but no answer.
 		fmt.Fprintf(os.Stderr, "  conclusion call failed: %v\n", err)
-		return ""
+		if len(msgs) > rcConclusionTailMessages {
+			tail := append([]message.Message{msgs[0]}, msgs[len(msgs)-rcConclusionTailMessages:]...)
+			fmt.Fprintf(os.Stderr, "  retrying the conclusion over the last %d of %d messages…\n", rcConclusionTailMessages, len(msgs))
+			if resp, err = send(tail); err != nil {
+				fmt.Fprintf(os.Stderr, "  conclusion retry failed: %v\n", err)
+				return ""
+			}
+		} else {
+			return ""
+		}
 	}
 	var out strings.Builder
 	for _, p := range resp.Parts {
@@ -778,6 +938,12 @@ func rcChangedSymbols(diff string) string {
 	}
 	return b.String()
 }
+
+// rcErrIncompleteReview is returned AFTER an incomplete-review finding has
+// already been written to stdout. It exists so the exit code still says "this
+// review did not finish" while the bundle that says so is deliverable — the
+// two halves of a graceful failure.
+var rcErrIncompleteReview = errors.New("review did not finish — an incomplete-review finding was emitted; re-run the review")
 
 // rcReviewDataMarker separates the human review (everything before it) from
 // the machine coda (INTENT_MATCH / MERGE_READY / SUMMARY / ISSUES) the
