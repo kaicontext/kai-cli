@@ -36,28 +36,12 @@ name: build-kai-ci
 on:
   workflow_dispatch:
     inputs:
-      kai_cli_ref:
-        description: 'kai-cli ref for `kai` — blank = newest released tag'
-        required: false
-        default: ''
-      kai_tui_ref:
-        description: 'kai-tui ref for `kit` — blank = newest released tag'
-        required: false
-        default: ''
-      kai_engine_ref:
-        description: 'kai-engine ref — blank = newest released tag'
-        required: false
-        default: ''
-      kai_core_ref:
-        description: 'kai-core ref — blank = newest released tag'
-        required: false
-        default: ''
       pin:
         description: 'Open a kai-server PR pinning the new digest'
         required: true
         type: choice
-        default: none
-        options: [none, agent, review, both]
+        default: both
+        options: [both, agent, review, none]
 
 concurrency:
   group: build-kai-ci
@@ -97,11 +81,13 @@ jobs:
           owner: kaicontext
           repositories: kai-cli,kai-tui,kai-engine,kai-core
 
-      # Blank inputs resolve to each repo's newest released tag. Typing "main"
-      # into four boxes was the common case and the wrong default: a pin is
-      # described by version ("kai-cli v0.35.65 on kai-engine v0.6.55"), so the
-      # build should default to versions too, and a branch tip is not a thing
-      # anyone can point at later.
+      # ALWAYS the newest released tag of each repo — there is nothing to type.
+      # A pin is described by version ("kai-cli v0.35.65 on kai-engine v0.6.55"),
+      # so the build works in versions too, and a branch tip is not something
+      # anyone can point at afterwards, which is the whole objection this
+      # workflow exists to answer. Building from a branch is still possible
+      # locally with deploy/kai-ci/build.sh; it just is not what production
+      # images are made from.
       #
       # Newest SEMVER TAG, not GitHub's "latest release": those disagree here.
       # kai-engine's newest tag is v0.6.58 while its releases/latest still reads
@@ -111,28 +97,32 @@ jobs:
         id: resolve
         env:
           TOKEN: ${{ steps.token.outputs.token }}
-          # What the operator typed — blank for the common case.
-          KAI_CLI_REF: ${{ inputs.kai_cli_ref }}
-          KAI_TUI_REF: ${{ inputs.kai_tui_ref }}
-          KAI_ENGINE_REF: ${{ inputs.kai_engine_ref }}
-          KAI_CORE_REF: ${{ inputs.kai_core_ref }}
         run: |
           set -euo pipefail
+          # No pipe, deliberately. `git ls-remote | head -1` makes head close the
+          # pipe while git is still writing, git takes SIGPIPE, and under
+          # `set -o pipefail` the whole step dies with exit 141 — which is how
+          # the first run of this workflow failed. It is a RACE, not a
+          # certainty: the same command passed locally because that tag list was
+          # small enough for git to finish first. Reading the output into a
+          # variable and slicing the first line in bash removes the race rather
+          # than making it rarer.
           latest_tag() {
-            git ls-remote --tags --refs --sort=-v:refname \
-              "https://x-access-token:${TOKEN}@github.com/kaicontext/$1" 'v*' \
-              | head -1 | sed 's#.*refs/tags/##'
+            local out first
+            out="$(git ls-remote --tags --refs --sort=-v:refname \
+                     "https://x-access-token:${TOKEN}@github.com/kaicontext/$1" 'v*')"
+            [ -n "$out" ] || return 1
+            first="${out%%$'\n'*}"
+            printf '%s' "${first##*refs/tags/}"
           }
           for m in kai-cli kai-tui kai-engine kai-core; do
-            var="$(echo "$m" | tr 'a-z-' 'A-Z_')_REF"
-            want="${!var}"
-            if [ -z "$want" ]; then
-              want="$(latest_tag "$m")"
-              [ -n "$want" ] || { echo "no v* tag found for $m — pass a ref explicitly"; exit 1; }
-              echo "$m: no ref given, using newest tag $want"
-            else
-              echo "$m: using the ref you gave, $want"
+            # `if !` rather than a bare assignment: under `set -e` a failing
+            # command substitution kills the step with no explanation, and the
+            # message below never prints.
+            if ! want="$(latest_tag "$m")" || [ -z "$want" ]; then
+              echo "no v* tag found for $m — cannot build a versioned image"; exit 1
             fi
+            echo "$m: $want"
             echo "$(echo "$m" | tr 'a-z-' 'a-z_')_ref=$want" >> "$GITHUB_OUTPUT"
           done
 
