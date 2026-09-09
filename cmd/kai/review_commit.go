@@ -15,10 +15,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"kai/internal/autofix"
 	"kai/internal/config"
 
 	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/finding"
+	"github.com/kaicontext/kai-engine/gitio"
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/projects"
@@ -559,6 +561,57 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 	return out.String(), nil
 }
 
+// rcRepoIdentity resolves the repository the review is about, as an
+// "owner/name" GitHub slug.
+//
+// The reviewer used to have no way to know this, and it showed: reviews on
+// kai-desktop#288 and kai-desktop#300 (2026-09-08) stated they were reading
+// "the kai-engine repo" and "the kai-server working tree". Neither was true,
+// and nothing in the run could have told them otherwise — the CI job clones
+// into `mktemp -d`, so the workspace is a random path like /tmp/tmp.aBc123,
+// and the prompt named the repository nowhere. Meanwhile rcReviewSystem
+// REQUIRES a repository in the output ("name the boundary you actually
+// searched … 'within this repo, the only caller is X' is honest"). The
+// instructions demanded an answer the input withheld, so the model supplied a
+// plausible sibling from the same ecosystem.
+//
+// The resolution order mirrors resolveGitHubClient (autofix_cmd.go), so this
+// repo has one answer to "which GitHub repo am I in" rather than two:
+// GITHUB_REPOSITORY_FULLNAME first — the CI workflow prefers it for exactly
+// the case where the kai org name and the GitHub org name differ — then
+// GITHUB_REPOSITORY, then the checkout's own origin remote, which is what
+// makes this work for a human running review-commit locally.
+//
+// Returns "" when nothing resolves. The caller then says nothing rather than
+// guessing, which is the whole point.
+func rcRepoIdentity(dir string) string {
+	for _, env := range []string{"GITHUB_REPOSITORY_FULLNAME", "GITHUB_REPOSITORY"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return v
+		}
+	}
+	if url, err := gitio.RemoteURL(dir, "origin"); err == nil {
+		return autofix.RepoSlugFromRemote(url)
+	}
+	return ""
+}
+
+// rcRepoHeader is the prompt's opening line: which repository this is.
+//
+// Empty in, empty out. An unnamed boundary is recoverable — the reviewer says
+// "this repo" and a reader knows which PR they are looking at — while a
+// confidently wrong one is not, and inventing a name here would rebuild the
+// exact defect this exists to close.
+func rcRepoHeader(repo string) string {
+	if repo == "" {
+		return ""
+	}
+	return fmt.Sprintf("REPOSITORY: %s\n(The repository under review. Every path below is relative to its root. "+
+		"This is the boundary to name when you write one — \"within %s, the only caller is X\". "+
+		"Do not name a different repository as the one you are reading; sibling repos you cannot see "+
+		"here are exactly the limit worth stating.)\n\n", repo, repo)
+}
+
 // rcRunReviewAgent runs the review through the shared harness runner, set up
 // the way the orchestrator sets up its executors: agent.ModeReview supplies
 // the harness's review personality + read-only tool whitelist, the graph
@@ -570,6 +623,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	gdb := asGraphDB(primary.DB)
 
 	var user strings.Builder
+	// First line of the prompt, because everything after it is relative to
+	// this. rcReviewSystem asks the reviewer to name the boundary it searched;
+	// this is the name. Omitted entirely when it cannot be resolved — an
+	// unnamed boundary is recoverable, a confidently wrong one is not.
+	user.WriteString(rcRepoHeader(rcRepoIdentity(primary.Path)))
 	if sc := strings.TrimSpace(sourceContext); sc != "" {
 		if len(sc) > rcMaxAuthorContextBytes {
 			sc = sc[:rcMaxAuthorContextBytes] + "\n... (context truncated)"
