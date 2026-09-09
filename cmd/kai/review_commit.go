@@ -672,6 +672,10 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		user.WriteString(lookups)
 		user.WriteString("\n")
 	}
+	// What the reviewer will NOT be able to read, named before it starts
+	// guessing. Sits after the lookups because it is the same kind of fact —
+	// resolved from the diff, ahead of turn 0 — pointed the other way.
+	user.WriteString(rcDepLimitsBlock(rcChangedDeps(diff)))
 	user.WriteString("INTENT:\n")
 	user.WriteString(strings.TrimSpace(intent))
 	user.WriteString("\n\nDIFF:\n")
