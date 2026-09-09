@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -87,5 +88,45 @@ func TestIncompleteReviewErrorSaysItDidNotFinish(t *testing.T) {
 	}
 	if !strings.Contains(rcErrIncompleteReview.Error(), "did not finish") {
 		t.Errorf("sentinel message should name the real problem, got %q", rcErrIncompleteReview)
+	}
+}
+
+// The prose alone is not enough for the renderer downstream: kai-server picks
+// the review's headline from the finding's COUNTS, and an incomplete bundle's
+// counts are indistinguishable from a clean review's (no risks, no decisions,
+// unknown intent). So the bundle has to carry the fact structurally. Without
+// this field the server has only a literal sentence to match on, and two
+// timed-out reviews shipped with "Nothing jumped out" as their opening line
+// (kai-desktop#304, kai-server#186, 2026-09-08).
+func TestIncompleteBundleCarriesTheFlag(t *testing.T) {
+	type bundle struct {
+		Review     string `json:"review,omitempty"`
+		Depth      string `json:"depth,omitempty"`
+		Incomplete bool   `json:"incomplete,omitempty"`
+	}
+
+	// The shape the JSON branch of runReviewCommit marshals when the run
+	// stopped: salvaged prose, and the flag that says it is not a review.
+	out, err := json.Marshal(bundle{Review: rcIncompleteProse(&rcIncomplete{
+		FinishReason: string(message.FinishReasonTimeBudget),
+		Elapsed:      9*time.Minute + 59*time.Second,
+		Turns:        27,
+	}), Depth: "grounded", Incomplete: true})
+	if err != nil {
+		t.Fatalf("marshaling bundle: %v", err)
+	}
+	if !strings.Contains(string(out), `"incomplete":true`) {
+		t.Errorf("bundle does not carry the incomplete flag:\n%s", out)
+	}
+
+	// omitempty keeps a finished review's bundle byte-identical to what it
+	// was before this field existed — the flag appears only when it is true,
+	// so a complete review can never be read as an incomplete one.
+	done, err := json.Marshal(bundle{Review: "a real review", Depth: "grounded"})
+	if err != nil {
+		t.Fatalf("marshaling complete bundle: %v", err)
+	}
+	if strings.Contains(string(done), "incomplete") {
+		t.Errorf("a complete review's bundle mentions incomplete:\n%s", done)
 	}
 }

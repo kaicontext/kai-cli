@@ -446,11 +446,19 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		if fast {
 			depth = "fast"
 		}
+		// incomplete rides along because the counts cannot carry it: a run
+		// that stopped before its conclusion emits no risks, no decisions and
+		// an unknown intent, which is arithmetically identical to a review
+		// that read everything and liked it. Without this flag the renderer
+		// has only the prose to go on, and it opened two timed-out reviews
+		// with "Nothing jumped out" directly above their own "This review did
+		// not finish" (kai-desktop#304, kai-server#186, 2026-09-08).
 		out, err := json.MarshalIndent(struct {
 			finding.Finding
-			Review string `json:"review,omitempty"`
-			Depth  string `json:"depth,omitempty"`
-		}{f, prose, depth}, "", "  ")
+			Review     string `json:"review,omitempty"`
+			Depth      string `json:"depth,omitempty"`
+			Incomplete bool   `json:"incomplete,omitempty"`
+		}{f, prose, depth, incomplete}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
