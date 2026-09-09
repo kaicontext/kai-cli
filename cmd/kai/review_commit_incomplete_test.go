@@ -130,3 +130,31 @@ func TestIncompleteBundleCarriesTheFlag(t *testing.T) {
 		t.Errorf("a complete review's bundle mentions incomplete:\n%s", done)
 	}
 }
+
+// The run's account of itself was already gathered on every grounded review and
+// thrown away unless the review died. Now it always ships, so a reader can tell
+// a clean verdict that read the whole change from a clean verdict that read two
+// files.
+func TestCoverageShipsOnEveryGroundedRun(t *testing.T) {
+	got := rcCoverageOf(&rcIncomplete{
+		Elapsed:   4*time.Minute + 19*time.Second,
+		Turns:     27,
+		FilesRead: []string{"a.go", "b.go"},
+	})
+	if got == nil {
+		t.Fatal("rcCoverageOf dropped a run's manifest")
+	}
+	if got.Seconds != 259 {
+		t.Errorf("Seconds = %d, want 259", got.Seconds)
+	}
+	if got.Turns != 27 || len(got.FilesRead) != 2 {
+		t.Errorf("coverage = %+v, want the run's turns and files", got)
+	}
+
+	// The fast pass opens nothing and has no manifest to publish. Nil out
+	// keeps `omitempty` dropping the field, rather than publishing a record
+	// that claims zero files were read.
+	if rcCoverageOf(nil) != nil {
+		t.Error("rcCoverageOf(nil) invented a manifest for a pass that opened nothing")
+	}
+}
