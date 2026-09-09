@@ -11,6 +11,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/kaicontext/kai-engine/kaipath"
 	"log"
 	"os"
 	"os/signal"
@@ -24,11 +25,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kai/api/graph"
-	"kai/api/provider"
 	"kai/api/memstat"
 	"kai/api/projects"
-	"kai/internal/tui/views"
+	"kai/api/provider"
 	"kai/api/watcher"
+	"kai/internal/tui/views"
 )
 
 // Options configures a TUI session. The TUI reads from a live graph
@@ -589,10 +590,10 @@ type model struct {
 	width  int
 	height int
 
-	repl    views.REPL
-	gate    views.Gate
-	sync    views.Sync
-	status  views.StatusBar
+	repl       views.REPL
+	gate       views.Gate
+	sync       views.Sync
+	status     views.StatusBar
 	syncCh     <-chan views.SyncEvent
 	chatCh     <-chan views.ChatActivityEvent
 	hostProcCh <-chan views.HostProcEvent
@@ -633,11 +634,11 @@ func initialModel(opts Options, syncCh <-chan views.SyncEvent, chatCh <-chan vie
 	// non-primary roots in a multi-root workspace.
 	gate.SetProjects(opts.Projects)
 	return model{
-		opts:    opts,
-		repl:    views.NewREPLWithSession(opts.Binary, opts.WorkDir, opts.Planner, opts.ResumeSessionID),
-		gate:    gate,
-		sync:    s,
-		status:  status,
+		opts:         opts,
+		repl:         views.NewREPLWithSession(opts.Binary, opts.WorkDir, opts.Planner, opts.ResumeSessionID),
+		gate:         gate,
+		sync:         s,
+		status:       status,
 		syncCh:       syncCh,
 		chatCh:       chatCh,
 		hostProcCh:   hostProcCh,
@@ -973,7 +974,6 @@ func (m *model) setFocus(f focus) {
 	}
 }
 
-
 // logTUIPanic appends a stack trace to ~/.kai/tui-panic.log so a
 // developer can post-mortem the panic that just got swallowed by
 // the recover in Update. Best-effort: failing to open the log
@@ -986,7 +986,7 @@ func logTUIPanic(m model, msg tea.Msg, panicVal any) {
 	}
 	if dir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			dir = filepath.Join(home, ".kai")
+			dir = kaipath.UserPath(home)
 		}
 	}
 	if dir == "" {
@@ -1005,7 +1005,6 @@ func logTUIPanic(m model, msg tea.Msg, panicVal any) {
 	_, _ = f.Write(debug.Stack())
 }
 
-
 // firstNonEmptyLine returns the first non-empty trimmed line of s,
 // restoreTerminalForSafety emits the ANSI sequences that revert the
 // modes Bubble Tea sets (alt-screen, mouse tracking, bracketed paste,
@@ -1018,15 +1017,16 @@ func logTUIPanic(m model, msg tea.Msg, panicVal any) {
 // to stderr.
 //
 // Sequences:
-//   1049l  exit alternate screen buffer (return to the user's
-//          normal scrollback)
-//   25h    show cursor (Bubble Tea hides it during the run)
-//   1000l  disable basic mouse tracking
-//   1002l  disable cell-motion mouse tracking (what
-//          WithMouseCellMotion turned on)
-//   1003l  disable any-event mouse tracking (defensive)
-//   2004l  disable bracketed-paste mode
-//   ?7h    re-enable line wrap (the default; some TUIs disable it)
+//
+//	1049l  exit alternate screen buffer (return to the user's
+//	       normal scrollback)
+//	25h    show cursor (Bubble Tea hides it during the run)
+//	1000l  disable basic mouse tracking
+//	1002l  disable cell-motion mouse tracking (what
+//	       WithMouseCellMotion turned on)
+//	1003l  disable any-event mouse tracking (defensive)
+//	2004l  disable bracketed-paste mode
+//	?7h    re-enable line wrap (the default; some TUIs disable it)
 func restoreTerminalForSafety() {
 	const reset = "\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?2004l\x1b[?7h"
 	fmt.Fprint(os.Stderr, reset)

@@ -168,7 +168,7 @@ var verbose bool
 var authLoginToken string
 
 // updateCheckFile is the path to the cached update check result.
-var updateCheckFile = filepath.Join(os.Getenv("HOME"), ".kai", "update-check.json")
+var updateCheckFile = kaipath.UserPath(os.Getenv("HOME"), "update-check.json")
 
 type updateCheck struct {
 	LatestVersion string `json:"latest_version"`

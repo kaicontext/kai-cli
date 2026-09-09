@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/kaicontext/kai-engine/kaipath"
 	"io"
 	"os"
 	"path/filepath"
@@ -655,7 +656,7 @@ func stableIngestCommand() string {
 // binary if it's not in a temp dir, then a bare "kai" (PATH lookup).
 func stableKaiPath() string {
 	if home, err := os.UserHomeDir(); err == nil {
-		if p := filepath.Join(home, ".kai", "bin", "kai"); isExecutableFile(p) {
+		if p := kaipath.UserPath(home, "bin", "kai"); isExecutableFile(p) {
 			return p
 		}
 	}
