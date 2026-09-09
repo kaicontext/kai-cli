@@ -673,10 +673,18 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		user.WriteString(lookups)
 		user.WriteString("\n")
 	}
-	// What the reviewer will NOT be able to read, named before it starts
-	// guessing. Sits after the lookups because it is the same kind of fact —
-	// resolved from the diff, ahead of turn 0 — pointed the other way.
-	user.WriteString(rcDepLimitsBlock(rcChangedDeps(diff)))
+	// The contracts this diff rests on that live in OTHER modules. Fetched at
+	// the pinned commit where that is possible, named as a limitation where it
+	// is not — both rendered from one result, so a block saying "you cannot
+	// read these" can never sit beside one containing the source.
+	if deps := rcChangedDeps(diff); len(deps) > 0 {
+		phase := time.Now()
+		src, unresolved := rcFetchDepSources(ctx, deps)
+		user.WriteString(rcDepSourceBlock(src))
+		user.WriteString(rcDepLimitsBlock(unresolved))
+		fmt.Fprintf(os.Stderr, "  dependencies: %d file(s) fetched, %d module(s) unread (%s)\n",
+			len(src), len(unresolved), time.Since(phase).Round(time.Millisecond))
+	}
 	user.WriteString("INTENT:\n")
 	user.WriteString(strings.TrimSpace(intent))
 	user.WriteString("\n\nDIFF:\n")
