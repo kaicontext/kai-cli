@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -760,7 +761,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		FinishReason: string(res.FinishReason),
 		Elapsed:      time.Since(started),
 		Turns:        len(res.Transcript),
-		FilesRead:    rcFilesRead(res.Transcript),
+		FilesRead:    rcFilesRead(res.Transcript, primary.Path),
 	}
 	raw := strings.TrimSpace(res.FinalText)
 	// A run that ran out of road — the soft time budget fired, or the loop
@@ -836,11 +837,24 @@ func rcCoverageOf(inc *rcIncomplete) *rcCoverage {
 	}
 }
 
-// rcFilesRead pulls the distinct paths the run actually opened out of its tool
+// rcFilesRead pulls the distinct FILES the run actually opened out of its tool
 // calls. Deliberately cheap and schema-loose, like rcChangedSymbols: any tool
 // that names a file names it in a "path" or "file_path" field, and a missed one
 // only shortens a list that is already a courtesy.
-func rcFilesRead(transcript []message.Message) []string {
+//
+// Directories are dropped, and root is how. The same "path" argument that a
+// file read uses is also what a directory listing passes, so the manifest
+// published "What I opened — 6 files" over a list whose first two entries were
+// `frontend` and `frontend/dist` (kai-desktop#314), and "4 files" over one
+// containing `cmd/kai` (kai-cli#99). A coverage report that miscounts its own
+// coverage is the one thing this feature cannot afford.
+//
+// Only a CONFIRMED directory is dropped. A path that does not resolve — an
+// absolute path from another tree, a bare name, anything stat cannot answer —
+// is kept, because the cost is asymmetric: an extra entry slightly overstates
+// what was read, while a wrongly dropped one makes changedFilesNotListed
+// accuse the review of skipping a file it actually opened.
+func rcFilesRead(transcript []message.Message, root string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range transcript {
@@ -861,12 +875,32 @@ func rcFilesRead(transcript []message.Message) []string {
 					continue
 				}
 				seen[p] = true
+				if rcIsDir(root, p) {
+					continue
+				}
 				out = append(out, p)
 			}
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// rcIsDir reports whether p names a directory in the reviewed checkout.
+//
+// Answers only what the filesystem confirms: a stat that fails, for any reason,
+// is not a directory as far as this is concerned. See rcFilesRead for why the
+// uncertain case keeps the entry rather than dropping it.
+func rcIsDir(root, p string) bool {
+	full := p
+	if !filepath.IsAbs(full) {
+		if root == "" {
+			return false
+		}
+		full = filepath.Join(root, p)
+	}
+	fi, err := os.Stat(full)
+	return err == nil && fi.IsDir()
 }
 
 // rcIncompleteProse is the review of last resort: not a review at all, but an
