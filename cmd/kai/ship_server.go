@@ -322,14 +322,8 @@ func resolveServerTarget(repoFlag string) (baseURL, token, org, repoName string,
 // the spawn registry's recorded anchor for a spawn dir, else this
 // tree's HEAD.
 func shipServerBase(cwd string) (sha, baseSnapshot string) {
-	if reg, err := spawnpkg.Load(); err == nil {
-		resolved, _ := filepath.EvalSymlinks(cwd)
-		for _, e := range reg.Spawned {
-			p, _ := filepath.EvalSymlinks(e.Path)
-			if e.Path == cwd || (resolved != "" && p == resolved) {
-				return e.BaseGitSHA, e.SourceSnapshot
-			}
-		}
+	if e := shipSpawnEntry(cwd); e != nil {
+		return e.BaseGitSHA, e.SourceSnapshot
 	}
 	head, _ := spawnpkg.GitHeadState(cwd)
 	return head, ""
