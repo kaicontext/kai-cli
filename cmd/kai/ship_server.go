@@ -108,34 +108,64 @@ func runShipServer(cwd, branch, sessionID string) error {
 	}
 
 	// Base commit: the spawn registry's recorded anchor wins; a plain
-	// checkout ships against its own HEAD.
-	baseSHA, baseSnapshot := shipServerBase(cwd)
-	if baseSHA == "" {
+	// checkout ships against its own HEAD. Either way it has to be a
+	// commit the server can fetch from the remote — shipBaseFor moves
+	// it to the nearest one that is when it is not (ship_base.go).
+	entry := spawnEntryFor(cwd)
+	base := shipBaseFor(cwd, entry)
+	if base.SHA == "" {
 		return fmt.Errorf("no git anchor: this tree has no recorded base commit (spawn registry) and no resolvable HEAD — ship locally instead")
 	}
+	noteShipBase(base)
+	_, baseSnapshot := shipServerBase(cwd)
 
-	total := 0
-	files := make([]shipServerFile, 0, len(changed))
-	for _, p := range changed {
-		abs := filepath.Join(cwd, filepath.FromSlash(p))
-		content, rerr := os.ReadFile(abs)
-		if os.IsNotExist(rerr) {
-			files = append(files, shipServerFile{Path: p, Delete: true})
-			continue
+	// The spawn's baseline commit is a copy of the checkout's WORKING
+	// tree, uncommitted edits included. A changed file's full content
+	// would carry those edits into the PR (kai-desktop#332: two files
+	// shipped the checkout's unmerged hunks alongside the agent's), so
+	// each file is shipped as the base commit's version plus the
+	// agent's own hunks; only an overlap falls back to the full file.
+	// buildFiles does that against the base the server will check out,
+	// and runs again with a moved base if the server cannot fetch it.
+	baseline := shipBaselineCommit(cwd)
+	buildFiles := func(baseSHA string) ([]shipServerFile, error) {
+		total := 0
+		var overlaps []string
+		files := make([]shipServerFile, 0, len(changed))
+		for _, p := range changed {
+			abs := filepath.Join(cwd, filepath.FromSlash(p))
+			content, rerr := shipContentAgainst(cwd, entry, baseSHA, baseline, p, &overlaps)
+			if rerr != nil && os.IsNotExist(rerr) {
+				content, rerr = os.ReadFile(abs)
+			}
+			if os.IsNotExist(rerr) {
+				files = append(files, shipServerFile{Path: p, Delete: true})
+				continue
+			}
+			if rerr != nil {
+				return nil, fmt.Errorf("reading %s: %w", p, rerr)
+			}
+			if len(content) > shipServerMaxFileBytes {
+				return nil, fmt.Errorf("%s is %dKB — over the server-ship per-file cap (%dMB); use `kai ship` locally",
+					p, len(content)>>10, shipServerMaxFileBytes>>20)
+			}
+			total += len(content)
+			files = append(files, shipServerFile{Path: p, ContentB64: base64.StdEncoding.EncodeToString(content)})
 		}
-		if rerr != nil {
-			return fmt.Errorf("reading %s: %w", p, rerr)
+		if len(overlaps) > 0 {
+			fmt.Fprintf(os.Stderr, "note: %s carr%s edits from your checkout that overlap the agent's change — shipped with them included\n",
+				strings.Join(overlaps, ", "), map[bool]string{true: "y", false: "ies"}[len(overlaps) > 1])
 		}
-		if len(content) > shipServerMaxFileBytes {
-			return fmt.Errorf("%s is %dKB — over the server-ship per-file cap (%dMB); use `kai ship` locally",
-				p, len(content)>>10, shipServerMaxFileBytes>>20)
+		if total > shipServerMaxTotal {
+			return nil, fmt.Errorf("delta is %dMB — over the server-ship cap (%dMB); use `kai ship` locally", total>>20, shipServerMaxTotal>>20)
 		}
-		total += len(content)
-		files = append(files, shipServerFile{Path: p, ContentB64: base64.StdEncoding.EncodeToString(content)})
+		return files, nil
 	}
-	if total > shipServerMaxTotal {
-		return fmt.Errorf("delta is %dMB — over the server-ship cap (%dMB); use `kai ship` locally", total>>20, shipServerMaxTotal>>20)
+	files, err := buildFiles(base.SHA)
+	if err != nil {
+		return err
 	}
+	baseSHA := base.SHA
 
 	payload := shipServerRequest{
 		SessionID:    sessionID,
@@ -217,6 +247,28 @@ func runShipServer(cwd, branch, sessionID string) error {
 			}
 			return nil
 		case "failed":
+			// The server could not fetch the base after all. Move to the
+			// nearest commit it has and go again, once (ship_base.go).
+			if shipBaseUnfetchable(st.Error) && !base.Moved {
+				moved := shipBaseFor(cwd, entry)
+				if moved.SHA != "" && moved.SHA != payload.BaseGitSHA {
+					fmt.Fprintf(os.Stderr, "note: the server could not fetch base %.12s; %s\n", payload.BaseGitSHA, moved.Reason)
+					base = moved
+					if payload.Files, err = buildFiles(moved.SHA); err != nil {
+						return err
+					}
+					payload.BaseGitSHA = moved.SHA
+					if body, err = json.Marshal(payload); err != nil {
+						return err
+					}
+					if st, err = shipServerCall(baseURL, token, http.MethodPost, path, body); err != nil {
+						return err
+					}
+					fmt.Printf("re-queued ship %s against %.12s\n", st.ID, moved.SHA)
+					deadline = time.Now().Add(4 * time.Minute)
+					continue
+				}
+			}
 			return fmt.Errorf("ship failed: %s", st.Error)
 		}
 	}
@@ -346,15 +398,7 @@ func shipDeltaNames(cwd string) ([]string, error) {
 	if !isSpawn {
 		return gitio.DirtyPaths(cwd)
 	}
-	base := "HEAD"
-	if out, err := gitOut(cwd, "rev-parse", "-q", "--verify", "kai-baseline^{commit}"); err == nil && out != "" {
-		base = out
-	} else if out, err := gitOut(cwd, "rev-list", "--max-parents=0", "HEAD"); err == nil {
-		roots := strings.Fields(out)
-		if len(roots) > 0 {
-			base = roots[len(roots)-1]
-		}
-	}
+	base := shipBaselineCommit(cwd)
 	out, err := gitOut(cwd, "diff", "--name-only", "--no-renames", base)
 	if err != nil {
 		return nil, err
@@ -405,4 +449,112 @@ func kaiMarkerIdentity() (org, repo string) {
 		}
 	}
 	return org, repo
+}
+
+// shipBaselineCommit is the commit the agent's work is measured from
+// inside a spawn: the kai-baseline tag when the spawn keeps one, else
+// the newest commit the spawn machinery wrote ("kai spawn from …", or
+// "kai warm sync" after a warm workspace was brought up to date), else
+// the root commit.
+func shipBaselineCommit(cwd string) string {
+	if out, err := gitOut(cwd, "rev-parse", "-q", "--verify", "kai-baseline^{commit}"); err == nil && out != "" {
+		return out
+	}
+	if out, err := gitOut(cwd, "log", "--format=%H %s"); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			sha, subject, _ := strings.Cut(line, " ")
+			if strings.HasPrefix(subject, "kai spawn from") || strings.HasPrefix(subject, "kai warm sync") {
+				return sha
+			}
+		}
+	}
+	if out, err := gitOut(cwd, "rev-list", "--max-parents=0", "HEAD"); err == nil {
+		roots := strings.Fields(out)
+		if len(roots) > 0 {
+			return roots[len(roots)-1]
+		}
+	}
+	return "HEAD"
+}
+
+// spawnEntryFor returns the registry entry for cwd when it is a spawn.
+func spawnEntryFor(cwd string) *spawnpkg.Entry {
+	reg, err := spawnpkg.Load()
+	if err != nil {
+		return nil
+	}
+	resolved, _ := filepath.EvalSymlinks(cwd)
+	for i := range reg.Spawned {
+		e := &reg.Spawned[i]
+		p, _ := filepath.EvalSymlinks(e.Path)
+		if e.Path == cwd || (resolved != "" && p == resolved) {
+			return e
+		}
+	}
+	return nil
+}
+
+// shipContentFor is the content to publish for path p: the base
+// commit's version of the file with the agent's hunks (baseline → work
+// tree) applied. When the file at the base commit already equals the
+// spawn's baseline — the checkout had no uncommitted edit in it — that
+// is simply the work tree's file. When the base is unknown, the file is
+// new, or the agent's hunks do not apply over the checkout's edit, the
+// full work-tree file ships and p is recorded in overlaps.
+func shipContentFor(cwd string, e *spawnpkg.Entry, baseline, p string, overlaps *[]string) ([]byte, error) {
+	base := ""
+	if e != nil {
+		base = e.BaseGitSHA
+	}
+	return shipContentAgainst(cwd, e, base, baseline, p, overlaps)
+}
+
+// shipContentAgainst is shipContentFor with the server-side base named
+// explicitly: the commit the server checks out before applying this
+// file, which shipBaseFor may have moved off the spawn base.
+func shipContentAgainst(cwd string, e *spawnpkg.Entry, base, baseline, p string, overlaps *[]string) ([]byte, error) {
+	full, err := os.ReadFile(filepath.Join(cwd, p))
+	if err != nil {
+		return nil, err
+	}
+	if e == nil || e.SourceRepo == "" || base == "" {
+		return full, nil
+	}
+	baseContent, berr := gitOutput(e.SourceRepo, "show", base+":"+p)
+	baselineContent, lerr := gitOutput(cwd, "show", baseline+":"+p)
+	if berr != nil || lerr != nil {
+		return full, nil // new at the base or new in the spawn: nothing of the checkout's to strip
+	}
+	if bytes.Equal(baseContent, baselineContent) {
+		return full, nil // no uncommitted edit in this file: the fast, common case
+	}
+	patch, perr := gitOutput(cwd, "diff", "--no-color", "--no-renames", baseline, "--", p)
+	if perr != nil || len(bytes.TrimSpace(patch)) == 0 {
+		return full, nil
+	}
+	tmp, err := os.MkdirTemp("", "kai-ship-")
+	if err != nil {
+		return full, nil
+	}
+	defer os.RemoveAll(tmp)
+	target := filepath.Join(tmp, p)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return full, nil
+	}
+	if err := os.WriteFile(target, baseContent, 0o644); err != nil {
+		return full, nil
+	}
+	apply := exec.Command("git", "apply", "--whitespace=nowarn", "-")
+	apply.Dir = tmp
+	apply.Stdin = bytes.NewReader(patch)
+	if out, err := apply.CombinedOutput(); err != nil {
+		_ = out
+		*overlaps = append(*overlaps, p)
+		return full, nil
+	}
+	rebased, err := os.ReadFile(target)
+	if err != nil {
+		return full, nil
+	}
+	return rebased, nil
 }
