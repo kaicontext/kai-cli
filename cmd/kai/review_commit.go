@@ -164,6 +164,14 @@ const (
 	rcReviewBaseTurns    = 20
 	rcReviewTurnsPerFile = 2
 	rcReviewTurnCeiling  = 45
+	// rcObservedSecondsPerTurn is the median turn cost measured across 85 live
+	// reviews on 2026-09-09 (z-ai/glm-5.2, the model the CI workflow exports).
+	// It is a constant rather than a number in a comment because the ceiling
+	// above is only correct while it holds: TestReviewMaxTurnsScalesWithTheChange
+	// multiplies the two and fails if the product leaves the soft budget. Change
+	// the model tier or the graph and this is the figure to re-measure — the
+	// test will say so.
+	rcObservedSecondsPerTurn = 9.3
 )
 
 // rcReviewMaxTurns sizes the exploration budget to the diff. Never below the
@@ -284,7 +292,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	rangeSubjects, rangeBodies := rcRangeCommits(reviewCommitBase, ref)
 	stated := rcStatedIntent(subject, isMerge, rangeSubjects)
 	title := rcTitle(subject, isMerge, rangeSubjects)
-	authorContext := rcAuthorContext(subject, body, isMerge, rangeSubjects, rangeBodies)
+	authorContext := rcWithPRDescription(rcAuthorContext(subject, body, isMerge, rangeSubjects, rangeBodies))
 	intentBody := body
 	if isMerge && len(rangeSubjects) > 0 {
 		intentBody = authorContext
@@ -343,7 +351,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 
 		fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
 		phase = time.Now()
-		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff)
+		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff, rcPathsOf(files))
 		if err != nil {
 			return err
 		}
@@ -675,13 +683,9 @@ func rcRepoHeader(repo string) string {
 // injection seeds turn 0 with real context, the session store and run log make
 // the run inspectable (`kai run summary`), and ApplyEffort honors KAI_SPEED.
 // rcReviewSystem rides in Options.System underneath the mode prompt.
-func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, diff string) (string, *rcIncomplete, error) {
+func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, diff string, changed []string) (string, *rcIncomplete, error) {
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
-
-	// The files this change touches, by path. Used twice: to size the turn
-	// budget below, and afterwards to ask whether the run actually opened them.
-	changed := rcDiffPaths(diff)
 
 	var user strings.Builder
 	// First line of the prompt, because everything after it is relative to
@@ -846,27 +850,64 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// ran out of time — and its output is adopted only if it produced a
 	// coda, so a failed second pass leaves the first review exactly as it
 	// was.
-	if unopened := rcUnopenedChanged(changed, inc.FilesRead); len(unopened) > 0 &&
-		res.FinishReason != message.FinishReasonTimeBudget && res.SessionID != "" {
-		fmt.Fprintf(os.Stderr, "\n  coverage gate: %d of %d changed file(s) never opened — asking for them\n",
-			len(unopened), len(changed))
-		gate := opts
-		gate.SessionID = res.SessionID
-		gate.MaxTurns = rcCoverageGateTurns(len(unopened))
-		gate.Prompt = rcCoverageGatePrompt(unopened)
-		gate.InjectedContext = "" // already in the session's history
-		if res2, err2 := agent.Run(ctx, gate); err2 != nil {
-			fmt.Fprintf(os.Stderr, "  coverage gate failed (%v) — keeping the first review\n", err2)
+	// transcript is what the conclusion fallback below reads. It is the FIRST
+	// run's history until the gate runs, and the gate's afterwards — a resumed
+	// session's transcript is the whole conversation, so it is a superset. The
+	// gate exists to read files the first pass skipped, and dropping its
+	// transcript here would throw away exactly the reading it was run for.
+	transcript := res.Transcript
+
+	unopened := rcUnopenedChanged(changed, inc.FilesRead)
+	if len(unopened) > 0 && res.FinishReason != message.FinishReasonTimeBudget && res.SessionID != "" {
+		if left := rcGateHeadroom(started); left <= 0 {
+			fmt.Fprintf(os.Stderr, "\n  coverage gate: %d file(s) unopened, but not enough clock left to ask\n", len(unopened))
 		} else {
-			inc.Elapsed = time.Since(started)
-			inc.Turns += rcTurns(res2.Transcript)
-			inc.FilesRead = rcMergeFilesRead(inc.FilesRead, rcFilesRead(res2.Transcript, primary.Path))
-			inc.FinishReason = string(res2.FinishReason)
-			if second := strings.TrimSpace(res2.FinalText); strings.Contains(second, rcReviewDataMarker) {
-				raw = second
-			}
-			if still := rcUnopenedChanged(changed, inc.FilesRead); len(still) > 0 {
-				fmt.Fprintf(os.Stderr, "  coverage gate: %d file(s) still unopened\n", len(still))
+			fmt.Fprintf(os.Stderr, "\n  coverage gate: %d of %d changed file(s) never opened — asking for them\n",
+				len(unopened), len(changed))
+			gate := opts
+			gate.SessionID = res.SessionID
+			gate.MaxTurns = rcCoverageGateTurns(len(unopened))
+			gate.Prompt = rcCoverageGatePrompt(unopened)
+			gate.InjectedContext = "" // already in the session's history
+			// Its own clock. `ctx` carries rcReviewHardDeadline counted from
+			// the START of the first pass, so a first run that spent its turns
+			// but finished cleanly could hand the gate seconds — and a gate
+			// that then died on that inherited deadline would write
+			// FinishReasonTimeBudget over a first pass that had finished
+			// perfectly well. Same reasoning as rcConcludeFromTranscript's
+			// fresh deadline, and the soft budget is scaled down to match.
+			gate.SoftTimeBudget = left
+			gate.SoftTimeBudgetExtension = 0
+			gctx, gcancel := context.WithTimeout(context.Background(), left)
+			res2, err2 := agent.Run(gctx, gate)
+			gcancel()
+			switch {
+			case err2 != nil:
+				fmt.Fprintf(os.Stderr, "  coverage gate failed (%v) — keeping the first review\n", err2)
+			default:
+				// A resumed session's Transcript is the WHOLE conversation
+				// (runner.go seeds history from session.History()), so these
+				// are assignments, not additions. Adding would have counted
+				// the first pass's turns twice and republished the very 2x
+				// overcount this change removes from the manifest.
+				inc.Elapsed = time.Since(started)
+				inc.Turns = rcTurns(res2.Transcript)
+				inc.FilesRead = rcMergeFilesRead(inc.FilesRead, rcFilesRead(res2.Transcript, primary.Path))
+				transcript = res2.Transcript
+				// Adopt the second answer only when it is a WHOLE review. A
+				// second pass that ran out of turns mid-write can carry the
+				// marker and none of the fields behind it, and swapping that
+				// in would turn a good first review into an incomplete
+				// finding. When it is not usable the first review stands and
+				// the fallback below still gets the gate's transcript, so the
+				// files it opened are not lost either.
+				if second := strings.TrimSpace(res2.FinalText); rcUsableCoda(second) {
+					raw = second
+					inc.FinishReason = string(res2.FinishReason)
+				}
+				if still := rcUnopenedChanged(changed, inc.FilesRead); len(still) > 0 {
+					fmt.Fprintf(os.Stderr, "  coverage gate: %d file(s) still unopened\n", len(still))
+				}
 			}
 		}
 	}
@@ -877,27 +918,86 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// the write-down from what was already seen. (PR#89 dogfood: 5m38s of
 	// healthy exploration, budget expiry at a turn boundary, hollow finding
 	// posted as success.)
-	if res.FinishReason == message.FinishReasonTimeBudget || !strings.Contains(raw, rcReviewDataMarker) {
+	if res.FinishReason == message.FinishReasonTimeBudget || !rcUsableCoda(raw) {
 		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", res.FinishReason)
-		if concluded := rcConcludeFromTranscript(ctx, prov, model, res.Transcript); concluded != "" {
+		if concluded := rcConcludeFromTranscript(ctx, prov, model, transcript); concluded != "" {
 			raw = concluded
 		}
 	}
 	return raw, inc, nil
 }
 
-// rcDiffPaths lists the files a unified diff touches, in the order they appear.
-// Line-regex over the diff for the same reason rcChangedSymbols is: it costs
-// nothing and a missed path only shortens a list.
-func rcDiffPaths(diff string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, line := range strings.Split(diff, "\n") {
-		if !strings.HasPrefix(line, "+++ b/") {
-			continue
+// rcMaxPRDescriptionBytes bounds the pull request half of the author context,
+// so a long description cannot crowd the commit messages out of
+// rcMaxAuthorContextBytes entirely. The control plane already caps what it
+// sends; this is the far end of the same contract.
+const rcMaxPRDescriptionBytes = 6 * 1024
+
+// rcWithPRDescription puts the pull request's own description at the front of
+// the author context.
+//
+// AUTHOR CONTEXT is what the reviewer tests the code against — the prompt tells
+// it to treat this as the author's account of the change. It has always been
+// built from commit messages, and on a pull request that is the wrong document:
+// it is what the author wrote about a commit, not about the change. Every
+// review a customer has had was judged against the wrong statement of intent.
+//
+// The description leads and the commits follow, so if anything is truncated it
+// is the supporting detail rather than the claim being tested.
+//
+// Read from the environment rather than a flag because the review pod inherits
+// it: kai-server injects KAI_PR_TITLE / KAI_PR_BODY into the runner, and the
+// built-in workflow needs no change to pass them on. Absent — a local
+// review-commit, a push that is not a pull request, an older control plane —
+// and the author context is exactly what it is today.
+func rcWithPRDescription(commits string) string {
+	title := strings.TrimSpace(os.Getenv("KAI_PR_TITLE"))
+	body := strings.TrimSpace(os.Getenv("KAI_PR_BODY"))
+	if title == "" && body == "" {
+		return commits
+	}
+	var b strings.Builder
+	b.WriteString("THE PULL REQUEST, in the author's words. This is the change's stated goal; " +
+		"the commit messages below are how it was built.\n\n")
+	if title != "" {
+		b.WriteString("# ")
+		b.WriteString(title)
+		b.WriteString("\n\n")
+	}
+	if body != "" {
+		if len(body) > rcMaxPRDescriptionBytes {
+			body = body[:rcMaxPRDescriptionBytes] + "\n\n... (description truncated)"
 		}
-		p := strings.TrimSpace(strings.TrimPrefix(line, "+++ b/"))
-		if p == "" || p == "/dev/null" || seen[p] {
+		b.WriteString(body)
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(commits) != "" {
+		b.WriteString("--- the commits that make it up ---\n\n")
+		b.WriteString(commits)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// rcPathsOf lists the files a change touches, from the diff STAT rather than
+// from the prompt's diff text.
+//
+// The distinction is the whole point. The prompt's diff is truncated at
+// maxReviewCommitDiffBytes, deletions end their hunk at `+++ /dev/null`, and a
+// binary or mode-only change has no `+++` header at all — so reading paths out
+// of it silently omits files on exactly the large changes the turn budget and
+// the coverage gate exist for. rcCommitDiffStat asks git for the file list and
+// has none of those holes.
+//
+// It is also the list the server compares the manifest against
+// (changedFilesNotListed reads the bundle's diff.files, which is this), so the
+// gate now asks for precisely the files the review will otherwise be shown to
+// have skipped.
+func rcPathsOf(files []finding.DiffFile) []string {
+	out := make([]string, 0, len(files))
+	seen := make(map[string]bool, len(files))
+	for _, f := range files {
+		p := strings.TrimSpace(f.Path)
+		if p == "" || seen[p] {
 			continue
 		}
 		seen[p] = true
@@ -956,6 +1056,44 @@ func rcMergeFilesRead(a, b []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// rcGateMinHeadroom is the least clock worth starting a second pass with, and
+// rcGateMaxBudget the most it may take. Below the floor the gate would produce
+// a truncated answer and a worse manifest than saying nothing.
+const (
+	rcGateMinHeadroom = 45 * time.Second
+	rcGateMaxBudget   = 4 * time.Minute
+)
+
+// rcGateHeadroom is how long the coverage pass may run: what remains of the
+// review's hard deadline, capped, or zero when there is not enough left to be
+// worth asking. The gate is an addition to a review that already has an
+// answer, so it never gets to be the thing that makes the run late.
+func rcGateHeadroom(started time.Time) time.Duration {
+	left := rcReviewHardDeadline - time.Since(started)
+	if left < rcGateMinHeadroom {
+		return 0
+	}
+	if left > rcGateMaxBudget {
+		return rcGateMaxBudget
+	}
+	return left
+}
+
+// rcUsableCoda reports whether a raw answer carries a machine coda the
+// pipeline can actually read, rather than just the line that introduces one.
+//
+// The distinction matters wherever one answer replaces another. A pass that
+// ran out of turns mid-write emits the marker and stops, and treating that as
+// a review would swap a complete one for an incomplete finding.
+func rcUsableCoda(raw string) bool {
+	i := strings.Index(raw, rcReviewDataMarker)
+	if i < 0 {
+		return false
+	}
+	tail := raw[i+len(rcReviewDataMarker):]
+	return strings.Contains(tail, "INTENT_MATCH:") || strings.Contains(tail, "SUMMARY:")
 }
 
 // rcCoverageGateTurns bounds the second pass: a turn to open each skipped file
