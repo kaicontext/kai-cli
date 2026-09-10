@@ -91,14 +91,28 @@ func rcTitle(subject string, isMerge bool, rangeSubjects []string) string {
 // message, or for a merge every message in the range, so the reviewer reads
 // what the author wrote and not "Merge origin/main".
 func rcAuthorContext(subject, body string, isMerge bool, rangeSubjects, rangeBodies []string) string {
-	if !isMerge || len(rangeSubjects) == 0 {
+	// Use the whole range whenever there is more than one commit in it, not
+	// only when the reviewed ref is a merge.
+	//
+	// CI reviews `$HEAD_SHA --base $BASE_REF`, and a pull request's head is an
+	// ordinary commit, so isMerge was false on every review a customer ever
+	// got. rcRangeCommits had already collected the branch's commits one line
+	// above the call — and this function threw them away and returned the LAST
+	// commit's message as the author's account of the change. On a twelve-commit
+	// pull request the reviewer was told about one of them.
+	useRange := len(rangeSubjects) > 0 && (isMerge || len(rangeSubjects) > 1)
+	if !useRange {
 		if strings.TrimSpace(body) != "" {
 			return subject + "\n\n" + body
 		}
 		return subject
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s — a merge bringing in %d commit(s), listed oldest first:\n", subject, len(rangeSubjects))
+	if isMerge {
+		fmt.Fprintf(&b, "%s — a merge bringing in %d commit(s), listed oldest first:\n", subject, len(rangeSubjects))
+	} else {
+		fmt.Fprintf(&b, "%d commit(s) in this change, listed oldest first:\n", len(rangeSubjects))
+	}
 	for i, s := range rangeSubjects {
 		b.WriteString("\n## ")
 		b.WriteString(s)

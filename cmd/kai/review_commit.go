@@ -132,6 +132,53 @@ const (
 	rcReviewHardDeadline  = 20 * time.Minute
 )
 
+// The review's TURN budget, which is the one that actually binds.
+//
+// It was a flat 20 from the day the agentic reviewer shipped (dc19c2a,
+// 2026-07-07, in a commit about diff patches) and was never revisited, while
+// the time budget above was raised twice on measurement. Measuring the turn
+// budget shows the mistake: across 85 live reviews carrying the coverage
+// manifest the median run took 90 seconds against a 540-second soft budget,
+// and only 6% came near it. Nothing ever hit the clock, because 20 turns at
+// the observed 9.3s/turn costs about 187 seconds — a third of the budget it
+// was given.
+//
+// The runner spends the last of that on winding down, too: it injects
+// "wrap it up" hints three turns before the cap and strips every tool on the
+// final turn, so a flat 20 is 17 turns of real work no matter how large the
+// change.
+//
+// What that cost: on PRs of nine files or more the reviewer opened 6.5 files
+// and left 8.4 unopened, 45% of those runs reached the wind-down with three
+// fifths of their clock unspent, and findings per changed file fell from 1.40
+// on a one-file PR to 0.14 on a PR of twenty-one or more.
+//
+// So the budget is sized to the change instead. A reviewer needs at least one
+// turn per changed file to read it and roughly one more to follow what it
+// found; the base covers the sweep the prompt asks for on top. The ceiling is
+// set so the WALL CLOCK becomes the binding limit again, which is what the
+// soft budget was designed to be: 45 turns at the observed pace is about 420
+// seconds, inside the 540-second soft budget, and a run slower than that hits
+// the time budget and degrades the way the time budget already handles.
+const (
+	rcReviewBaseTurns    = 20
+	rcReviewTurnsPerFile = 2
+	rcReviewTurnCeiling  = 45
+)
+
+// rcReviewMaxTurns sizes the exploration budget to the diff. Never below the
+// old flat value, so no review gets less room than it has today.
+func rcReviewMaxTurns(changedFiles int) int {
+	n := rcReviewBaseTurns + rcReviewTurnsPerFile*changedFiles
+	if n > rcReviewTurnCeiling {
+		return rcReviewTurnCeiling
+	}
+	if n < rcReviewBaseTurns {
+		return rcReviewBaseTurns
+	}
+	return n
+}
+
 var (
 	reviewCommitFormat string
 	reviewCommitBase   string
@@ -632,6 +679,10 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
 
+	// The files this change touches, by path. Used twice: to size the turn
+	// budget below, and afterwards to ask whether the run actually opened them.
+	changed := rcDiffPaths(diff)
+
 	var user strings.Builder
 	// First line of the prompt, because everything after it is relative to
 	// this. rcReviewSystem asks the reviewer to name the boundary it searched;
@@ -732,7 +783,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		System:     rcReviewSystem,
 		ReadOnly:   true,
 		EnableBash: false,
-		MaxTurns:   20,
+		MaxTurns:   rcReviewMaxTurns(len(changed)),
 		Prompt:     user.String(),
 
 		InjectedContext: injected,
@@ -772,10 +823,53 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	inc := &rcIncomplete{
 		FinishReason: string(res.FinishReason),
 		Elapsed:      time.Since(started),
-		Turns:        len(res.Transcript),
+		Turns:        rcTurns(res.Transcript),
 		FilesRead:    rcFilesRead(res.Transcript, primary.Path),
 	}
 	raw := strings.TrimSpace(res.FinalText)
+
+	// COVERAGE GATE. A review that never opened a changed file is not a
+	// verdict on it, and until now the only consequence was a line in the
+	// manifest telling the reader so. Ask for the reading instead.
+	//
+	// This is where the misses actually are. Of 89 real defects found by
+	// another reviewer and not by Kai on the same pull requests, 56 were
+	// visible in the changed lines themselves — the miss rate is the same
+	// whether the evidence sits in the diff (64%), in another file of the
+	// same repository (67%), or behind a caller (67%). Distance is not the
+	// explanation; not looking is.
+	//
+	// The pass RESUMES the run's own session rather than starting over, so
+	// the model keeps everything it has already read and pays only for the
+	// files it skipped. It is skipped entirely when the first run died on
+	// the clock — there is no point asking for more reading from a run that
+	// ran out of time — and its output is adopted only if it produced a
+	// coda, so a failed second pass leaves the first review exactly as it
+	// was.
+	if unopened := rcUnopenedChanged(changed, inc.FilesRead); len(unopened) > 0 &&
+		res.FinishReason != message.FinishReasonTimeBudget && res.SessionID != "" {
+		fmt.Fprintf(os.Stderr, "\n  coverage gate: %d of %d changed file(s) never opened — asking for them\n",
+			len(unopened), len(changed))
+		gate := opts
+		gate.SessionID = res.SessionID
+		gate.MaxTurns = rcCoverageGateTurns(len(unopened))
+		gate.Prompt = rcCoverageGatePrompt(unopened)
+		gate.InjectedContext = "" // already in the session's history
+		if res2, err2 := agent.Run(ctx, gate); err2 != nil {
+			fmt.Fprintf(os.Stderr, "  coverage gate failed (%v) — keeping the first review\n", err2)
+		} else {
+			inc.Elapsed = time.Since(started)
+			inc.Turns += rcTurns(res2.Transcript)
+			inc.FilesRead = rcMergeFilesRead(inc.FilesRead, rcFilesRead(res2.Transcript, primary.Path))
+			inc.FinishReason = string(res2.FinishReason)
+			if second := strings.TrimSpace(res2.FinalText); strings.Contains(second, rcReviewDataMarker) {
+				raw = second
+			}
+			if still := rcUnopenedChanged(changed, inc.FilesRead); len(still) > 0 {
+				fmt.Fprintf(os.Stderr, "  coverage gate: %d file(s) still unopened\n", len(still))
+			}
+		}
+	}
 	// A run that ran out of road — the soft time budget fired, or the loop
 	// ended without ever emitting the structured coda — has read the code
 	// but never wrote the review down. Don't ship that as an empty finding:
@@ -790,6 +884,134 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		}
 	}
 	return raw, inc, nil
+}
+
+// rcDiffPaths lists the files a unified diff touches, in the order they appear.
+// Line-regex over the diff for the same reason rcChangedSymbols is: it costs
+// nothing and a missed path only shortens a list.
+func rcDiffPaths(diff string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, line := range strings.Split(diff, "\n") {
+		if !strings.HasPrefix(line, "+++ b/") {
+			continue
+		}
+		p := strings.TrimSpace(strings.TrimPrefix(line, "+++ b/"))
+		if p == "" || p == "/dev/null" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// rcUnopenedChanged returns the changed files that do not appear in what the
+// run recorded opening. It is deliberately the same comparison the server
+// renders under the coverage manifest, so the gate and the disclosure can
+// never disagree about which files were skipped.
+//
+// The capture walks tool-call arguments for path fields, so a file can be
+// absent from the manifest and still have been read — asking for it again
+// costs a turn and is the cheap side of that error.
+func rcUnopenedChanged(changed, filesRead []string) []string {
+	if len(changed) == 0 {
+		return nil
+	}
+	read := make(map[string]bool, len(filesRead))
+	for _, r := range filesRead {
+		read[r] = true
+	}
+	var out []string
+	for _, c := range changed {
+		if read[c] {
+			continue
+		}
+		// A manifest entry may be an absolute path or carry a prefix the diff
+		// does not; match on the suffix before declaring a file unread.
+		hit := false
+		for _, r := range filesRead {
+			if strings.HasSuffix(r, "/"+c) || strings.HasSuffix(c, "/"+r) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// rcMergeFilesRead unions two manifests, keeping order and dropping repeats.
+func rcMergeFilesRead(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range append(append([]string{}, a...), b...) {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// rcCoverageGateTurns bounds the second pass: a turn to open each skipped file
+// and a few to fold what they contain back into the review. Small on purpose —
+// this pass exists to close a hole, not to start the review over.
+func rcCoverageGateTurns(unopened int) int {
+	n := unopened + 4
+	if n > 16 {
+		return 16
+	}
+	return n
+}
+
+// rcCoverageGatePrompt is the second pass's whole instruction. It names the
+// files rather than asking the model to work out what it skipped, and it asks
+// for the WHOLE review again rather than a supplement, because the coda is
+// what the pipeline parses and a partial second answer would have to be
+// merged with the first by hand.
+func rcCoverageGatePrompt(unopened []string) string {
+	var b strings.Builder
+	b.WriteString("Before your review can stand, these files are part of this change and you did not open them:\n\n")
+	const cap = 12
+	shown := unopened
+	if len(shown) > cap {
+		shown = shown[:cap]
+	}
+	for _, p := range shown {
+		b.WriteString("- ")
+		b.WriteString(p)
+		b.WriteString("\n")
+	}
+	if len(unopened) > cap {
+		fmt.Fprintf(&b, "- …and %d more\n", len(unopened)-cap)
+	}
+	b.WriteString("\nOpen each one and apply the same sweep you applied to the rest of the change. " +
+		"Then output your review AGAIN in full, ending with the machine coda exactly once — " +
+		"revised if what you just read changes it, unchanged if it does not. " +
+		"Do not describe what you did in this pass; write the review.")
+	return b.String()
+}
+
+// rcTurns counts the model's turns in a transcript.
+//
+// Not len(transcript): that is the MESSAGE count — the prompt, each assistant
+// turn, and each tool result — which is roughly twice the number of turns.
+// The coverage manifest published it as "turns" and told every reader of a
+// review that it had run about twice as long as it did. A manifest that exists
+// to stop overclaiming cannot overclaim by 2x.
+func rcTurns(transcript []message.Message) int {
+	n := 0
+	for _, m := range transcript {
+		if m.Role == message.RoleAssistant {
+			n++
+		}
+	}
+	return n
 }
 
 // rcConclusionTailMessages bounds the retry's prompt when a conclusion over

@@ -51,6 +51,37 @@ func TestStatedIntentAndTitleForMergeCommit(t *testing.T) {
 	}
 }
 
+// CI reviews `$HEAD_SHA --base $BASE_REF`, and a pull request's head is an
+// ordinary commit, so isMerge was false on every review a customer ever got —
+// and rcAuthorContext threw the branch's commits away and handed the reviewer
+// the LAST commit's message as the author's account of the whole change.
+// rcRangeCommits had already collected them one line above the call.
+func TestAuthorContextUsesEveryCommitOnANonMergeHead(t *testing.T) {
+	subs := []string{
+		"db: pool seats into one org budget",
+		"api: charge the org bucket before the seat",
+		"console: show the pooled balance",
+	}
+	bodies := []string{"the migration rekeys daily_usage", "", "and the 429 body loses its dollars"}
+
+	got := rcAuthorContext(subs[2], bodies[2], false, subs, bodies)
+	for _, want := range append(append([]string{}, subs...), "3 commit(s)", "the migration rekeys daily_usage") {
+		if !strings.Contains(got, want) {
+			t.Errorf("author context for a multi-commit branch is missing %q:\n%s", want, got)
+		}
+	}
+	// A merge still reads as a merge — that wording is load-bearing, because
+	// "Merge pull request #N" is not a goal and the listing is what replaces it.
+	if strings.Contains(got, "a merge bringing in") {
+		t.Error("a branch head is not a merge and must not be described as one")
+	}
+
+	// One commit states itself; nothing changes for the common case.
+	if g := rcAuthorContext("Subj", "Body", false, []string{"Subj"}, []string{"Body"}); g != "Subj\n\nBody" {
+		t.Errorf("single-commit author context = %q", g)
+	}
+}
+
 func TestParseReviewOutputEmptyListBullets(t *testing.T) {
 	raw := "Looks fine.\n\n===REVIEW-DATA===\nINTENT_MATCH: verified\nSUMMARY: ok\nISSUES:\n- (none)\nDECISIONS:\n- None.\n- Decision: the cap moves from 5 to 7 for every org\n"
 	_, risks, decisions, match, _, _ := rcParseReviewOutput(raw)
