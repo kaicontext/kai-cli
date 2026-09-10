@@ -916,9 +916,14 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				// finding. When it is not usable the first review stands and
 				// the fallback below still gets the gate's transcript, so the
 				// files it opened are not lost either.
+				// How the RUN ended is how its LAST pass ended, whether or
+				// not that pass's answer was the one kept. Leaving the first
+				// pass's reason here made the manifest — and the diagnostic
+				// below — describe a pass that was no longer the last thing
+				// to happen.
+				inc.FinishReason = string(res2.FinishReason)
 				if second := strings.TrimSpace(res2.FinalText); rcUsableCoda(second) {
 					raw = second
-					inc.FinishReason = string(res2.FinishReason)
 				}
 				if still := rcUnopenedChanged(changed, inc.FilesRead); len(still) > 0 {
 					fmt.Fprintf(os.Stderr, "  coverage gate: %d file(s) still unopened\n", len(still))
@@ -933,10 +938,15 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// the write-down from what was already seen. (PR#89 dogfood: 5m38s of
 	// healthy exploration, budget expiry at a turn boundary, hollow finding
 	// posted as success.)
-	if inc.FinishReason == string(message.FinishReasonTimeBudget) || !rcUsableCoda(raw) {
-		// inc.FinishReason, not res.FinishReason: after a successful gate the
-		// two differ, and the diagnostic that explains why this branch fired
-		// has to name the reason it fired on.
+	//
+	// The condition is the ANSWER, not the finish reason. It used to be
+	// "timed out OR no marker", from before rcUsableCoda existed — and once
+	// the gate could set inc.FinishReason, a gate that died on the clock
+	// would fire this branch and overwrite a perfectly good first review with
+	// a transcript conclusion. A run that timed out has no usable coda by
+	// construction, so !rcUsableCoda already covers the case the first clause
+	// was there for, without covering the one it should not.
+	if !rcUsableCoda(raw) {
 		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", inc.FinishReason)
 		if concluded := rcConcludeFromTranscript(ctx, prov, model, transcript); concluded != "" {
 			raw = concluded
