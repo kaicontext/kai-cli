@@ -171,6 +171,14 @@ const (
 	// multiplies the two and fails if the product leaves the soft budget. Change
 	// the model tier or the graph and this is the figure to re-measure — the
 	// test will say so.
+	//
+	// The test guards one direction, and that is on purpose. Too LARGE and the
+	// ceiling would leave the soft budget, which nothing else would catch —
+	// hence the assertion. Too SMALL and turns cost more than this says, so
+	// the run reaches rcReviewSoftBudget before its turn cap: the soft budget
+	// fires, the review concludes, and the incomplete path reports it. That
+	// direction already has a backstop, and it is the one the whole design
+	// wants — the wall clock binding rather than the turn count.
 	rcObservedSecondsPerTurn = 9.3
 )
 
@@ -878,9 +886,16 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			// fresh deadline, and the soft budget is scaled down to match.
 			gate.SoftTimeBudget = left
 			gate.SoftTimeBudgetExtension = 0
-			gctx, gcancel := context.WithTimeout(context.Background(), left)
-			res2, err2 := agent.Run(gctx, gate)
-			gcancel()
+			res2, err2 := func() (*agent.Result, error) {
+				// Its own scope so the cancel is DEFERRED. It fires on any
+				// exit from agent.Run, not only the ordinary one, which is
+				// what makes "does the runner leave a session lock or a
+				// goroutine behind on an abort?" a question this code does
+				// not have to answer.
+				gctx, gcancel := context.WithTimeout(context.Background(), left)
+				defer gcancel()
+				return agent.Run(gctx, gate)
+			}()
 			switch {
 			case err2 != nil:
 				fmt.Fprintf(os.Stderr, "  coverage gate failed (%v) — keeping the first review\n", err2)
@@ -918,8 +933,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// the write-down from what was already seen. (PR#89 dogfood: 5m38s of
 	// healthy exploration, budget expiry at a turn boundary, hollow finding
 	// posted as success.)
-	if res.FinishReason == message.FinishReasonTimeBudget || !rcUsableCoda(raw) {
-		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", res.FinishReason)
+	if inc.FinishReason == string(message.FinishReasonTimeBudget) || !rcUsableCoda(raw) {
+		// inc.FinishReason, not res.FinishReason: after a successful gate the
+		// two differ, and the diagnostic that explains why this branch fired
+		// has to name the reason it fired on.
+		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", inc.FinishReason)
 		if concluded := rcConcludeFromTranscript(ctx, prov, model, transcript); concluded != "" {
 			raw = concluded
 		}
@@ -1027,11 +1045,19 @@ func rcUnopenedChanged(changed, filesRead []string) []string {
 		if read[c] {
 			continue
 		}
-		// A manifest entry may be an absolute path or carry a prefix the diff
-		// does not; match on the suffix before declaring a file unread.
+		// A manifest entry may be an ABSOLUTE path — the run works in a
+		// mktemp checkout — so a read path that ends in the changed path
+		// counts as having opened it.
+		//
+		// Only that direction. The mirror test, "the changed path ends in the
+		// read path", is unsound: with `db/secrets.go` and `pkg/db/secrets.go`
+		// both changed and only the first opened, it declares the second
+		// opened too and drops the one file the gate exists to name. Two
+		// changed files sharing a tail is not exotic in a repo with parallel
+		// package trees, and the failure is silent.
 		hit := false
 		for _, r := range filesRead {
-			if strings.HasSuffix(r, "/"+c) || strings.HasSuffix(c, "/"+r) {
+			if strings.HasSuffix(r, "/"+c) {
 				hit = true
 				break
 			}

@@ -125,6 +125,29 @@ func TestUnopenedChangedNamesTheSkippedFiles(t *testing.T) {
 	}
 }
 
+// Two changed files sharing a tail, only the shallower one opened. The suffix
+// match must not let the deeper one out of the gate.
+//
+// The mirror test — "the changed path ends in the read path" — declared
+// `pkg/db/secrets.go` opened because `db/secrets.go` had been, and dropped the
+// one file the gate exists to name. Silent, and not exotic in a repo with
+// parallel package trees.
+func TestUnopenedChangedIsNotFooledByASharedTail(t *testing.T) {
+	changed := []string{"db/secrets.go", "pkg/db/secrets.go"}
+	read := []string{"db/secrets.go"}
+	got := rcUnopenedChanged(changed, read)
+	if len(got) != 1 || got[0] != "pkg/db/secrets.go" {
+		t.Errorf("rcUnopenedChanged = %v, want [pkg/db/secrets.go] — a shared tail is not a read", got)
+	}
+
+	// The direction that IS sound: the run works in a mktemp checkout, so a
+	// manifest entry is often the absolute path of a changed file.
+	abs := rcUnopenedChanged([]string{"db/secrets.go"}, []string{"/tmp/tmp.aBc123/db/secrets.go"})
+	if len(abs) != 0 {
+		t.Errorf("an absolute path to the changed file counts as opened, got %v", abs)
+	}
+}
+
 // kai-tui#108 is the specimen: the manifest said "2 of the 4 changed files
 // don't appear below: do_budget.go, do_budget_test.go", and the defect a
 // competitor found was in do_budget.go. The prompt must name the file rather
