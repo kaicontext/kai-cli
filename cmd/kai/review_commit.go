@@ -900,11 +900,20 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			case err2 != nil:
 				fmt.Fprintf(os.Stderr, "  coverage gate failed (%v) — keeping the first review\n", err2)
 			default:
-				// A resumed session's Transcript is the WHOLE conversation
-				// (runner.go seeds history from session.History()), so these
-				// are assignments, not additions. Adding would have counted
-				// the first pass's turns twice and republished the very 2x
-				// overcount this change removes from the manifest.
+				// A resumed session's Transcript is the WHOLE conversation, so
+				// these are assignments, not additions. Adding would have
+				// counted the first pass's turns twice and republished the
+				// very 2x overcount this change removes from the manifest.
+				//
+				// Verified in kai-engine rather than assumed, because the
+				// property lives outside this repo and nothing here can test
+				// it: runner.go's resolveSession loads s.History() as the seed
+				// `hist` on the opts.SessionID path, and res.Transcript is
+				// assigned that same history. res.SessionID is likewise set
+				// whenever a session exists (`if sess != nil { res.SessionID =
+				// sess.ID }`), and the review always passes SessionStore, so
+				// the gate's `res.SessionID != ""` guard is satisfied on every
+				// grounded run rather than silently never firing.
 				inc.Elapsed = time.Since(started)
 				inc.Turns = rcTurns(res2.Transcript)
 				inc.FilesRead = rcMergeFilesRead(inc.FilesRead, rcFilesRead(res2.Transcript, primary.Path))
@@ -916,15 +925,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				// finding. When it is not usable the first review stands and
 				// the fallback below still gets the gate's transcript, so the
 				// files it opened are not lost either.
-				// How the RUN ended is how its LAST pass ended, whether or
-				// not that pass's answer was the one kept. Leaving the first
-				// pass's reason here made the manifest — and the diagnostic
-				// below — describe a pass that was no longer the last thing
-				// to happen.
-				inc.FinishReason = string(res2.FinishReason)
-				if second := strings.TrimSpace(res2.FinalText); rcUsableCoda(second) {
-					raw = second
-				}
+				raw, inc.FinishReason, _ = rcMergeGate(raw, res2.FinalText, string(res2.FinishReason))
 				if still := rcUnopenedChanged(changed, inc.FilesRead); len(still) > 0 {
 					fmt.Fprintf(os.Stderr, "  coverage gate: %d file(s) still unopened\n", len(still))
 				}
@@ -946,7 +947,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// a transcript conclusion. A run that timed out has no usable coda by
 	// construction, so !rcUsableCoda already covers the case the first clause
 	// was there for, without covering the one it should not.
-	if !rcUsableCoda(raw) {
+	if rcNeedsConclusion(raw) {
 		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", inc.FinishReason)
 		if concluded := rcConcludeFromTranscript(ctx, prov, model, transcript); concluded != "" {
 			raw = concluded
@@ -955,11 +956,21 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	return raw, inc, nil
 }
 
-// rcMaxPRDescriptionBytes bounds the pull request half of the author context,
-// so a long description cannot crowd the commit messages out of
-// rcMaxAuthorContextBytes entirely. The control plane already caps what it
-// sends; this is the far end of the same contract.
-const rcMaxPRDescriptionBytes = 6 * 1024
+// rcCommitContextReserve is how much of rcMaxAuthorContextBytes is held back
+// for the commit messages, and rcMaxPRDescriptionBytes is what is left for the
+// description after it and the block's own header.
+//
+// Derived rather than chosen, so the guarantee the comment makes is the
+// guarantee the arithmetic makes. A flat 6KB cap inside an 8KB context left
+// the claim "the description cannot crowd the commits out" true only by
+// accident and only approximately: a near-cap description plus the header
+// left the commits a sliver, and the truncation that took the rest happened
+// somewhere else entirely (rcRunReviewAgent's rcMaxAuthorContextBytes cut).
+const (
+	rcCommitContextReserve  = 2 * 1024
+	rcPRDescriptionHeader   = 256 // the block's own prose, generously rounded
+	rcMaxPRDescriptionBytes = rcMaxAuthorContextBytes - rcCommitContextReserve - rcPRDescriptionHeader
+)
 
 // rcWithPRDescription puts the pull request's own description at the front of
 // the author context.
@@ -1116,6 +1127,40 @@ func rcGateHeadroom(started time.Time) time.Duration {
 	}
 	return left
 }
+
+// rcMergeGate decides what a finished coverage pass changes about the review:
+// the answer to keep, how the run ended, and whether the second answer was the
+// one adopted.
+//
+// It is a function rather than four lines inside rcRunReviewAgent because the
+// two rules in it are the ones that broke, and neither is observable from a
+// test that drives the helpers around it:
+//
+//   - the finish reason belongs to the pass that finished LAST, adopted or
+//     not, or the manifest describes a pass that is no longer the last thing
+//     to have happened;
+//   - a second answer replaces the first only when it is a WHOLE review, or a
+//     pass that ran out of turns mid-write turns a good review into an
+//     incomplete finding.
+//
+// Reverting either rule now fails a test instead of nothing.
+func rcMergeGate(firstRaw, secondRaw, secondFinish string) (raw, finish string, adopted bool) {
+	raw, finish = firstRaw, secondFinish
+	if s := strings.TrimSpace(secondRaw); rcUsableCoda(s) {
+		return s, secondFinish, true
+	}
+	return raw, finish, false
+}
+
+// rcNeedsConclusion reports whether the review still has to be written down.
+//
+// The ANSWER decides, not the finish reason. It used to be "timed out OR no
+// marker", from before rcUsableCoda existed — and once the gate could set the
+// finish reason, a gate that died on the clock fired this branch and
+// overwrote a perfectly good first review with a transcript conclusion. A run
+// that timed out has no usable coda by construction, so this covers the case
+// the timeout clause was there for and not the one it should not.
+func rcNeedsConclusion(raw string) bool { return !rcUsableCoda(raw) }
 
 // rcUsableCoda reports whether a raw answer carries a machine coda the
 // pipeline can actually read, rather than just the line that introduces one.

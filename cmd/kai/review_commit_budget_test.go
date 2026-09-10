@@ -261,3 +261,93 @@ func TestPullRequestDescriptionIsBounded(t *testing.T) {
 		t.Error("a truncated description must say so")
 	}
 }
+
+// The two rules that broke live in rcMergeGate, and neither is observable from
+// a test that drives the helpers around it — which is why they broke twice.
+// Reverting either now fails here.
+func TestMergeGateKeepsTheRightAnswerAndTheRightReason(t *testing.T) {
+	good := "A real review.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: verified\nSUMMARY: fine\n"
+	half := "Ran out of road.\n\n" + rcReviewDataMarker
+	timeBudget := string(message.FinishReasonTimeBudget)
+
+	// The case that overwrote a good review: the gate dies on the clock with
+	// nothing usable. The first answer must stand — and it must not then be
+	// sent to the conclusion fallback, because it is already a whole review.
+	raw, finish, adopted := rcMergeGate(good, half, timeBudget)
+	if adopted || raw != good {
+		t.Error("a half-written second pass must not replace a complete first review")
+	}
+	if finish != timeBudget {
+		t.Errorf("finish = %q, want the LAST pass's reason %q — the manifest describes the run, not the first pass",
+			finish, timeBudget)
+	}
+	if rcNeedsConclusion(raw) {
+		t.Error("a complete first review needs no conclusion call, whatever the gate did")
+	}
+
+	// The ordinary success: the gate wrote a whole review, so it wins.
+	better := "Now with the skipped files.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: partial\nSUMMARY: two gaps\n"
+	raw, finish, adopted = rcMergeGate(good, better, "end_turn")
+	if !adopted || raw != strings.TrimSpace(better) {
+		t.Error("a complete second pass is the review — it read files the first one skipped")
+	}
+	if finish != "end_turn" {
+		t.Errorf("finish = %q, want end_turn", finish)
+	}
+
+	// First pass had nothing, gate had nothing: the fallback has to run, over
+	// the gate's transcript.
+	raw, _, adopted = rcMergeGate("some prose, no coda", half, timeBudget)
+	if adopted {
+		t.Error("half a coda is not an answer")
+	}
+	if !rcNeedsConclusion(raw) {
+		t.Error("neither pass wrote the review down; the conclusion call must fire")
+	}
+}
+
+// rcUsableCoda accepts SUMMARY without INTENT_MATCH, so the parser has to
+// agree that such a coda is readable — otherwise "usable" and "parseable"
+// disagree and the gate adopts something the pipeline mishandles.
+func TestSummaryOnlyCodaSurvivesTheParser(t *testing.T) {
+	raw := "The change is fine.\n\n" + rcReviewDataMarker +
+		"\nSUMMARY: no defects\nISSUES:\n- api/ci.go:12 — a real one\n"
+	if !rcUsableCoda(raw) {
+		t.Fatal("precondition: a SUMMARY-only coda is accepted")
+	}
+	prose, risks, _, match, _, note := rcParseReviewOutput(raw)
+	if strings.TrimSpace(prose) == "" {
+		t.Error("the prose must survive a coda with no INTENT_MATCH")
+	}
+	if len(risks) != 1 {
+		t.Errorf("issues = %v, want the one bullet", risks)
+	}
+	if note == "" {
+		t.Error("SUMMARY should become the bottom line")
+	}
+	// Unknown is the honest value for an intent the reviewer never stated —
+	// and, crucially, prose+issues mean this is not treated as an incomplete
+	// review (that test is prose == "" AND no risks AND match unknown).
+	if match != finding.MatchUnknown {
+		t.Errorf("match = %v, want unknown for an absent INTENT_MATCH", match)
+	}
+}
+
+// The description cap has to leave the commits real room, and the arithmetic
+// rather than a comment has to be what guarantees it.
+func TestAuthorContextReservesRoomForTheCommits(t *testing.T) {
+	if rcMaxPRDescriptionBytes+rcCommitContextReserve+rcPRDescriptionHeader != rcMaxAuthorContextBytes {
+		t.Errorf("the three parts must exactly fill the author context: %d + %d + %d != %d",
+			rcMaxPRDescriptionBytes, rcCommitContextReserve, rcPRDescriptionHeader, rcMaxAuthorContextBytes)
+	}
+	t.Setenv("KAI_PR_TITLE", "big")
+	t.Setenv("KAI_PR_BODY", strings.Repeat("x", rcMaxPRDescriptionBytes*3))
+	commits := strings.Repeat("db: a commit line that must survive uncut\n", 20)
+	got := rcWithPRDescription(commits)
+	if len(got) > rcMaxAuthorContextBytes {
+		t.Errorf("author context is %d bytes, past the %d it will be cut at", len(got), rcMaxAuthorContextBytes)
+	}
+	if !strings.HasSuffix(got, strings.TrimSpace(commits)) {
+		t.Error("the commits must arrive whole, not merely appear")
+	}
+}
