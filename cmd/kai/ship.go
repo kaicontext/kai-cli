@@ -6,7 +6,12 @@ package main
 // path: it generalizes autofix's proven branch → stage-exact-paths →
 // commit → push → PR pipeline for session work, and runs only in a
 // repo with a real git remote. Spawned workspaces (orphan git repos)
-// ship via the kailab publisher instead.
+// ship via the kailab publisher instead — and they do so BY DEFAULT:
+// a registered spawn takes the --server path unless --local is passed
+// (see shipUseServer). Before that default, an agent that committed
+// its work in a spawn and then ran a bare `kai ship` was told "nothing
+// to ship" — the local path only sees dirty files — and gave up
+// (2026-09-10, session de960690).
 //
 // The branch name is the session identity — kai/<workspace> — so
 // concurrent sessions can never contend for a ref, and re-shipping
@@ -43,6 +48,7 @@ var (
 	shipPR      bool
 	shipDryRun  bool
 	shipServer  bool
+	shipLocal   bool
 	shipClean   bool
 )
 
@@ -62,7 +68,13 @@ Identity resolution: --branch wins; else --session names the branch
 kai/s-<first 8>; else the current kai workspace name is used.
 
 Credentials: --token or $GITHUB_TOKEN; --repo or $GITHUB_REPOSITORY
-(else derived from the git remote).`,
+(else derived from the git remote).
+
+Inside a spawned workspace (a session tree registered in ~/.kai/spawned.json)
+the ship goes through the kailab server by default — the spawn has no git
+remote, and its delta is measured against the session baseline, so work the
+agent already committed still ships. Pass --local to force the local git
+path anyway.`,
 	RunE: runShip,
 }
 
@@ -80,7 +92,8 @@ func init() {
 	shipCmd.Flags().BoolVar(&shipPR, "pr", true, "open a pull request after pushing")
 	shipCmd.Flags().BoolVar(&shipDryRun, "dry-run", false, "print the plan without changing anything")
 	shipCmd.Flags().BoolVar(&shipClean, "clean", false, "after a successful --server ship, stash the shipped changes (labeled; `git stash pop` restores) so the working tree returns to pristine main")
-	shipCmd.Flags().BoolVar(&shipServer, "server", false, "publish via the kailab server (GitHub App) instead of local git — required for spawned workspaces; --repo means kai org/repo in this mode")
+	shipCmd.Flags().BoolVar(&shipServer, "server", false, "publish via the kailab server (GitHub App) instead of local git — the default inside a spawned workspace; --repo means kai org/repo in this mode")
+	shipCmd.Flags().BoolVar(&shipLocal, "local", false, "force the local git path (branch, commit, push with your own token) even inside a spawned workspace")
 	rootCmd.AddCommand(shipCmd)
 }
 
@@ -90,13 +103,21 @@ func runShip(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	useServer, err := shipUseServer(cwd, shipServer, shipLocal)
+	if err != nil {
+		return err
+	}
 	branch, err := resolveShipBranch(cwd)
 	if err != nil {
 		return err
 	}
 	sessionID := resolveShipSession(cwd)
 
-	if shipServer {
+	if useServer {
+		if !shipServer {
+			fmt.Fprintln(os.Stderr, "spawned workspace: shipping via the kailab server (pass --local to force local git)")
+			shipServer = true
+		}
 		return runShipServer(cwd, branch, sessionID)
 	}
 
@@ -123,6 +144,9 @@ func runShip(cmd *cobra.Command, args []string) error {
 	}
 	changed := autofix.FilterArtifacts(dirty)
 	if len(changed) == 0 {
+		if shipSpawnEntry(cwd) != nil {
+			return fmt.Errorf("nothing dirty to ship locally — this is a spawned workspace, whose delta (committed work included) ships via the server; drop --local")
+		}
 		return fmt.Errorf("nothing to ship — the working tree has no changes")
 	}
 
@@ -270,18 +294,56 @@ func resolveShipSession(cwd string) string {
 	if shipSession != "" {
 		return shipSession
 	}
-	reg, err := spawnpkg.Load()
-	if err != nil {
-		return ""
-	}
-	resolved, _ := filepath.EvalSymlinks(cwd)
-	for _, e := range reg.Spawned {
-		p, _ := filepath.EvalSymlinks(e.Path)
-		if e.Path == cwd || (resolved != "" && p == resolved) {
-			return e.SessionID
-		}
+	if e := shipSpawnEntry(cwd); e != nil {
+		return e.SessionID
 	}
 	return ""
+}
+
+// shipSpawnEntry returns the spawn registry entry whose path is cwd, or
+// nil when cwd is not a registered spawn. It is THE matcher for every
+// ship decision that hinges on "is this tree a spawn" — the session
+// trailer, the server base, the mode default — so they cannot disagree
+// about which trees are spawns. Symlinks are resolved on both sides:
+// /tmp is a symlink on macOS, and a spawn registered under /private/tmp
+// must still match a cwd spelled /tmp.
+func shipSpawnEntry(cwd string) *spawnpkg.Entry {
+	reg, err := spawnpkg.Load()
+	if err != nil {
+		return nil
+	}
+	resolved, _ := filepath.EvalSymlinks(cwd)
+	for i := range reg.Spawned {
+		e := &reg.Spawned[i]
+		p, _ := filepath.EvalSymlinks(e.Path)
+		if e.Path == cwd || (resolved != "" && p == resolved) {
+			return e
+		}
+	}
+	return nil
+}
+
+// shipUseServer decides which publish path a ship takes. --server and
+// --local are explicit and win; with neither, a registered spawn ships
+// via the server and a plain checkout ships via local git.
+//
+// The default matters more than a flag usually does: a spawn is an
+// orphan repo with no remote, and the local path stages only dirty
+// files, so a spawn whose agent committed its work reads as "nothing to
+// ship" locally while the server path — baseline-vs-tree — sees all of
+// it. Making the agent remember --server was the failure mode; deciding
+// it from the tree removes the thing to remember.
+func shipUseServer(cwd string, server, local bool) (bool, error) {
+	if server && local {
+		return false, fmt.Errorf("--server and --local are mutually exclusive")
+	}
+	if server {
+		return true, nil
+	}
+	if local {
+		return false, nil
+	}
+	return shipSpawnEntry(cwd) != nil, nil
 }
 
 // shipSnapshotHex best-effort resolves the latest kai snapshot for the
