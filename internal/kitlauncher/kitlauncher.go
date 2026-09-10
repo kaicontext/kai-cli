@@ -27,6 +27,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/kaicontext/kai-engine/kaipath"
 )
 
 // Sentinel errors classify resolveKitPath / install outcomes so callers
@@ -151,7 +153,7 @@ func Default() *Launcher {
 	// downloaded to ~/.kai/bin and shadowing it.
 	binDir := os.Getenv("KAI_INSTALL_DIR")
 	if binDir == "" {
-		binDir = filepath.Join(home, ".kai", "bin")
+		binDir = kaipath.UserPath(home, "bin")
 	}
 	return &Launcher{
 		BaseURL:         "https://app.kaicontext.com/dl/",

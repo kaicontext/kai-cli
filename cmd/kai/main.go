@@ -13,6 +13,9 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"kai/internal/config"
+	"kai/internal/kitlauncher"
+	tuierrors "kai/internal/tui/errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,14 +32,8 @@ import (
 	"unicode"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/mattn/go-isatty"
-	"github.com/sergi/go-diff/diffmatchpatch"
-	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
-
 	"github.com/kaicontext/kai-core/diff"
 	"github.com/kaicontext/kai-core/merge"
-
 	"github.com/kaicontext/kai-engine/ai"
 	"github.com/kaicontext/kai-engine/authorship"
 	"github.com/kaicontext/kai-engine/classify"
@@ -64,9 +61,10 @@ import (
 	"github.com/kaicontext/kai-engine/telemetry"
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
-	"kai/internal/config"
-	"kai/internal/kitlauncher"
-	tuierrors "kai/internal/tui/errors"
+	"github.com/mattn/go-isatty"
+	"github.com/sergi/go-diff/diffmatchpatch"
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -168,7 +166,7 @@ var verbose bool
 var authLoginToken string
 
 // updateCheckFile is the path to the cached update check result.
-var updateCheckFile = filepath.Join(os.Getenv("HOME"), ".kai", "update-check.json")
+var updateCheckFile = kaipath.UserPath(os.Getenv("HOME"), "update-check.json")
 
 type updateCheck struct {
 	LatestVersion string `json:"latest_version"`
