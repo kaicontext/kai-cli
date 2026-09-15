@@ -5259,10 +5259,10 @@ func ensureGitBaselineCommit(dir string) (bool, error) {
 	return true, nil
 }
 
-func runInit(cmd *cobra.Command, args []string) error {
+func runInit(cmd *cobra.Command, args []string) (err error) {
 	initColors()
 	te := telemetry.NewEvent("init")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	// Show explain if requested
 	if initExplain {
@@ -6732,9 +6732,9 @@ func acquireCaptureLock(kaiDir string) (func(), error) {
 // (no such process, permission denied — which on macOS also means
 // the process is gone for non-root callers since the PID has been
 // reused or freed).
-func runCapture(cmd *cobra.Command, args []string) error {
+func runCapture(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("capture")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	memstat.Log("capture-start")
 	memstat.LogBurst("capture", 2*time.Second, 3*time.Second, 5*time.Second, 20*time.Second, 30*time.Second)
@@ -7491,9 +7491,9 @@ func createSnapshotFromDir(db *graph.DB, dir string) ([]byte, error) {
 	return snapshotID, nil
 }
 
-func runSnapshot(cmd *cobra.Command, args []string) error {
+func runSnapshot(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("snapshot")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	db, err := openDB()
 	if err != nil {
@@ -9535,12 +9535,11 @@ func getAllTestFiles(files []*graph.Node) []string {
 	return tests
 }
 
-func runCIPlan(cmd *cobra.Command, args []string) error {
+func runCIPlan(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("ci_plan")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	var db *graph.DB
-	var err error
 	var baseSnapshotID, headSnapshotID []byte
 	var changesetID []byte // Track for provenance
 	var changedFiles []string
@@ -13545,9 +13544,9 @@ func parseRelativeDate(s string) time.Time {
 	return time.Time{} // zero value = no filter
 }
 
-func runStatus(cmd *cobra.Command, args []string) error {
+func runStatus(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("status")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	// Check if Kai is initialized
 	if _, err := os.Stat(kaiDir); os.IsNotExist(err) {
@@ -13683,9 +13682,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runDiff(cmd *cobra.Command, args []string) error {
+func runDiff(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("diff")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	db, err := openDB()
 	if err != nil {
@@ -16388,9 +16387,9 @@ func runPush(cmd *cobra.Command, args []string) error {
 	return err
 }
 
-func runPushInner(cmd *cobra.Command, args []string) error {
+func runPushInner(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("push")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	// Show explain if requested
 	if pushExplain {
@@ -17567,9 +17566,9 @@ func hydrateSnapshot(db *graph.DB, client *remote.Client, snapDigest []byte) err
 	return nil
 }
 
-func runFetch(cmd *cobra.Command, args []string) error {
+func runFetch(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("fetch")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	// Show explain if requested
 	if fetchExplain {
@@ -17778,9 +17777,9 @@ func pullTagsAndReviews(db *graph.DB, client *remote.Client, refMgr *ref.RefMana
 	return tags, reviews
 }
 
-func runPull(cmd *cobra.Command, args []string) error {
+func runPull(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("pull")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	db, err := openDB()
 	if err != nil {
@@ -23693,9 +23692,9 @@ func generateCIPlanFromGitRange(gitRange, repoPath string) (*CIPlan, func(), err
 }
 
 // runShadowRun is the main orchestration function for shadow run
-func runShadowRun(cmd *cobra.Command, args []string) error {
+func runShadowRun(cmd *cobra.Command, args []string) (err error) {
 	te := telemetry.NewEvent("shadow_run")
-	defer te.Finish()
+	defer func() { finishCommand(te, err) }()
 
 	fmt.Fprintf(os.Stderr, "Generating CI plan from git range: %s\n", shadowGitRange)
 	plan, cleanup, err := generateCIPlanFromGitRange(shadowGitRange, shadowGitRepo)
