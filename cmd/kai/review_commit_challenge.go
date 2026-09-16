@@ -145,7 +145,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 				if len(calls) != 1 {
 					return "", fmt.Errorf("challenge submitted before its pending experiments completed")
 				}
-				return rcValidateChallenge(call.Input, issues, sources)
+				return rcValidateOrRepairCitation(ctx, prov, model, msgs, resp, call.Input, call.ID, issues, sources)
 			}
 			toolCalls++
 			if sandbox == nil || call.Name != "review_shell" || toolCalls > 4 {
@@ -164,7 +164,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 			results = append(results, tr)
 		}
 		if len(results) == 0 {
-			return rcValidateChallenge(rcResponseText(resp), issues, sources)
+			return rcValidateOrRepairCitation(ctx, prov, model, msgs, resp, rcResponseText(resp), "", issues, sources)
 		}
 		msgs = append(msgs, message.Message{Role: message.RoleAssistant, Parts: resp.Parts}, message.Message{Role: message.RoleUser, Parts: results})
 		if toolCalls == 4 {
@@ -172,6 +172,68 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 		}
 	}
 	return "", fmt.Errorf("challenge ended without a complete answer")
+}
+
+// A citation mismatch is a protocol failure, not proof that the model invented
+// evidence. Keep exact matching, but identify the failed check and allow one
+// resubmission within the ORIGINAL deadline. Never retry semantic uncertainty.
+type rcCitationError struct {
+	Check, Citation, Source, SourceCount int
+	Reason, Quote                        string
+}
+
+func (e *rcCitationError) Error() string {
+	quote := []rune(e.Quote)
+	suffix := ""
+	if len(quote) > 160 {
+		quote, suffix = quote[:160], " (truncated)"
+	}
+	return fmt.Sprintf("challenge citation invalid: check %d, citation %d, source %d (available 1..%d): %s; quote=%q%s", e.Check, e.Citation, e.Source, e.SourceCount, e.Reason, string(quote), suffix)
+}
+
+func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, raw, callID string, issues, sources []string) (string, error) {
+	review, err := rcValidateChallenge(raw, issues, sources)
+	if _, retryable := err.(*rcCitationError); !retryable {
+		return review, err
+	}
+	fmt.Fprintf(os.Stderr, "  %v\n  challenge: requesting one citation correction within the remaining deadline…\n", err)
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("challenge citation correction: %w", ctx.Err())
+	}
+	feedback := err.Error() + "\nCorrect the citation using the numbered sources already provided, then resubmit the COMPLETE answer via submit_review. Quotes must be copied verbatim from their cited source; do not paraphrase, normalize whitespace, or invent evidence. The diagnostic quote may be truncated; the original submitted answer is above. Recheck all citations. Do not treat this validation error as evidence about the allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. All original checks and review consistency requirements still apply. No additional experiments are available. This is the only correction attempt."
+	var correction message.ContentPart = message.TextContent{Text: feedback}
+	if callID != "" {
+		correction = message.ToolResult{ToolCallID: callID, Name: "submit_review", Content: feedback, IsError: true}
+	}
+	retryMsgs := append(append([]message.Message(nil), msgs...), message.Message{Role: message.RoleAssistant, Parts: failed.Parts}, message.Message{Role: message.RoleUser, Parts: []message.ContentPart{correction}})
+	resp, sendErr := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: retryMsgs, Tools: []tools.ToolInfo{rcSubmitReviewToolInfo()}, MaxTokens: 6000})
+	if sendErr != nil {
+		return "", fmt.Errorf("challenge citation correction call: %w", sendErr)
+	}
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("challenge citation correction: %w", ctx.Err())
+	}
+	if resp.FinishReason == message.FinishReasonMaxTokens {
+		return "", fmt.Errorf("challenge citation correction was truncated")
+	}
+	var calls []message.ToolCall
+	for _, part := range resp.Parts {
+		if call, ok := part.(message.ToolCall); ok {
+			calls = append(calls, call)
+		}
+	}
+	answer := rcResponseText(resp)
+	if len(calls) > 0 {
+		if len(calls) != 1 || calls[0].Name != "submit_review" {
+			return "", fmt.Errorf("challenge citation correction must only submit_review")
+		}
+		answer = calls[0].Input
+	}
+	review, err = rcValidateChallenge(answer, issues, sources)
+	if err != nil {
+		return "", fmt.Errorf("challenge citation correction failed: %w", err)
+	}
+	return review, nil
 }
 
 func rcValidateChallenge(raw string, issues, sources []string) (string, error) {
@@ -184,7 +246,7 @@ func rcValidateChallenge(raw string, issues, sources []string) (string, error) {
 		wanted[issue] = true
 	}
 	seen, kept := map[string]bool{}, map[string]bool{}
-	for _, check := range answer.Checks {
+	for checkIndex, check := range answer.Checks {
 		if !wanted[check.Issue] || seen[check.Issue] || strings.TrimSpace(check.Reason) == "" {
 			return "", fmt.Errorf("challenge omitted reasoning, duplicated a check, or checked an unknown issue")
 		}
@@ -195,9 +257,18 @@ func rcValidateChallenge(raw string, issues, sources []string) (string, error) {
 		if len(check.Evidence) == 0 {
 			return "", fmt.Errorf("challenge supplied no evidence")
 		}
-		for _, evidence := range check.Evidence {
-			if evidence.Source < 1 || evidence.Source > len(sources) || strings.TrimSpace(evidence.Quote) == "" || !strings.Contains(sources[evidence.Source-1], evidence.Quote) {
-				return "", fmt.Errorf("challenge cited missing or invented evidence")
+		for citationIndex, evidence := range check.Evidence {
+			reason := ""
+			switch {
+			case evidence.Source < 1 || evidence.Source > len(sources):
+				reason = "source number is out of range"
+			case strings.TrimSpace(evidence.Quote) == "":
+				reason = "quote is empty"
+			case !strings.Contains(sources[evidence.Source-1], evidence.Quote):
+				reason = "quote does not exactly match the cited source"
+			}
+			if reason != "" {
+				return "", &rcCitationError{Check: checkIndex + 1, Citation: citationIndex + 1, Source: evidence.Source, SourceCount: len(sources), Reason: reason, Quote: evidence.Quote}
 			}
 		}
 		if check.Verdict == "supported" {

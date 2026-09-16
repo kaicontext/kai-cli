@@ -14,8 +14,18 @@ issues prevent publication. The original draft is never used as the fallback for
 a failed challenge. Deep reviews emit an incomplete bundle and a nonzero exit;
 fast reviews return an error so the workflow can continue to its deep pass.
 
+A bad citation gets one correction attempt before the challenge fails. The
+diagnostic identifies the check, citation, source number, and whether the source
+is missing, the quote is empty, or its text does not match. It logs an escaped
+quote preview capped at 160 characters, rather than calling every mismatch
+invented evidence. The model receives that diagnostic alongside its original
+answer and the unchanged numbered evidence. It can only resubmit the complete
+review; no additional experiments are available. Every original validation is
+applied again, and a second failure withholds the review. Semantic uncertainty
+(`unverified`) is not a citation error and does not trigger this retry.
+
 This adds a model call when a draft has issues. The challenge has a three-minute
-ceiling; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews
+ceiling, including any citation correction; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews
 may need more context: the conclusion no longer cuts every tool result at 2,000
 characters or retries with only the tail of the conversation. Evidence above a
 1 MiB serialized limit leaves the review incomplete instead of silently removing
