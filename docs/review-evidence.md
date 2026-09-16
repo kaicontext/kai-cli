@@ -1,0 +1,87 @@
+# Checking review findings before publication
+
+`kai review-commit` now challenges proposed defects before returning a review.
+This applies to both the fast pass and the deep review, including reviews written
+by the conclusion fallback. A draft without an `ISSUES` entry skips this step.
+
+The challenge uses a fresh model conversation containing the draft, the original
+review context, and complete successful tool results. It tries to disprove each
+issue, looks for contradictory reasoning, and checks proposed repairs against the
+supported inputs. Each issue must receive a supported or refuted assessment with
+a reason and an exact citation to supplied evidence. Unverified issues, missing
+checks, invented citations, malformed responses, timeouts, and new unchecked
+issues prevent publication. The original draft is never used as the fallback for
+a failed challenge. Deep reviews emit an incomplete bundle and a nonzero exit;
+fast reviews return an error so the workflow can continue to its deep pass.
+
+This adds a model call when a draft has issues. The challenge has a three-minute
+ceiling; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews
+may need more context: the conclusion no longer cuts every tool result at 2,000
+characters or retries with only the tail of the conversation. Evidence above a
+1 MiB serialized limit leaves the review incomplete instead of silently removing
+the source needed to check an allegation.
+
+The challenge is still model judgment. A source citation establishes provenance,
+not proof of behavior, and a second model assessment cannot guarantee correctness.
+The existing finding schema and Atlas citation badges are unchanged by this PR.
+
+## Optional isolated shell experiments
+
+Set `KAI_REVIEW_SANDBOX_IMAGE` to a trusted, **preloaded, digest-pinned** Docker
+image containing `/bin/sh`, for example `registry/review@sha256:<64 hex digits>`.
+The operator provisions that image and Docker access separately. The reviewer
+never pulls an image automatically and never falls back to executing model code
+on the host.
+
+This exposes `review_shell` to the challenge pass. Each experiment uses a new
+container with no network or host mounts, a read-only root filesystem, an
+unprivileged user, all capabilities dropped, and no-new-privileges. Only a 16 MiB
+temporary `/tmp` is writable. Each invocation is limited to five seconds, 32
+processes, 64 MiB memory, half a CPU, and 16 KiB each of stdout/stderr. The Docker
+container is removed on completion, error, cancellation, and timeout. At most
+four experiments are allowed per challenge. Only successful, complete tool
+results can be cited; shell syntax errors are valid observed outcomes.
+
+The tool checks synthetic POSIX shell examples. It does not reproduce the user's
+interactive terminal, a Windows shell, or the application backend. Without the
+configured runtime, the challenge uses supplied source evidence and must leave
+unestablished runtime claims unverified. Deploying this CLI does not automatically
+provision a sandbox in existing review pods.
+
+## Regression checks
+
+Normal unit tests cover publication failure, rejected versus supported claims,
+missing/invented citations, full source preservation, and bounded execution setup:
+
+```sh
+GOWORK=off go test ./cmd/kai -run 'TestReviewChallenge|TestReviewConclusion|TestFastReviewDoesNotPublish|TestReviewSandbox'
+```
+
+To execute the PR #418 examples in the actual restricted container, set the image
+above and run:
+
+```sh
+GOWORK=off KAI_REVIEW_SANDBOX_TEST=1 go test ./cmd/kai -run '^TestReviewSandboxDesktop418$' -count=1 -v
+```
+
+It verifies that a successful `cd` persists across lines, the original heredoc
+works, appending `; }` breaks the heredoc, double-quoted paths expand, and a failed
+`cd` does not guard later independent lines. It also checks container identity,
+read-only root, and the experiment deadline.
+
+The model evaluation is opt-in and incurs usage through the configured Kai
+provider. It is separate from unit tests so a mocked answer is never presented
+as evidence of model quality:
+
+```sh
+GOWORK=off KAI_REVIEW_LIVE_EVAL=1 KAI_REVIEW_EVAL_CONFIG_DIR="$HOME/.kai" \
+  go test ./cmd/kai -run '^TestReviewChallengeLiveDesktop418$' -count=1 -v
+```
+
+This uses the configured sandbox and requires the checker to reject the false
+multiline allegation while retaining the real escaping defect. Use
+`KAI_REVIEW_MODEL` to compare models against the same case.
+
+Review CI runs a pinned Kai image. Merging this CLI change alone does not update
+the production reviewer: rebuild the CI image and update the server's workflow
+image pin as a separate rollout, after the live evaluation passes.
