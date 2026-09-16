@@ -12,7 +12,7 @@ import (
 	"github.com/kaicontext/kai-engine/provider"
 )
 
-// review-commit --fast is the SHALLOW first pass: one model call over the diff,
+// review-commit --fast is the SHALLOW first pass: a model draft over the diff,
 // no agent loop, no graph, no `kai capture`. It exists to land a review inside
 // the ~2 minutes a PR author will actually wait, which the grounded reviewer
 // cannot do and should not try to — its 9m soft budget buys the callers-checked
@@ -25,7 +25,8 @@ import (
 // The fast reviewer therefore starts oriented, and its ISSUES still ground to
 // real path:line through rcGroundIssue, which reads git trees and never the DB.
 //
-// What it gives up, and must say out loud: kai_callers / kai_dependents /
+// Drafts with issues also go through the bounded publication challenge. What
+// this pass gives up, and must say out loud: kai_callers / kai_dependents /
 // kai_context, kai_web_search, and reading any file the diff did not touch.
 //
 // The budget. The CI step is clone -> review -> ingest; with capture skipped
@@ -101,10 +102,11 @@ ISSUES:
 DECISIONS:
 - <what the author is deciding, who it affects, and the consequence — no path:line>`
 
-// rcRunFastReview makes ONE completion over the diff and its git-derived
+// rcRunFastReview drafts over the diff and its git-derived
 // context. No agent loop, no session store, no graph — so it also runs in a
 // repo that was never captured, which is what lets the CI workflow skip the
-// capture step entirely.
+// capture step entirely. Proposed issues are challenged before publication,
+// within the same overall deadline.
 //
 // The separate intent-reconstruction call the slow path makes is deliberately
 // NOT made here: it is a serial round-trip whose only consumer is the review
@@ -189,7 +191,12 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, a
 			out.WriteString(t.Text)
 		}
 	}
-	return strings.TrimSpace(out.String()), nil
+	draft := strings.TrimSpace(out.String())
+	checked, err := rcChallengeReview(cctx, prov, model, draft, []string{user.String()}, rcConfiguredSandbox())
+	if err != nil {
+		return "", fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
+	}
+	return checked, nil
 }
 
 // rcCapFastReadiness enforces the ceiling the prompt states. The prompt is the
