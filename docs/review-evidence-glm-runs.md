@@ -1070,10 +1070,10 @@ call)".
 | bundles emitted | 3/3 | 3/3 |
 | **completed reviews** | **0/3** (all incomplete) | 2/3 |
 | timeouts / rejections | 0 / 0 | 0 / 0 |
-| draft alleged the known defect | **3/3** | 0/3 (one related form) |
+| draft alleged the known defect | **3/3** | **1/3** (attempt 2; corrected — the first version of this table said 0/3) |
 | confirmed defects (known defect `supported`) | **3/3** | 0/3 |
 | missed defects | 0/3 | 3/3 (2 draft omission, 1 challenger) |
-| incorrect verdicts | 0/3 | 0/3 |
+| incorrect verdicts | **1/3** — attempt 3 #1, adjudicated in the review section below (corrected from 0/3) | 0/3 |
 | published readiness | 3, 2, 2 | 4, 2, 4 |
 
 Qualifications on the 3/3: attempt 1's support rests on one of its two
@@ -1110,3 +1110,197 @@ The ones that plausibly acted here:
   the fast path.
 
 Still unmerged; no gate changes were made for or between these attempts.
+
+## Review of the deep-path captures (no new runs; corrections and adjudication)
+
+### Corrections to the section above
+
+1. **Fast draft detection was 1/3, not 0/3.** Fast attempt 2's draft alleged
+   the defect ("return value trusted directly into a shell command via string
+   concatenation"); the challenger reproduced it and did not connect the
+   experiment. Zero were confirmed. The comparison table is corrected.
+2. **"Incorrect verdicts 0/3" was not established.** Attempt 3's #1
+   (missing-directory) finding is adjudicated below as an incorrect verdict
+   with a harmful remedy. Deep incorrect verdicts: **1/3**.
+3. **Sound evidence for the quoting verdict does not validate the other
+   citations.** Attempt 1 accepted an ill-formed citation and attempt 2
+   accepted two reversed-label citations as observations. Both counted; both
+   were wrong; the verdict survived because one other citation was sound.
+   Two of three runs accepted incorrectly interpreted observations.
+
+### 1. Each unresolved allegation against the available source
+
+| attempt / # | allegation | what the source settles | class | why unresolved |
+|---|---|---|---|---|
+| 1 / #2 | the prepended `cd` leaves the persistent shell's cwd changed | Readable from the change itself: line 11's comment declares a *persistent* POSIX sh and line 9 emits `cd X && cmd`. No host context needed. The experiment (source 11: `cd dir && pwd ; echo --- ; pwd` → second `pwd` still in `dir`) **observed exactly this**, but the citation labelled those assertions `intended` and they passed → derived "conformance" → gate turned the model's `supported` into unresolved. | **unsupported classification** — a design consequence of "cd into the workspace" in a persistent terminal, DECISION-shaped, not a defect; and mislabelled evidence | gate downgrade (correct under the rules; the model's own label defeated its own verdict) |
+| 1 / #3 | a failed `cd` **silently** skips the command "with no clear indication of why" | The cited record (source 10) has on its **stderr** `cd: line 1: can't cd to /tmp/testpwned: No such file or directory` (×3). "Silently / no indication" is contradicted by the model's own experiment; it asserted only `exit 0` and never looked at stderr. | **unsupported assumption** (contradicted by the record) | gate downgrade — offered assertion passed |
+| 2 / #2 | the `wsPath ?` guard treats `""` as "no workspace"; whether the host can return `""` is unknowable here | Line 9's behavior on `""` is the pre-change behavior (bare command). Whether `Panels.workspace()` returns `""` is a host property. | **missing context**, speculative input shape; not a defect claim about this repo's code | model's own `unverified` |
+| 2 / #3 | depends on `Panels.workspace()` existing and on the panel writing the string verbatim to POSIX sh | The existence half is refuted by the source (line 8 guards `typeof … === "function"`). The verbatim-write half is the change's own stated premise (line 11 comment) **and the premise of the supported quoting finding** in the same review. | **missing context** — a scope limitation, not an allegation | model's own `unverified` |
+| 3 / #3 | the panel may re-parse or re-quote `command` | Same premise as above; nothing in the repo can settle it. | **missing context** — scope limitation | model's own `unverified` |
+
+**Why each one makes the whole review incomplete.**
+`rcChallengeResult.Incomplete = len(unresolved) > 0`
+(`review_commit_challenge.go:800`), which the CLI turns into
+`incomplete=true`, exit 1, and the "treat the change as _not reviewed_"
+banner. That rule was agreed for allegations whose runtime evidence *could*
+exist and was not obtained. Three of the five unresolved items here can
+**never** be resolved by this reviewer: they are host-contract limitations,
+and the same limitation is the premise the review's own confirmed finding
+rests on. A review that says "confirmed: quoting is unsafe *if* the panel
+writes verbatim; limitation: the panel is outside this repo" is complete as
+far as the repo allows. Filed as allegations, the same content keeps CI red
+on this change forever.
+
+**Where they come from.** The deep drafter is instructed to produce them and
+given nowhere else to put them. `review_commit.go:64`: "If the change's
+correctness rests on something outside your reach, that IS a finding — say
+what you could not see and what breaks if it is false." `review_commit.go:60`
+and `:98` say the opposite ("a finding you would hedge … 'couldn't verify' is
+not a finding — confirm it or drop it"; "a concern you could not verify is
+not a defect"). The conclusion nudge (`review_commit.go:1472`) says "state
+unresolved questions as limitations", but the REVIEW-DATA coda has no
+limitations slot — the parser accepts `issues`/`findings`, `decisions`,
+`intent_match`, `merge_ready`, `summary` (`review_commit.go:1648–1688`) —
+and only ISSUES and DECISIONS reach the challenger. So an out-of-reach
+dependency can survive only as an ISSUE, every ISSUE is an allegation, and
+every unresolvable allegation is an incomplete review. All three deep drafts
+complied with line 64. The fast prompt, by contrast, forbids exactly this
+("depends on", "if X then", "assuming" → not an issue;
+`review_commit_fast.go:75`), which is one reason the fast path completed 2/3
+and the deep path 0/3.
+
+### 2. The missing-directory finding (attempt 3 #1) against the requirement
+
+- **Requirement** (commit subject, in the challenger's SOURCE 1 line 2, and
+  the change's comment): "cd into the workspace before running the command …
+  so the command always runs in the correct directory."
+- **Allegation:** `cd <path> && <command>` "silently aborts the command when
+  the workspace directory is missing or stale, where the old code ran it
+  unconditionally".
+- **What was observed** (source 18): `cd "/bad/missing/path" && echo
+  COMMAND_RAN` → exit 2, empty stdout, stderr `can't cd to /bad/missing/path:
+  No such file or directory`.
+- **Adjudication.** The observed behavior is the requirement's behavior for
+  that case: when the workspace cannot be entered, the command is not run in
+  some other directory. "The old code ran it unconditionally" describes the
+  hazard the change exists to remove, not a regression. "Silently" is
+  contradicted by the recorded stderr. The challenger's `expectation=intended`
+  citation declared `exit 0` and `COMMAND_RAN` — i.e. *running the command
+  anyway* — as the intended behavior, which inverts the requirement. Its own
+  reason concedes reachability is unknown ("depends on whether `workspace()`
+  can return a non-existent path, which is outside this repo"), so it
+  supported a conditional allegation on an unverified condition.
+  **Verdict: incorrect.** Published as "confirmed finding" in a 2/5 review.
+- **Remedy** ("switch to `cd … ; <command>` to preserve unconditional
+  execution"): would run the command in whatever directory the persistent
+  shell was in whenever the workspace is missing — the exact wrong-directory
+  execution the change prevents, and for a destructive command the worst
+  case. "Validate the path before prefixing" duplicates what `cd &&` already
+  does. **Harmful remedy, published.** The gate's only remedy rule is
+  "published iff supported"; remedy content is model-authored and unchecked,
+  as the contract states.
+- Attempt 1's #3 is the same allegation; it ended unresolved only because
+  that citation's offered assertion (`exit 0` on a multi-command script whose
+  last `cd` succeeded) passed. Its withheld remedy ("surface the cd failure
+  to the UI") is harmless.
+- **Mechanism.** The contract verifies that an alleged *behavior* was
+  observed. It has no notion of whether that behavior is contrary to the
+  requirement: "intended" is whatever the challenger declares in the
+  `expectation` label, and nothing relates it to the stated intent that the
+  same challenger had in SOURCE 1 and answered `intent_match: verified` on.
+
+### 3. Why invalid assertions and reversed labels counted toward the quoting verdict
+
+`rcExperimentRecord.observation` (`review_commit_sandbox.go:133–173`) reads
+only three things: the offered indexes, each offered assertion's
+`Passed`, and the `expectation` label. Under `intended`, any offered failure
+is a violation; under `defect`, all-offered-passed is a violation and any
+failure is conformance. `rcResolveCitations` (`review_commit_challenge.go:
+572–588`) then sets `rel.Violation` from that, and `supported` stands when
+`rel.Violation` is true (`:686`). Nothing examines *what* an assertion
+asserts or whether the label matches its content — by design ("relevance,
+coverage, expectation, selection are model judgment — recorded, not
+checkable").
+
+- **Attempt 1, source 9 (ill-formed):** offered assertions 1–3 were
+  `stdout_contains 'cd "/tmp/test$(echo pwned)" && pwd'` etc. — the
+  *command text*, which `pwd`'s output can never contain. They failed for
+  that reason alone; `observation("intended", [1,2,3])` returned
+  `violation`; `rel.Violation` became true on the first citation processed.
+  Source 10's genuine failure (`stdout_contains "/tmp/test"`) made the same
+  bit true again. **Had source 9 been the only citation, an assertion that
+  cannot pass under any behavior would have supported the defect.** The same
+  pattern (asserting stdout contains the command text) appeared in fast
+  attempt 2 at `9a4a1ff` — twice across runs, so it is a GLM habit, not a
+  one-off. The value is a verbatim line of `GeneratedCommand`; this instance
+  is mechanically detectable, though the general class (assertions vacuous
+  for any behavior) is not.
+- **Attempt 2, sources 16/17 (reversed label):** the model wrote assertions
+  encoding the *intended* outcome (`exit 0`; `pwd` equals the literal
+  `` /tmp/ws$dir`whoami` ``) and labelled them `defect`, because it *expected*
+  the defect to show. They failed (exit 2, pwd `/tmp` — the defect showing) →
+  `observation("defect", …)` returned *conformance* "the alleged behavior was
+  not observed". Its own `tested` prose says the opposite ("shell expanded
+  `$dir` and ran `whoami`"). The field name `expectation` invites the reading
+  "what I expect to happen"; the prompt defines it as "what the assertions
+  encode" (`review_commit_challenge.go:44`). Two of three citations were
+  thereby inverted. It did not cost the verdict because source 18 carried a
+  violation and `supported` needs only one. **The same inversion under a
+  `refuted` verdict is the R5-attempt-3 false negative mechanism** (a
+  reproduced defect published as refuted): rule (2) blocks refutation only
+  when *some* citation reports a violation, so a refutation whose every
+  citation is reversed-labelled still passes. That exposure is unchanged.
+
+### The smallest change these findings justify
+
+Ranked by what each finding shows about the *system* (as opposed to the
+model):
+
+- Finding 1 is caused by the reviewer's own instructions: line 64 orders
+  out-of-reach dependencies to be filed as findings, and the coda gives them
+  no other home. Every deep review of a change with an external dependency is
+  therefore incomplete by construction. Deterministic, system-owned, and it
+  decides completion (0/3).
+- Finding 2 is a model judgment the gate cannot adjudicate (what the
+  requirement intends); the gate did what the contract says. What the system
+  can do is stop hiding the premise: the published finding shows neither
+  what was declared "intended" nor which assertions were offered.
+- Finding 3 is a known, documented limit of the contract; the one
+  mechanically detectable instance (an assertion whose value is a line of
+  the generated command) is narrow, and the reversal is not detectable.
+
+**Chosen: route out-of-reach dependencies into a draft `LIMITATIONS` list
+instead of `ISSUES`.** Concretely: the REVIEW-DATA coda accepts
+`LIMITATIONS:` bullets; `review_commit.go:64` and the conclusion nudge send
+"something outside your reach that the change's correctness rests on" there
+(say what could not be seen and what breaks if it is false — same content,
+different slot); the parser carries them, the challenge receives them as
+draft limitations to preserve (not to check), and the assembled review
+publishes them under Limitations verbatim as draft-authored coverage
+statements, the same class as the challenger's scope/limitations. ISSUES
+remain defect allegations about this repo's code. No change to the
+challenge protocol, the evidence rules, the deadline, or retries; a
+limitation is not an allegation and cannot be supported, refuted, or carry a
+remedy.
+
+What it would have done to these captures: attempt 2 → complete, 1 correct
+finding; attempt 3 → complete, but with the incorrect #1 published as
+confirmed (finding 2 is untouched by this change and would then ship in a
+*complete* review — stated plainly); attempt 1 → still incomplete on #2/#3,
+which are gate downgrades of mislabelled evidence, not limitations. It does
+not address findings 2 or 3. Regression: a draft coda whose LIMITATIONS entry
+names a host dependency publishes it under Limitations, produces no
+allegation, and the review is complete; the same sentence under ISSUES still
+becomes an unresolvable allegation.
+
+**Not chosen, and why.** Publishing each supported finding's premise
+(`tested`, offered assertions, label) would make finding 2 auditable but
+not prevent it, and the server drops the `challenge` record, so it would
+reach only the CLI/text output until Atlas renders the structured record.
+Rejecting assertions whose value is a line of the generated command fixes one
+detectable instance of a class that is mostly undetectable. Renaming
+`expectation` to something like `assertions_encode` is a protocol change
+made on n=1 evidence of the misreading. All three are recorded here, not
+made.
+
+**Not implemented.** This is the choice; the code is unchanged at `233e874`.
