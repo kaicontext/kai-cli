@@ -37,3 +37,8 @@ Two earlier runs never reached the model (adjudication-run-1-tls-failed.log:
 Python without a CA bundle; adjudication-run-2-403.log: Cloudflare 1010 on
 the Python user agent) and are kept as logs. case3-exec.sh/.out = the
 hypothetical regressed variant executed in the image for case 3's records.
+adjudication/case5 — case 1 repeated with one sentence added to the
+requirement ("If the workspace cannot be entered, do not execute the command
+in another directory; report the failure."); code, records, allegation,
+remedy, system prompt and model settings identical to case 1 (verified
+against case 1's request). summary-case5.tsv, adjudication-run-case5.log.

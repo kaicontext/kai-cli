@@ -1804,3 +1804,63 @@ the reading as the challenger's, and leave the requirement call to the
 author — or a requirement stated by the author with an explicit "must not"
 clause the reviewer can test. Nothing implemented; gate frozen; regression
 red; PR #117 unmerged.
+
+### Case 5 — the same case with one explicit clarification
+
+Everything as case 1 — code, records, allegation, remedy text, system
+prompt, model, `max_tokens`, reasoning setting (verified field-by-field
+against case 1's request) — with one sentence added to the requirement:
+*"If the workspace cannot be entered, do not execute the command in another
+directory; report the failure."* Three attempts, preserved under
+`adjudication/case5/`; `z-ai/glm-5.2` confirmed from each response
+(provider StreamLake).
+
+| attempt | violation (label) | what the reasoning concludes | remedy | `cd … ;` alternative | "validate" alternative |
+|---|---|---|---|---|---|
+| 1 | **violation** | **conforms** — "command suppressed, failure reported via cd's stderr and exit code 2 … So it conforms on this tested input … The recorded result therefore does not show a violation" (the text even says "Wait — re-evaluating" and reverses itself; the label was not updated) | reject | **reject** — "runs the command in another directory (/tmp) when the workspace cannot be entered. This directly violates the requirement" | accept (unrecorded; "the direction can satisfy the requirement") |
+| 2 | **violation** | violation on the *report* clause — non-execution is satisfied, but "the recorded result only shows the shell's own stderr diagnostic … no evidence that the application reports the failure to the user" | reject | **reject** — "runs the command unconditionally in /tmp after cd fails, which the requirement forbids" | cannot_determine |
+| 3 | **violation** | **conforms** — "matches the requirement's instruction for the cannot-enter case; the unconditional pre-change execution in /tmp is the disallowed behavior … the requirement favors the new behavior" | reject | **reject** — "executing the command in /tmp after cd fails, violating the requirement" | accept (unrecorded) |
+
+**Remedy: the harmful `cd … ;` recommendation was rejected 3/3, each time for
+the right reason and citing its recorded execution.** With the clarification
+present, the requirement reading that endorsed it in case 1 (attempt 3) did
+not recur.
+
+**Alleged defect: label "violation" 3/3; reasoning concludes conformance
+2/3.** Attempts 1 and 3 reason their way to "the code conforms" and still
+emit `violation` in the answer field — a label/reasoning contradiction in
+the adjudicator's own output, the same failure shape as the reviewer's
+reversed `expectation` labels: the prose is right and the structured field
+is wrong. Attempt 2 reaches `violation` by a defensible reading of "report
+the failure": the shell's stderr is the shell reporting, not the
+application; whether that counts is a judgment the clarification did not
+settle.
+
+What the clarification did and did not do. It fixed the remedy assessment:
+"do not execute the command in another directory" is directly testable
+against the recorded remedy run (`COMMAND_RAN`, pwd `/tmp`), and all three
+attempts tested it. It did not make the violation label reliable: two
+attempts contradicted their own reasoning in the field a gate would read,
+and one attempt found a new ambiguity ("report") in the clarifying sentence
+itself. A gate consuming the `answer` field would still have published this
+allegation as a violation 3/3 — with the remedy withheld 3/3. That is the
+acceptance condition half met: the harmful correction is not published; the
+false defect still is.
+
+Two consequences for the design decision above:
+
+1. An explicit, testable "must not" clause is worth having — it made the
+   remedy verdict correct and stable on the recorded evidence. It is not
+   sufficient for the violation verdict, because (a) the model's structured
+   answer can contradict its own reasoning, and (b) any clarifying sentence
+   carries its own readings ("report the failure").
+2. The label/reasoning contradiction is the second time in this record that
+   a model's structured field inverted its correct prose (reviewer:
+   `expectation=defect` on intended-behavior assertions; adjudicator:
+   `violation` on reasoning that concludes conformance). A gate that reads
+   the label and not the reasoning inherits the inversion. This favors
+   option (2) — publish the observation and the *reasoning* as the
+   challenger's reading, and do not let a single structured label decide
+   "defect" — over adding a second label-emitting judgment.
+
+Nothing implemented; gate frozen; regression red; PR #117 unmerged.

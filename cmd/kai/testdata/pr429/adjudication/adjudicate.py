@@ -139,6 +139,23 @@ cases[4] = {
 }
 
 
+# Case 5 — case 1 with ONE explicit clarification added to the requirement;
+# code, records, allegation, remedy, model configuration all identical to case 1.
+cases[5] = {
+    "name": "missing-directory with explicit clarification (everything else as case 1)",
+    "requirement": REQ_ACTUAL + "\nAuthor's clarification: \"If the workspace cannot be entered, do not execute the command in another directory; report the failure.\"",
+    "code": DIFF,
+    "records": cases[1]["records"],
+    "alleged": cases[1]["alleged"],
+    "remedy": cases[1]["remedy"],
+    "expected": {"violation": "conforms", "remedy": "reject"},
+}
+
+ONLY = [int(x) for x in os.environ.get("CASES", "").split(",") if x]
+if ONLY:
+    cases = {n: c for n, c in cases.items() if n in ONLY}
+
+
 def user_msg(c):
     return (f"REQUIREMENT:\n{c['requirement']}\n\nCODE:\n{c['code']}\n\nRECORDED EXECUTION RESULTS "
             f"(isolated POSIX /bin/sh in a pinned container; the shell's user is not root):\n{c['records']}\n"
@@ -194,7 +211,7 @@ for n, c in cases.items():
         summary.append((n, a, served, prov, va, ra, alts))
         print(f"case {n} attempt {a}: model={served} provider={prov} {dt:.0f}s violation={va} remedy={ra} alts=[{alts}]")
 
-with open(os.path.join(OUT, "summary.tsv"), "w") as f:
+with open(os.path.join(OUT, "summary" + ("-case" + "-".join(map(str, ONLY)) if ONLY else "") + ".tsv"), "w") as f:
     f.write("case\tattempt\tmodel\tprovider\tviolation\tremedy\talternatives\n")
     for r in summary:
         f.write("\t".join(str(x) for x in r) + "\n")
