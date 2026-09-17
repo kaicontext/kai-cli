@@ -47,8 +47,8 @@ func rcCDChecks() rcChallengeAnswer {
 	return rcChallengeAnswer{
 		Review: rcTestReview(rcEscapeIssue),
 		Checks: []rcIssueCheck{
-			{Issue: rcFalseCDIssue, Verdict: "refuted", Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, Quote: rcCDSource}}},
-			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "Double quotes still allow parameter expansion.", Evidence: []rcCheckEvidence{{Source: 2, Quote: `cd "$HOME"`}}},
+			{Issue: rcFalseCDIssue, Verdict: "refuted", Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
+			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "Double quotes still allow parameter expansion.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
 		},
 	}
 }
@@ -73,7 +73,11 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 		{"missing check", func(a *rcChallengeAnswer) { a.Checks = a.Checks[:1] }},
 		{"duplicate check", func(a *rcChallengeAnswer) { a.Checks[1] = a.Checks[0] }},
 		{"unverified is not refuted", func(a *rcChallengeAnswer) { a.Checks[0].Verdict = "unverified" }},
-		{"invented quote", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].Quote = "made up output" }},
+		{"line range past the end", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].LineEnd = 99 }},
+		{"line range starting at zero", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].LineStart = 0 }},
+		{"reversed line range", func(a *rcChallengeAnswer) {
+			a.Checks[0].Evidence[0] = rcCheckEvidence{Source: 1, LineStart: 2, LineEnd: 1}
+		}},
 		{"invented source", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].Source = 99 }},
 		{"no evidence", func(a *rcChallengeAnswer) { a.Checks[0].Evidence = nil }},
 		{"unchecked new issue", func(a *rcChallengeAnswer) { a.Review = rcTestReview("new.go:1 — new allegation") }},
@@ -115,7 +119,16 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 		t.Fatalf("sources lost evidence or included speculation: %v", sources)
 	}
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
-		if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Parts[0].(message.TextContent).Text, file) {
+		// Sources reach the challenger rendered with numbered lines, so the
+		// evidence check is that the LAST line of the file is present as its
+		// own numbered line — the 2,000-character cut this guards against would
+		// have dropped it.
+		text := ""
+		if len(req.Messages) == 1 {
+			text = req.Messages[0].Parts[0].(message.TextContent).Text
+		}
+		// Source 2 = the tool-call header line + 500 preamble lines + the last line.
+		if !strings.Contains(text, "SOURCE 2 (502 lines):") || !strings.Contains(text, "  502| critical source at the end") {
 			t.Fatal("challenge did not get full evidence in a fresh conversation")
 		}
 		return provider.Response{}, errors.New("provider failed")
@@ -181,9 +194,87 @@ func TestFastReviewDoesNotPublishDraftWhenChallengeFails(t *testing.T) {
 		}
 		return provider.Response{}, errors.New("challenge unavailable")
 	}}
-	got, err := rcRunFastReview(context.Background(), p, "test", "", "", "test", "", rcCDSource, nil)
+	got, err := rcRunFastReview(context.Background(), p, "test", "test", "", "", "test", "", rcCDSource, nil)
 	if err == nil || got != "" || calls != 2 {
 		t.Fatalf("unchecked fast draft escaped: calls=%d result=%q err=%v", calls, got, err)
+	}
+}
+
+// Configured challenger routing. The fast pass may substitute a non-reasoning
+// model for the DRAFT; the publication challenge must be sent to the
+// configured review model. Before this change the substitute was handed to the
+// challenge too, so every fast-path challenge ran on the draft substitute.
+func TestFastDraftDoesNotSubstituteChallenger(t *testing.T) {
+	var requested []string
+	// The fast pass has ONE source, its own prompt; both checks cite its first
+	// line, so the answer validates and only routing is under test.
+	answer := rcCDChecks()
+	for i := range answer.Checks {
+		answer.Checks[i].Evidence = []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}
+	}
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		requested = append(requested, req.Model)
+		if len(requested) == 1 { // the draft
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestReview(rcFalseCDIssue, rcEscapeIssue)}}}, nil
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, answer)}}}, nil
+	}}
+	got, err := rcRunFastReview(context.Background(), p, "fast-draft-substitute", "configured-review-model", "", "", "test", "", rcCDSource, nil)
+	if err != nil || !strings.Contains(got, rcEscapeIssue) {
+		t.Fatalf("fast review did not publish the checked draft: %q %v", got, err)
+	}
+	if len(requested) != 2 || requested[0] != "fast-draft-substitute" {
+		t.Fatalf("draft was not requested from the fast model: %v", requested)
+	}
+	for _, m := range requested[1:] {
+		if m != "configured-review-model" {
+			t.Fatalf("a challenge request was sent to the draft substitute instead of the review model: %v", requested)
+		}
+	}
+}
+
+// System-extracted citations. The model names a source and a line range; the
+// prompt shows every source with one-based numbered lines; the system copies
+// exactly those lines. No quotation is requested, sent, or compared. This
+// removes the requirement that the model reproduce an excerpt byte-for-byte;
+// it does not check that the extracted lines support the claim.
+func TestReviewCitationIsExtractedBySystem(t *testing.T) {
+	sources := []string{rcCDSource, `cd "$HOME"`}
+	// Rendering and extraction share one coordinate system.
+	if got := rcNumberedSource(1, rcCDSource); got != "SOURCE 1 (2 lines):\n    1| cd /tmp && pwd\n    2| pwd\n" {
+		t.Fatalf("numbered source: %q", got)
+	}
+	if got, _, ok := rcExtractCitation(sources, rcCheckEvidence{Source: 1, LineStart: 2, LineEnd: 2}); !ok || got != "pwd" {
+		t.Fatalf("extract: %q %v", got, ok)
+	}
+	if got, _, ok := rcExtractCitation(sources, rcCheckEvidence{Source: 1, LineStart: 1, LineEnd: 2}); !ok || got != "cd /tmp && pwd\npwd" {
+		t.Fatalf("extract range: %q %v", got, ok)
+	}
+	// The prompt the challenger receives carries the numbered sources, and the
+	// submission schema asks for locations, not quotes.
+	var prompt string
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		prompt = req.Messages[0].Parts[0].(message.TextContent).Text
+		if strings.Contains(rcTestAnswer(t, rcChallengeAnswer{}), "quote") {
+			t.Fatal("answer shape still carries a quote field")
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
+	}}
+	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), sources, nil)
+	if err != nil || !strings.Contains(got, rcEscapeIssue) {
+		t.Fatalf("location citations rejected: %q %v", got, err)
+	}
+	for _, want := range []string{"SOURCE 1 (2 lines):\n    1| cd /tmp && pwd\n    2| pwd\n", "SOURCE 2 (1 line):\n    1| cd \"$HOME\"\n"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks numbered source %q:\n%s", want, prompt)
+		}
+	}
+	schema := rcSubmitReviewToolInfo()
+	if b, _ := json.Marshal(schema.Parameters); strings.Contains(string(b), `"quote"`) || !strings.Contains(string(b), `"line_start"`) {
+		t.Fatalf("schema still asks for quotes: %s", b)
+	}
+	if strings.Contains(rcChallengeSystem, "verbatim excerpt") || !strings.Contains(rcChallengeSystem, "BY LOCATION") {
+		t.Fatal("prompt still asks the model to copy excerpts")
 	}
 }
 

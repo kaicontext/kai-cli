@@ -113,7 +113,12 @@ DECISIONS:
 // prompt, and the fast reviewer can read the commit message itself. The
 // finding's Intent.Stated still comes from the commit subject, exactly as
 // before, so the bundle shape is unchanged.
-func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, authorContext, subject, body, diff string, changedPaths []string) (string, error) {
+//
+// model is the DRAFT model — the fast pass may substitute a non-reasoning model
+// for speed. challengeModel is the configured review model, which the
+// publication challenge must use: the substitution meant for the one-call skim
+// must never silently apply to the gate that decides what is published.
+func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challengeModel, root, authorContext, subject, body, diff string, changedPaths []string) (string, error) {
 	var user strings.Builder
 	if sc := strings.TrimSpace(authorContext); sc != "" {
 		if len(sc) > rcMaxAuthorContextBytes {
@@ -192,7 +197,8 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, a
 		}
 	}
 	draft := strings.TrimSpace(out.String())
-	checked, err := rcChallengeReview(cctx, prov, model, draft, []string{user.String()}, rcConfiguredSandbox())
+	fmt.Fprintf(os.Stderr, "  challenge model: requested %s (draft was requested from %s)\n", challengeModel, model)
+	checked, err := rcChallengeReview(cctx, prov, challengeModel, draft, []string{user.String()}, rcConfiguredSandbox())
 	if err != nil {
 		return "", fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
 	}
