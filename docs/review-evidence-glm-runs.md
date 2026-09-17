@@ -157,3 +157,35 @@ sequence above is one attempt per revision, not repeated attempts of the same
 revision, so it says nothing about the pass rate of any single revision. To
 claim reliability for the current revision, run it repeatedly (N runs, no
 changes between them) and report the pass rate and each attempt's outcome.
+
+## End-to-end CLI run — #429 scratch repo, first attempt, code at `fae62b5`
+
+Command: `kai review-commit c478d2f --format json` inside a scratch repo whose
+HEAD commit is the real #429 change (`'cd ' + JSON.stringify(wsPath) + ' && '`),
+with `KAI_REVIEW_MODEL=z-ai/glm-5.2` and the Node sandbox.
+
+```
+z-ai/glm-5.2 is a reasoning model (hidden chain-of-thought); fast pass uses anthropic/claude-haiku-4-5 — override with KAI_FAST_MODEL
+fast pass: one call over the diff, no graph (model anthropic/claude-haiku-4-5, budget 1m40s)…
+challenge: shell experiment 1
+Error: fast review challenge incomplete (unchecked draft withheld): invalid challenge JSON:
+  json: cannot unmarshal string into Go struct field rcChallengeAnswer.checks of type []main.rcIssueCheck
+EXIT=1   (stdout empty — no bundle emitted)
+```
+
+Facts, stated separately:
+
+- **Draft author ≠ challenger on the fast path.** `rcFastModel` substitutes a
+  non-reasoning model (`claude-haiku-4-5`) for the one-call fast draft when the
+  review model is a reasoning model. The challenge itself ran on GLM-5.2.
+- **GLM's `submit_review` call was structurally malformed:** the `checks` field
+  was a JSON string, not an array. This is a schema-shape violation, distinct
+  from the prose non-submission of #418 attempt 2.
+- **Gate outcome:** failed closed. On the fast path a challenge failure emits
+  **no bundle** and exits 1 (documented: the workflow continues to `--deep`).
+  The "partial results reach the emitted bundle" property could not be observed
+  here because the answer had no validated results at all.
+- **Not captured:** the raw malformed submission. Only a prose non-submission's
+  head is logged at this revision; an unparseable `submit_review` payload is not.
+
+No code was changed before this record was written.
