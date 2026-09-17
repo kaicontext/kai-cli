@@ -135,7 +135,7 @@ func TestReviewChallengeRuntimeClaimPublishesWithExperiment(t *testing.T) {
 		MergeReady:  3,
 		Checks:      []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "runtime", Finding: "Expands.", Remedy: "Escape the path.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}}},
 	}
-	passing := map[int]*rcExperimentRecord{2: {Mode: "construct", HasAssertions: true, AllPassed: true,
+	passing := map[int]*rcExperimentRecord{2: {Outcome: rcOutcomeCompleted, Mode: "construct", HasAssertions: true, AllPassed: true,
 		Assertions: []rcAssertionResult{{Kind: "pwd_not", Value: "/tmp/a$HOME", Passed: true, Observed: "/tmp/a"}}}}
 	res, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcEscapeIssue}, nil, []string{`cd "$HOME"`, "expansion observed"}, passing)
 	if err != nil {
@@ -163,7 +163,7 @@ func TestReviewChallengeRuntimeVerdictRequiresPassingAssertions(t *testing.T) {
 	}
 	sources := []string{`cd "$HOME"`, "experiment output"}
 	// No assertions: a printout is not evidence of behavior.
-	res, err := rcValidateChallenge(rcTestAnswer(t, answer("refuted")), []string{rcEscapeIssue}, nil, sources, map[int]*rcExperimentRecord{2: {Mode: "script", HasAssertions: false}})
+	res, err := rcValidateChallenge(rcTestAnswer(t, answer("refuted")), []string{rcEscapeIssue}, nil, sources, map[int]*rcExperimentRecord{2: {Outcome: rcOutcomeCompleted, Mode: "script", HasAssertions: false}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestReviewChallengeRuntimeVerdictRequiresPassingAssertions(t *testing.T) {
 		t.Fatalf("unasserted experiment backed a refutation: %+v", r)
 	}
 	// A failed path-equality assertion cannot support "this quoting is safe".
-	failed := map[int]*rcExperimentRecord{2: {Mode: "construct", HasAssertions: true, AllPassed: false,
+	failed := map[int]*rcExperimentRecord{2: {Outcome: rcOutcomeCompleted, Mode: "construct", HasAssertions: true, AllPassed: false,
 		Assertions: []rcAssertionResult{{Kind: "pwd", Value: "/tmp/test$dir", Passed: false, Observed: "/tmp"}}}}
 	res, err = rcValidateChallenge(rcTestAnswer(t, answer("refuted")), []string{rcEscapeIssue}, nil, sources, failed)
 	if err != nil {
@@ -186,12 +186,64 @@ func TestReviewChallengeRuntimeVerdictRequiresPassingAssertions(t *testing.T) {
 	}
 }
 
+// Item 1 of the evidence contract: every experiment attempt is recorded, and
+// "could not run" is distinct from "ran and the expected behavior failed".
+// A not-run attempt has no observation and is never a citable source; a
+// completed attempt whose assertion failed IS an observation — expected vs
+// observed — and is preserved as such. The verdict rule is unchanged here.
+func TestExperimentRecordDistinguishesNotRunFromFailedAssertion(t *testing.T) {
+	// Could not run: parameter validation fails before any container is used.
+	sb := &rcShellSandbox{image: "x@sha256:" + strings.Repeat("0", 64)}
+	rec, err := sb.runExperiment(context.Background(), `{"script":"pwd","assertions":[{"kind":"exit","value":"0"}]}`)
+	if err == nil || rec == nil || rec.Outcome != rcOutcomeNotRun || rec.Error == "" || rec.completed() || rec.qualifies() {
+		t.Fatalf("not-run attempt not recorded as such: rec=%+v err=%v", rec, err)
+	}
+	if !strings.Contains(rec.render(sb.image), "could not run") || !strings.Contains(rec.disqualifyReason(), "did not run") {
+		t.Fatalf("not-run record does not say so: %s", rec.render(sb.image))
+	}
+	// Ran, expectation failed: a valid observation, distinct from the above.
+	failed := &rcExperimentRecord{Outcome: rcOutcomeCompleted, Mode: "construct", ObservedPWD: "/tmp", ExitCode: 2}
+	failed.evaluate([]rcAssertion{{Kind: "pwd", Value: "/tmp/test$dir"}})
+	if !failed.completed() || failed.qualifies() || failed.Assertions[0].Passed || failed.Assertions[0].Observed != "/tmp" {
+		t.Fatalf("completed-but-failed experiment not recorded as an observation: %+v", failed)
+	}
+	if !strings.Contains(failed.render("img"), `FAIL pwd "/tmp/test$dir" (observed "/tmp")`) {
+		t.Fatalf("failed assertion not rendered as expected-vs-observed: %s", failed.render("img"))
+	}
+	// Through the challenge: a not-run attempt is preserved on the result at
+	// source 0 (uncitable), and does not sink the review.
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "e1", Name: "review_shell", Input: `{"script":"pwd","assertions":[{"kind":"exit","value":"0"}]}`}}}, nil
+		}
+		last := req.Messages[len(req.Messages)-1].Parts[0].(message.ToolResult)
+		if !last.IsError || !strings.Contains(last.Content, "could not run") {
+			t.Fatalf("model not told the experiment produced no observation: %+v", last)
+		}
+		a := rcChallengeAnswer{Scope: []string{"x"}, IntentMatch: "partial", MergeReady: 4,
+			Checks: []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "experiment could not run"}}}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, sb)
+	if err != nil {
+		t.Fatalf("a not-run experiment sank the review: %v", err)
+	}
+	if len(res.Experiments) != 1 || res.Experiments[0].Source != 0 || res.Experiments[0].Record.Outcome != rcOutcomeNotRun {
+		t.Fatalf("not-run attempt not preserved on the result at source 0: %+v", res.Experiments)
+	}
+	if !res.Incomplete || res.Allegations[0].Status != "unresolved" {
+		t.Fatalf("expected unresolved + incomplete: %+v", res.Allegations[0])
+	}
+}
+
 // Pure tests of the fidelity-mode record: parsing the driver's output and
 // evaluating assertions against it.
 func TestExperimentRecordParsesConstructOutputAndEvaluates(t *testing.T) {
 	out := rcGenBegin + "\n" + `cd "/tmp/test$dir" && pwd && echo REACHED` + "\n" + rcGenEnd + "\n" +
 		rcRunBegin + "\n" + "sh: cd: can't cd\n" + rcExitMarker + "2\n" + rcPWDMarker + "/tmp\n"
-	rec := &rcExperimentRecord{Mode: "construct"}
+	rec := &rcExperimentRecord{Outcome: rcOutcomeCompleted, Mode: "construct"}
 	if err := rec.parseConstructOutput(out); err != nil {
 		t.Fatal(err)
 	}

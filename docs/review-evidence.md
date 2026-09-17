@@ -142,11 +142,31 @@ metacharacters. Three changes address exactly that, and nothing broader:
   exactly that behavior. Implementation is paused; this is recorded as a known
   flaw of the rule, not fixed here.
 
-**The complete experiment record is preserved:** mode, setup, construct,
-generated command, exit code, observed working directory, stdout, stderr, and
-each assertion with its observed value travel in the challenge result and the
-emitted bundle (`challenge.experiments`, keyed by the source number the
-verdicts cite). Only the console summary is bounded.
+**Every experiment attempt is recorded, regardless of outcome.** Each record
+carries an `outcome`: `completed` — it ran, and its observations and assertion
+results are valid whether or not the assertions passed — or `not_run` — it
+could not run, `error` says why, and no observation exists. The distinction is
+deliberate: a completed experiment whose assertion failed is an observation
+("expected X, observed Y") and can be useful evidence; a not-run attempt is
+not evidence of anything. Not-run attempts are preserved on the result at
+source 0 (uncitable) so the record shows the attempt and its reason. Mode,
+setup, construct, generated command, exit code, observed working directory,
+stdout, stderr, and each assertion's expected and observed values travel in
+the challenge result and the emitted bundle (`challenge.experiments`). Only
+the console summary is bounded.
+
+**Regression tests for the #429 defect over the actual source.**
+`cmd/kai/review_commit_pr429_test.go` reads the real construction statement
+from `testdata/pr429/app.js.excerpt` (copied verbatim from the PR head; see
+`PROVENANCE`), locates it by text, and evaluates *that* statement under node
+with `wsPath` bound to literal inputs — a plain path, a space, a double quote,
+a single quote, `$HOME`, `$(id -u)`, a backtick — and `command` bound to
+`pwd`. The harness executes the generated command unchanged and verifies the
+observed working directory. Expected results are explicit per input: space and
+quotes reach the intended directory; `$`, `$(…)` and backtick do not. Those
+failed directory-equality assertions are the defect observations. These are
+regression tests for this defect, not a universal review solution, and they
+change no verdict logic.
 
 This does not make review correctness general, and it did **not** close the
 demonstrated failure. What is established: the generated string is executed

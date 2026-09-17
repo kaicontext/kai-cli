@@ -33,13 +33,13 @@ func rcConfiguredSandbox() *rcShellSandbox {
 // Two modes. "script" is a free-form exploration: it runs and its output is
 // shown, but it carries no assertions and therefore cannot back a runtime
 // verdict. "construct" is the fidelity mode: the model supplies the CODE that
-// builds the command — the same construction the code under review performs —
-// and the harness feeds the generated string verbatim into /bin/sh, records
-// the generated command, exit status, stdout, stderr and the observed working
-// directory, and evaluates the model's explicit assertions. The model never
-// hand-types or "equivalently" escapes the command; the observed failure was
-// exactly that. A runtime verdict may cite only an experiment whose
-// assertions all passed.
+// builds the command, and the harness feeds the generated string verbatim into
+// /bin/sh, records the generated command, exit status, stdout, stderr and the
+// observed working directory, and evaluates the model's explicit assertions.
+// What this enforces is narrow: the model cannot alter the string between its
+// own construction and execution. The construction code is still
+// model-authored, and nothing here verifies it matches the source under
+// review.
 func rcShellToolInfo() tools.ToolInfo {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	assertion := map[string]any{"type": "object", "properties": map[string]any{
@@ -66,7 +66,9 @@ type rcAssertion struct {
 	Value string `json:"value"`
 }
 
-// rcAssertionResult is the harness's evaluation of one assertion.
+// rcAssertionResult is the harness's evaluation of one assertion: the
+// expectation, and what was actually observed. A failed assertion is an
+// observation in its own right — "expected X, observed Y" — not an error.
 type rcAssertionResult struct {
 	Kind     string `json:"kind"`
 	Value    string `json:"value"`
@@ -74,12 +76,23 @@ type rcAssertionResult struct {
 	Observed string `json:"observed"`
 }
 
-// rcExperimentRecord is the COMPLETE record of one experiment: what was asked,
-// what was generated, what ran, what came out, and what each assertion showed.
-// It is kept whole in the challenge result and the bundle; only the console
-// summary is bounded.
+// Outcome values. The distinction is the point: a NOT-RUN experiment produced
+// no observation and is not evidence of anything; a COMPLETED experiment is an
+// observation regardless of whether its assertions passed. Both are recorded.
+const (
+	rcOutcomeCompleted = "completed" // it ran; observations and assertion results are valid
+	rcOutcomeNotRun    = "not_run"   // it could not run; Error says why; no observation exists
+)
+
+// rcExperimentRecord is the COMPLETE record of one experiment attempt: what
+// was asked, whether it ran, what was generated, what came out, and what each
+// assertion showed. Every attempt is recorded — including ones that could not
+// run, and ones whose assertions failed. It is kept whole in the challenge
+// result and the bundle; only the console summary is bounded.
 type rcExperimentRecord struct {
-	Mode             string              `json:"mode"` // script | construct
+	Outcome          string              `json:"outcome"` // completed | not_run
+	Error            string              `json:"error,omitempty"`
+	Mode             string              `json:"mode,omitempty"` // script | construct
 	Script           string              `json:"script,omitempty"`
 	Setup            string              `json:"setup,omitempty"`
 	Construct        string              `json:"construct,omitempty"`
@@ -93,18 +106,28 @@ type rcExperimentRecord struct {
 	AllPassed        bool                `json:"allPassed"`
 }
 
-// qualifies reports whether this experiment can back a runtime verdict: it
-// declared at least one assertion and every assertion passed.
+// completed reports whether the experiment actually ran and its observations
+// are valid — irrespective of assertion results.
+func (r *rcExperimentRecord) completed() bool { return r != nil && r.Outcome == rcOutcomeCompleted }
+
+// qualifies is the CURRENT gate rule for citing an experiment in support of a
+// runtime verdict: it ran, declared at least one assertion, and every assertion
+// passed. This rule is known to be too strong — a completed experiment whose
+// assertion failed can itself demonstrate an alleged behavior — and its
+// revision is paused pending review of the evidence contract. The record
+// preserves the observation either way.
 func (r *rcExperimentRecord) qualifies() bool {
-	return r != nil && r.HasAssertions && r.AllPassed
+	return r.completed() && r.HasAssertions && r.AllPassed
 }
 
-// disqualifyReason says, precisely, why a cited experiment cannot back a
-// verdict — so the unresolved reason names the failed expectation rather than
-// a generic "no experiment".
+// disqualifyReason says, precisely, why a cited experiment does not meet the
+// current rule — naming the failed expectation and its observed value.
 func (r *rcExperimentRecord) disqualifyReason() string {
 	if r == nil {
 		return "no experiment"
+	}
+	if !r.completed() {
+		return "the cited experiment did not run: " + r.Error
 	}
 	if !r.HasAssertions {
 		return "the cited experiment declared no assertions (an unasserted printout cannot establish behavior)"
@@ -121,7 +144,12 @@ func (r *rcExperimentRecord) disqualifyReason() string {
 // in a fixed layout, so a cited line range points at real observed output.
 func (r *rcExperimentRecord) render(image string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Runtime: %s /bin/sh (non-interactive, isolated)\nMode: %s\n", image, r.Mode)
+	fmt.Fprintf(&b, "Runtime: %s /bin/sh (non-interactive, isolated)\nOutcome: %s\n", image, r.Outcome)
+	if !r.completed() {
+		fmt.Fprintf(&b, "The experiment could not run: %s\nNo observation was produced; this is not evidence of any behavior.\n", r.Error)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "Mode: %s\n", r.Mode)
 	if r.Mode == "script" {
 		fmt.Fprintf(&b, "Script:\n%s\n", r.Script)
 	} else {
@@ -136,7 +164,7 @@ func (r *rcExperimentRecord) render(image string) string {
 	}
 	fmt.Fprintf(&b, "stdout:\n%s\nstderr:\n%s\n", r.Stdout, r.Stderr)
 	if r.HasAssertions {
-		b.WriteString("Assertions:\n")
+		b.WriteString("Assertions (each is an observation — expected vs observed):\n")
 		for _, a := range r.Assertions {
 			mark := "PASS"
 			if !a.Passed {
@@ -151,11 +179,13 @@ func (r *rcExperimentRecord) render(image string) string {
 	return b.String()
 }
 
-// summary is the bounded console line set: enough for an operator to see what
-// ran and what the assertions showed, without the full transcript.
+// summary is the bounded console line set.
 func (r *rcExperimentRecord) summary() string {
+	if !r.completed() {
+		return fmt.Sprintf("outcome=%s error=%q", r.Outcome, rcTruncate(r.Error, 200))
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "mode=%s exit=%d", r.Mode, r.ExitCode)
+	fmt.Fprintf(&b, "outcome=%s mode=%s exit=%d", r.Outcome, r.Mode, r.ExitCode)
 	if r.Mode == "construct" {
 		fmt.Fprintf(&b, " generated=%q pwd=%q", rcTruncate(r.GeneratedCommand, 160), r.ObservedPWD)
 	}
@@ -244,65 +274,70 @@ func rcConstructDriver(p rcExperimentParams) string {
 	b.WriteString("\n__KAI_CONSTRUCT_EOF__\n")
 	b.WriteString("node /tmp/__kai_construct.js > /tmp/__kai_generated.cmd 2> /tmp/__kai_construct.err || { printf '__KAI_CONSTRUCT_FAILED__\\n'; cat /tmp/__kai_construct.err; exit 97; }\n")
 	fmt.Fprintf(&b, "printf '%s\\n'; cat /tmp/__kai_generated.cmd; printf '\\n%s\\n'\n", rcGenBegin, rcGenEnd)
-	// run.sh = the generated command verbatim, then the probes. The probe text
-	// is written with single-quoted printf so $? / $PWD are evaluated only when
-	// run.sh executes.
 	b.WriteString("{ cat /tmp/__kai_generated.cmd; printf '\\n__KAI_RC__=$?\\nprintf \"" + rcExitMarker + "%%s\\\\n" + rcPWDMarker + "%%s\\\\n\" \"$__KAI_RC__\" \"$PWD\"\\n'; } > /tmp/__kai_run.sh\n")
 	fmt.Fprintf(&b, "printf '%s\\n'\n", rcRunBegin)
 	b.WriteString("sh /tmp/__kai_run.sh\n")
 	return b.String()
 }
 
-// runExperiment executes one experiment and returns its complete record.
-// Harness-level failures (bad parameters, Docker unavailable, timeout,
-// truncated output, a construct that did not produce a command) return an
-// error: an experiment that could not be fully recorded is not evidence.
+// runExperiment executes one experiment and returns its record. Every attempt
+// yields a record: on a harness-level failure (bad parameters, Docker
+// unavailable, timeout, truncated output, a construct that produced no
+// command) the record's Outcome is not_run with the reason, AND an error is
+// returned so the caller can tell the model no observation exists. A record
+// with Outcome completed is a valid observation whether or not its assertions
+// passed.
 func (s *rcShellSandbox) runExperiment(ctx context.Context, input string) (*rcExperimentRecord, error) {
+	rec := &rcExperimentRecord{Outcome: rcOutcomeNotRun}
+	notRun := func(format string, args ...any) (*rcExperimentRecord, error) {
+		err := fmt.Errorf(format, args...)
+		rec.Error = err.Error()
+		return rec, err
+	}
 	var p rcExperimentParams
 	if err := json.Unmarshal([]byte(input), &p); err != nil {
-		return nil, fmt.Errorf("experiment parameters are not valid JSON")
+		return notRun("experiment parameters are not valid JSON")
 	}
-	rec := &rcExperimentRecord{}
 	var program string
 	switch {
 	case strings.TrimSpace(p.Construct) != "":
+		rec.Mode, rec.Setup, rec.Construct = "construct", p.Setup, p.Construct
 		if len(p.Construct) > 4096 || len(p.Setup) > 4096 || len(p.Assertions) > 8 {
-			return nil, fmt.Errorf("fidelity experiment limits: construct and setup ≤ 4096 bytes, at most 8 assertions")
+			return notRun("fidelity experiment limits: construct and setup ≤ 4096 bytes, at most 8 assertions")
 		}
 		for _, a := range p.Assertions {
 			switch a.Kind {
 			case "exit", "stdout_contains", "stdout_not_contains", "pwd", "pwd_not":
 			default:
-				return nil, fmt.Errorf("unknown assertion kind %q", a.Kind)
+				return notRun("unknown assertion kind %q", a.Kind)
 			}
 		}
-		rec.Mode, rec.Setup, rec.Construct = "construct", p.Setup, p.Construct
 		program = rcConstructDriver(p)
 	case len(p.Script) > 0:
+		rec.Mode, rec.Script = "script", p.Script
 		if len(p.Script) > 8192 {
-			return nil, fmt.Errorf("experiment needs a script of 1–8192 bytes")
+			return notRun("experiment needs a script of 1–8192 bytes")
 		}
 		if len(p.Assertions) > 0 {
-			return nil, fmt.Errorf("assertions require fidelity mode (construct); a free-form script cannot be asserted")
+			return notRun("assertions require fidelity mode (construct); a free-form script cannot be asserted")
 		}
-		rec.Mode, rec.Script = "script", p.Script
 		program = p.Script
 	default:
-		return nil, fmt.Errorf("experiment needs either a script or a construct")
+		return notRun("experiment needs either a script or a construct")
 	}
 
 	var id [12]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		return nil, err
+		return notRun("%v", err)
 	}
 	name := "kai-review-" + hex.EncodeToString(id[:])
 	args, err := rcSandboxArgs(s.image, name)
 	if err != nil {
-		return nil, err
+		return notRun("%v", err)
 	}
 	docker, err := exec.LookPath("docker")
 	if err != nil {
-		return nil, fmt.Errorf("Docker is unavailable; host execution is disabled")
+		return notRun("Docker is unavailable; host execution is disabled")
 	}
 	// Killing the Docker client does not necessarily stop its container.
 	// Remove by our random name on every exit, including timeout/cancellation.
@@ -322,36 +357,37 @@ func (s *rcShellSandbox) runExperiment(ctx context.Context, input string) (*rcEx
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
 	if runctx.Err() != nil {
-		return nil, fmt.Errorf("experiment did not finish: %w", runctx.Err())
+		return notRun("experiment did not finish: %v", runctx.Err())
 	}
 	containerExit := 0
 	if err != nil {
 		exit, ok := err.(*exec.ExitError)
 		if !ok {
-			return nil, fmt.Errorf("experiment could not execute: %w", err)
+			return notRun("experiment could not execute: %v", err)
 		}
 		containerExit = exit.ExitCode()
 		if containerExit < 0 || containerExit >= 125 {
-			return nil, fmt.Errorf("container/runtime unavailable (exit %d): %s", containerExit, stderr.String())
+			return notRun("container/runtime unavailable (exit %d): %s", containerExit, stderr.String())
 		}
 	}
 	if stdout.truncated || stderr.truncated {
-		return nil, fmt.Errorf("experiment exceeded the output limit; incomplete output is not evidence")
+		return notRun("experiment exceeded the output limit; incomplete output is not evidence")
 	}
 	rec.Stderr = stderr.String()
 	if rec.Mode == "script" {
-		rec.ExitCode, rec.Stdout = containerExit, stdout.String()
+		rec.Outcome, rec.ExitCode, rec.Stdout = rcOutcomeCompleted, containerExit, stdout.String()
 		return rec, nil
 	}
 	if containerExit == 96 {
-		return nil, fmt.Errorf("fidelity experiment: setup failed: %s", strings.TrimSpace(stdout.String()+stderr.String()))
+		return notRun("fidelity experiment: setup failed: %s", strings.TrimSpace(stdout.String()+stderr.String()))
 	}
 	if containerExit == 97 {
-		return nil, fmt.Errorf("fidelity experiment: construct did not produce a command (is node available in the sandbox image?): %s", strings.TrimSpace(stdout.String()))
+		return notRun("fidelity experiment: construct did not produce a command (is node available in the sandbox image?): %s", strings.TrimSpace(stdout.String()))
 	}
 	if err := rec.parseConstructOutput(stdout.String()); err != nil {
-		return nil, err
+		return notRun("%v", err)
 	}
+	rec.Outcome = rcOutcomeCompleted
 	rec.evaluate(p.Assertions)
 	return rec, nil
 }
@@ -384,7 +420,9 @@ func (r *rcExperimentRecord) parseConstructOutput(out string) error {
 	return nil
 }
 
-// evaluate applies the declared assertions to the recorded outcome.
+// evaluate applies the declared assertions to the recorded outcome. Each
+// result records the expectation and the observed value; a failure is an
+// observation, not an error.
 func (r *rcExperimentRecord) evaluate(assertions []rcAssertion) {
 	r.HasAssertions = len(assertions) > 0
 	r.AllPassed = r.HasAssertions
@@ -416,7 +454,7 @@ func (r *rcExperimentRecord) evaluate(assertions []rcAssertion) {
 }
 
 // run keeps the original text-returning entry point for callers and tests that
-// only need the rendered source.
+// only need the rendered source of a completed experiment.
 func (s *rcShellSandbox) run(ctx context.Context, input string) (string, error) {
 	rec, err := s.runExperiment(ctx, input)
 	if err != nil {

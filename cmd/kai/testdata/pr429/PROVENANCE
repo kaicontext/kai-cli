@@ -1,0 +1,9 @@
+repo:   kaicontext/kai-desktop
+pr:     #429 "fix: prefix play-button commands with cd into the workspace" (OPEN at time of copy)
+ref:    8a0662e58f18e1f6eb1e59d0be8bfe4da18ee486 (PR head)
+path:   frontend/dist/app.js
+lines:  447-453
+copied: verbatim via `sed -n '447,453p'` from the file fetched with
+        gh api -H 'Accept: application/vnd.github.raw' repos/kaicontext/kai-desktop/contents/frontend/dist/app.js?ref=8a0662e5…
+        Not retyped. The test locates the construction statement inside this
+        excerpt by its text and fails if it is not found, so drift is visible.

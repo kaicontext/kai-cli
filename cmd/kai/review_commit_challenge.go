@@ -314,6 +314,19 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	// original run's tool output cannot, an experiment the model merely says it
 	// ran cannot, and an unasserted printout cannot.
 	experiments := map[int]*rcExperimentRecord{}
+	// notRun records every experiment attempt that could not run. They are not
+	// sources (nothing was observed, so nothing can be cited), but they are
+	// preserved on the result so the record shows the attempt and its reason,
+	// distinct from a completed experiment whose assertions failed.
+	var notRun []rcExperimentRecord
+	finish := func(res *rcChallengeResult, err error) (*rcChallengeResult, error) {
+		if res != nil {
+			for _, r := range notRun {
+				res.Experiments = append(res.Experiments, rcExperimentSource{Source: 0, Record: r})
+			}
+		}
+		return res, err
+	}
 	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}}
 	available := []tools.ToolInfo{rcSubmitReviewToolInfo()}
 	if sandbox != nil {
@@ -350,7 +363,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 			call := calls[0]
 			res, err := rcValidateChallenge(call.Input, issues, decisions, sources, experiments)
 			if err == nil || !errors.Is(err, errRCMalformedAnswer) || nudged {
-				return res, err
+				return finish(res, err)
 			}
 			nudged = true
 			fmt.Fprintf(os.Stderr, "  challenge: submit_review payload could not be parsed (%v) — nudging once to resubmit\n%s\n", err, rcIndentBounded(call.Input, 12))
@@ -386,8 +399,12 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 			rec, err := sandbox.runExperiment(ctx, call.Input)
 			tr := message.ToolResult{ToolCallID: call.ID, Name: call.Name}
 			if err != nil {
-				tr.Content = "Experiment unavailable: " + err.Error()
+				tr.Content = "Experiment could not run (no observation was produced; this is not evidence): " + err.Error()
 				tr.IsError = true
+				if rec != nil {
+					notRun = append(notRun, *rec)
+					fmt.Fprintf(os.Stderr, "  challenge: experiment %d could not run: %s\n", toolCalls, rec.summary())
+				}
 			} else {
 				rendered := rec.render(sandbox.image)
 				sources = append(sources, rendered)
@@ -405,7 +422,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 			if answer := rcExtractJSONObject(text); answer != "" {
 				res, err := rcValidateChallenge(answer, issues, decisions, sources, experiments)
 				if err == nil || !errors.Is(err, errRCMalformedAnswer) || nudged {
-					return res, err
+					return finish(res, err)
 				}
 				// Same single format-repair budget as a tool submission.
 				nudged = true
