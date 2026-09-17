@@ -876,3 +876,237 @@ the defect class was alleged and reproduced, GLM did not connect the
 experiment to the allegation and the gate — correctly under the contract —
 left it unresolved. The relevance fields are a contract GLM did not follow in
 that attempt. Still unmerged.
+
+## Fast vs. deep review workflows — differences beyond model selection (audited from code before reading deep results)
+
+These are the differences a fast-vs-deep comparison must account for, so a
+difference in outcome is not attributed to the model when the workflow itself
+differs. Sources: `cmd/kai/review_commit.go`, `review_commit_fast.go`,
+`review_commit_challenge.go` at `9a4a1ff`.
+
+| aspect | fast path (default) | deep path (`--deep`) |
+|---|---|---|
+| prerequisite | none | a captured graph (`kai capture`); refused otherwise (`review_commit.go:279`) |
+| draft author | ONE provider call over the diff, `max_tokens` 2000, budget `rcFastBudget()` (1m40s here); the draft model may be substituted for a reasoning review model | an **agent harness** run (`agent.Run`, `agent.ModeReview`, `ReadOnly`) with the read-only tool set plus `kai_impact`/`kai_diff`, graph context, soft budget 9 min (+ extension), hard deadline 20 min; drafts with the review model |
+| intent step | none (stated intent only) | `rcInferIntent` — an additional model call reconstructing the author's intent before the review |
+| coverage gate | none | a follow-up agent pass when changed files were never opened (`review_commit.go:905–933`) |
+| conclusion fallback | none | `rcConcludeFromTranscript` when the run ends without a usable coda |
+| challenge sources | the single fast-pass user prompt (the diff) | `rcChallengeSources(transcript)`: every successful tool result the agent gathered, plus the first user message |
+| challenge model | configured review model (since `9a4a1ff`; previously the draft substitute) | configured review model (unchanged) |
+| readiness | capped at 4 (`rcCapFastReadiness`); issues filtered (`rcFilterFastIssues`) | uncapped; unfiltered |
+| incomplete accounting | challenge failure → error, no bundle (workflow continues to deep) | `rcIncomplete` record: finish reason, turns, files read; a run that dies still emits an incomplete bundle |
+| coverage record | none | `coverage` (files read, turns, seconds) shipped in the bundle |
+
+**Capture configuration for the deep attempts:** `kai capture` run in the
+scratch repo `e2e-429` at `c478d2f` with the frozen reviewer binary
+(sha256 `eac35eb4a6d3b0da…`, built from `9a4a1ff`), default flags, under the
+scratch `HOME`. Result: snapshot `b8f5add6821e` (1 file). The store resolved
+to `.git/kai/db.sqlite` (kaipath rule 3: a fresh init in a git repo goes under
+`.git/kai`), sha256 `405812b180494d54…`, 163,840 bytes. The real `~/.kai` was
+untouched. Each attempt records the store's hash before it runs so the same
+captured state is verifiable.
+
+## Deep path at `9a4a1ff` — GLM drafting *and* challenging; three fully captured attempts
+
+Same frozen binary (sha256 `eac35eb4a6d3b0da…` before and after), same
+scratch repo at `c478d2f`, same proxy capture, `--deep`, review model
+`z-ai/glm-5.2` for every phase. No gate change between attempts. Captures in
+`capture3/attempt-{1,2,3}/` (every request/response, stderr, raw dump, bundle).
+
+### Graph identity — what "the same captured state" does and does not mean
+
+| | before 1 | after 1 | after 2 | after 3 |
+|---|---|---|---|---|
+| snapshot (`refs.snap.latest`) | `b8f5add6821e` | same | same | same |
+| store sha256 | `405812b180494d54…` | `83816f366a33cd77…` | `b5651545b368ee81…` | `277f37d88684d6fb…` |
+| store bytes | 163,840 | 208,896 | 233,472 | 253,952 |
+
+The store is **not** byte-identical between attempts. What changed is run
+bookkeeping the reviewer writes into the same file: `agent_sessions` (3 rows,
+one per attempt), `agent_messages` (48 rows), plus a `runs/<uuid>/` directory
+per attempt. What did not change: `refs` (1 row, `snap.latest` → the same
+snapshot), `ref_log` (1 row, written by `kai capture` at 13:38:23), and the
+`objects/` directory (mtime 13:38:23, before attempt 1 started at 13:39:33).
+Row counts for `nodes`/`edges` (6/5 now) were not recorded before attempt 1,
+so "graph content unchanged" rests on the untouched objects and the single
+ref entry, not on a direct before/after diff. Claim supported: every attempt
+reviewed the same snapshot. Claim not supported: identical store bytes.
+
+### Which model performed each phase — requested vs. effective
+
+Every model call in all three attempts requested `z-ai/glm-5.2`. Effective
+model is read from the response body's `model` field; upstream from
+`provider`.
+
+| attempt | phase | calls | effective | providers |
+|---|---|---|---|---|
+| 1 | intent | 1 | `z-ai/glm-5.2` | StreamLake |
+| 1 | agent draft | 5 | `z-ai/glm-5.2` | Ambient, StreamLake |
+| 1 | conclusion from transcript | 2 | request 008: **unknown**; request 009: `z-ai/glm-5.2` | — / StreamLake |
+| 1 | challenge | 4 | `z-ai/glm-5.2` | StreamLake, DeepInfra |
+| 2 | intent | 1 | `z-ai/glm-5.2` | Ambient |
+| 2 | agent draft | 8 | `z-ai/glm-5.2` | Ambient, DeepInfra, StreamLake |
+| 2 | conclusion from transcript | 1 | `z-ai/glm-5.2` | StreamLake |
+| 2 | challenge | 5 | `z-ai/glm-5.2` | StreamLake, DeepInfra |
+| 3 | intent | 1 | `z-ai/glm-5.2` | StreamLake |
+| 3 | agent draft | 8 | `z-ai/glm-5.2` | StreamLake, DeepInfra |
+| 3 | conclusion from transcript | 1 | `z-ai/glm-5.2` | StreamLake |
+| 3 | challenge | 3 | `z-ai/glm-5.2` | StreamLake, DeepInfra |
+
+Two non-model requests per attempt are excluded: one `POST /api/v1/runs/cost`
+(HTTP 204, cost reporting). Attempt 1's request 008 is the conclusion call:
+the client abandoned it after 2m01s (proxy: `context canceled`) and re-sent a
+byte-identical body as request 009, which was answered by GLM. That is
+consistent with kai-engine v0.6.73's 120-second HTTP client timeout on
+non-streaming completions; it is an engine transport retry below the gate,
+not a gate retry, and no response ever arrived for 008 — so its effective
+model is **unknown**, as the rule requires. The bundles' `models` records
+agree (configured and requested `z-ai/glm-5.2` for both phases; challenge
+provider StreamLake / StreamLake / DeepInfra; served left unknown by design).
+**GLM-5.2 drafted and challenged in every attempt.**
+
+### Completion (separate from verdicts)
+
+| attempt | exit | bundle | status | review wall time | draft turns / s | conclusion fallback | first `submit_review` | repair nudge |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1 | emitted (22,312 B) | **incomplete** — 2 unresolved | 6m50s | 6 / 104 | fired | unparseable (`invalid character 'R'`, prose) | fired once → accepted |
+| 2 | 1 | emitted (23,734 B) | **incomplete** — 2 unresolved | 3m47s | 9 / 115 | fired | accepted | — |
+| 3 | 1 | emitted (20,099 B) | **incomplete** — 1 unresolved | 2m28s | 9 / 53 | fired | accepted | — |
+
+Bundles emitted 3/3; **completed reviews 0/3** (an incomplete bundle is not a
+completed review); timeouts 0 (the 3-minute challenge deadline was never
+reached); validator rejections 0. First-submission outcome: 2 of 3 accepted
+as submitted; attempt 1's first payload was prose and was accepted only after
+the single permitted format repair. The agent run ended without a usable coda
+in all three attempts (`finish=end_turn`), so `rcConcludeFromTranscript`
+produced every draft. Every exit was 1: CI would fail the run on all three.
+
+### Draft detection — did the deep draft allege the known defect? **3 of 3**
+
+Exact allegations as handed to the challenger:
+
+- **Attempt 1** — #1 `app.js:8-9` "`JSON.stringify` double-quotes don't
+  suppress `$`/backtick/`\` expansion in POSIX `sh`; use single-quote
+  escaping" (**the known defect**); #2 the prepended `cd` mutates the
+  persistent shell's cwd; #3 a failed `cd` silently skips the command. One
+  decision (whether `Panels.workspace()` is attacker-influenceable).
+- **Attempt 2** — #1 `app.js:9` "`JSON.stringify` quotes for JavaScript, not
+  for a POSIX shell; a workspace path with `$`, `` ` ``, `"`… is not safely
+  quoted" (**the known defect**); #2 the `wsPath ?` guard conflates empty and
+  absent; #3 dependence on host `Panels` behavior outside the repo. No
+  decisions.
+- **Attempt 3** — #1 `cd <path> && <command>` silently aborts when the
+  directory is missing; #2 `app.js:8` "`JSON.stringify` double-quoting is not
+  fully POSIX-safe for paths containing `$`, backticks, or `\`" (**the known
+  defect**); #3 the panel may not write `command` verbatim. No decisions.
+
+### Evidence interpretation — what the challenger cited and what the gate derived
+
+All experiments ran in fidelity mode against the actual construction
+(`'cd ' + JSON.stringify(wsPath) + ' && ' + command`), and the model supplied
+the relevance fields itself in every citation. Details that matter:
+
+- **Attempt 1, #1 supported.** Two citations, both `expectation=intended`,
+  `addresses=true`, `covers=true`. Source 10 offered assertions 1–2; #2
+  `stdout_contains "/tmp/test"` **failed** — after `mkdir` of the literal
+  `` /tmp/test$(echo pwned) ``, `` /tmp/test`echo backtick` `` and
+  `/tmp/test$VAR` directories, none was entered; only `/tmp/a\b` printed. That
+  is a genuine observed misdirection on the alleged inputs. Source 9 offered
+  assertions 1–3, all of the form `stdout_contains 'cd "/tmp/test$(echo
+  pwned)" && pwd'` — asserting the *command text* would appear in stdout,
+  which is never true; their failure was recorded as a violation under the
+  contract but is not evidence. **The verdict is correct; it rests on source
+  10; one of the two citations is ill-formed.** #2 and #3 (`cd` mutates cwd;
+  silent skip): the model answered `supported` but cited only experiments
+  whose offered assertions passed under `intended` (conformance) → gate
+  "supported requires a relevant experiment that observed the alleged
+  violation; none did" → **unresolved**, remedies withheld. Decision assessed
+  `supported`.
+- **Attempt 2, #1 supported.** Three citations, all `expectation=defect`.
+  Sources 16 and 17 ran `` cd "/tmp/ws$dir`whoami`" && echo hello `` and
+  `` cd "/tmp/ws$HOME/injected-`echo whoami`" && pwd `` — **exit 2, pwd
+  `/tmp`, the misdirection itself** — but the model's offered assertions were
+  intended-behavior assertions (exit 0; pwd equals the literal path) labelled
+  as the defect, so their failure was derived as *conformance* ("the alleged
+  behavior was not observed"). Source 18 (`` cd "/tmp/ws/injected`echo`" && ls
+  `` landed in `/tmp/ws/injected` and listed the marker file — backtick
+  substitution executed) offered assertions 1–3, all passed under `defect` →
+  **violation**. **The verdict is correct; it rests on source 18 alone; two of
+  three citations were mislabelled in a way that turned real misdirection into
+  "conformance".** A fourth experiment is preserved as `not_run` (setup
+  failed: `touch /tmp/ws/injected/markerfile: No such file or directory`) and
+  was not cited. #2 (`requires_runtime=false`) and #3 were the model's own
+  `unresolved` verdicts (host behavior outside the repo), not gate downgrades.
+- **Attempt 3, #2 supported (the known defect).** Sources 16 and 17,
+  `expectation=intended`, offered assertions 1–3 each (`exit 0`,
+  `stdout_contains` the literal path, `pwd` equals the literal path): every
+  one failed — exit 2, pwd `/tmp` — for `/tmp/ws$dir` and `` /tmp/ws`back` ``
+  after `mkdir` of the literal names. **Violation observed on exactly the
+  alleged inputs; both citations well-formed.** #1 supported via source 18
+  (`cd "/bad/missing/path" && echo COMMAND_RAN` → exit 2, no output; offered
+  `exit 0` and `stdout_contains COMMAND_RAN` both failed under `intended`): the
+  observation matches the allegation; whether "`&&` aborts on a missing
+  directory" is a defect or the design is arguable, and the published
+  model-authored remedy (`cd … ; <command>`) would drop the guard. Source 15
+  (four commands separated by literal `---` lines, exit 127 because `---` ran
+  as a command) was not cited. #3 the model's own `unresolved`.
+
+### Final published recommendation (real server render; harness deleted after)
+
+| attempt | headline | readiness | counts | findings published with remedy |
+|---|---|---|---|---|
+| 1 | "This review did not finish, so treat the change as _not reviewed_" | 3/5 — small fixes first | 1 confirmed, 2 unresolved | JSON.stringify quoting (single-quote `'\''` remedy) |
+| 2 | same banner | 2/5 — needs work | 1 confirmed, 2 unresolved | JSON.stringify quoting (single-quote remedy) |
+| 3 | same banner | 2/5 — needs work | 2 confirmed, 1 unresolved | `cd &&` silent abort (remedy: validate or `cd … ;`); JSON.stringify quoting (single-quote remedy) |
+
+Each render lists its unresolved allegations under "No remedy is published
+for them". Attempt 1 also renders its decision under "Decisions (need your
+call)".
+
+### Counts
+
+| outcome | deep, GLM/GLM | fast, Haiku draft / GLM challenge (`9a4a1ff`, above) |
+|---|---|---|
+| bundles emitted | 3/3 | 3/3 |
+| **completed reviews** | **0/3** (all incomplete) | 2/3 |
+| timeouts / rejections | 0 / 0 | 0 / 0 |
+| draft alleged the known defect | **3/3** | 0/3 (one related form) |
+| confirmed defects (known defect `supported`) | **3/3** | 0/3 |
+| missed defects | 0/3 | 3/3 (2 draft omission, 1 challenger) |
+| incorrect verdicts | 0/3 | 0/3 |
+| published readiness | 3, 2, 2 | 4, 2, 4 |
+
+Qualifications on the 3/3: attempt 1's support rests on one of its two
+citations; attempt 2's on one of three; only attempt 3's citations are all
+well-formed. The contract's "an observed violation can support" carried the
+correct verdict in all three, and no mislabelled or ill-formed citation
+produced a wrong one here — but two of the three verdicts would have been
+`unresolved` without the single sound citation each happened to include.
+
+### Fast vs. deep — what the comparison can and cannot say
+
+Differences beyond model selection are tabulated in the previous section.
+The ones that plausibly acted here:
+
+- **Draft detection (0/3 → 3/3)** cannot be attributed to the model alone. On
+  the fast path the draft was Haiku over the diff in one call; on the deep
+  path it was GLM inside the review harness with tool access (6–9 turns, the
+  file opened each time), an intent step, and the conclusion-from-transcript
+  fallback — which in fact authored every deep draft. No run drafted with GLM
+  over the bare diff, so the model and the workflow are confounded for this
+  outcome.
+- **Challenger effectiveness** is the same model on both paths (GLM confirmed
+  from metadata). The fast-path challenger, exercised once, supplied no
+  relevance fields; the deep-path challenger supplied them in all nine
+  citations. The deep challenge received 8–18 sources (the agent's tool
+  results) versus the fast path's single diff prompt. n=1 vs n=3 — not a
+  measured effect.
+- **Completion** moved the other way: the deep drafts alleged host-dependent
+  behavior (`Panels.workspace()`, panel write semantics) that cannot be
+  resolved from this repo, and each such allegation keeps the review
+  incomplete and the exit nonzero. Completed reviews were 2/3 fast and 0/3
+  deep. This is a property of what the deep draft alleges, not of the gate.
+- Wall time: 2m28s–6m50s deep versus a single draft call plus challenge on
+  the fast path.
+
+Still unmerged; no gate changes were made for or between these attempts.
