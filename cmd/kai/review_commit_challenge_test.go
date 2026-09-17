@@ -310,6 +310,15 @@ func TestReviewChallengeProseFinalAnswerIsNudgedOnce(t *testing.T) {
 	if rcExtractJSONObject("I checked both allegations and found {nothing conclusive") != "" {
 		t.Fatal("non-JSON prose with a stray brace was treated as a submission")
 	}
+	// Two candidate answers is an ambiguity; the gate must not guess which one
+	// the model intended.
+	if got := rcExtractJSONObject("Draft: " + valid + "\nRevised: " + valid); got != "" {
+		t.Fatalf("ambiguous multiple JSON objects were accepted as a submission: %q", got)
+	}
+	// Trailing prose after a single object is not an ambiguity.
+	if got := rcExtractJSONObject(valid + "\nThat is my final answer."); got != valid {
+		t.Fatalf("single object with trailing prose was rejected: %q", got)
+	}
 	calls := 0
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
 		calls++

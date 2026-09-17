@@ -546,26 +546,24 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 			keptDecisions = append(keptDecisions, d.Decision)
 		}
 	}
-	// Readiness is coherent with the FINAL statuses by construction. The model
-	// proposes a score; the system clamps it into the band the validated
-	// results allow, always toward caution, and logs the clamp. Failing closed
-	// here withheld every finding — supported ones included — for what is a
-	// summary-score slip, not an evidence problem (live GLM-5.2 on #418).
+	// Readiness is derived CONSERVATIVELY from the final statuses. The model
+	// proposes a score; the system only ever CAPS it — a contradictory answer
+	// is never turned into a more permissive merge recommendation. A score
+	// lower than the results would justify is left alone: being too cautious
+	// is not a defect. Failing closed here withheld every finding, supported
+	// ones included, for a summary-score slip (live GLM-5.2 on #418).
 	proposed := readiness
-	switch {
-	case len(kept) > 0 && readiness > finding.ReadinessSmallFixes:
+	if len(kept) > 0 && readiness > finding.ReadinessSmallFixes {
 		readiness = finding.ReadinessSmallFixes // a confirmed defect is never near-merge
-	case len(kept) == 0 && len(unresolved) == 0 && readiness < finding.ReadinessDecideThenMerge:
-		readiness = finding.ReadinessDecideThenMerge // nothing found, nothing open: at least "your call"
 	}
-	if len(keptDecisions) > 0 && readiness == finding.ReadinessMerge {
+	if len(keptDecisions) > 0 && readiness > finding.ReadinessDecideThenMerge {
 		readiness = finding.ReadinessDecideThenMerge // an open decision is not a clean merge
 	}
 	if len(unresolved) > 0 && readiness > finding.ReadinessDecideThenMerge {
 		readiness = finding.ReadinessDecideThenMerge // an unresolved claim cannot ride out clean
 	}
 	if readiness != proposed {
-		fmt.Fprintf(os.Stderr, "  challenge: merge_ready %d contradicts the final results — clamped to %d\n", int(proposed), int(readiness))
+		fmt.Fprintf(os.Stderr, "  challenge: merge_ready %d is more permissive than the final results allow — capped to %d\n", int(proposed), int(readiness))
 	}
 
 	// Log the FINAL validated verdicts — including any downgrade — not what the
@@ -609,15 +607,32 @@ func rcIndentBounded(text string, maxLines int) string {
 // ("Here is the result: {...}") still submitted; a model that only narrated did
 // not. Validation of the CONTENT is unchanged and happens afterwards.
 func rcExtractJSONObject(text string) string {
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
+	start := strings.Index(text, "{")
+	if start < 0 {
 		return ""
 	}
-	candidate := text[start : end+1]
-	if !json.Valid([]byte(candidate)) {
+	dec := json.NewDecoder(strings.NewReader(text[start:]))
+	var first json.RawMessage
+	if err := dec.Decode(&first); err != nil || len(first) == 0 || first[0] != '{' {
 		return ""
 	}
-	return candidate
+	// Exactly one object is a submission. A second decodable top-level object
+	// ANYWHERE in the remainder — even with prose between them — is an
+	// ambiguity: two candidate answers, and the gate does not guess which the
+	// model intended. Plain trailing prose is fine.
+	rest := text[start+int(dec.InputOffset()):]
+	for {
+		idx := strings.Index(rest, "{")
+		if idx < 0 {
+			return string(first)
+		}
+		var second json.RawMessage
+		if err := json.NewDecoder(strings.NewReader(rest[idx:])).Decode(&second); err == nil && len(second) > 0 && second[0] == '{' {
+			fmt.Fprintf(os.Stderr, "  challenge: final answer contains more than one JSON object — ambiguous, not treated as a submission\n")
+			return ""
+		}
+		rest = rest[idx+1:]
+	}
 }
 
 // rcNonEmpty trims a list of model-supplied strings and drops the blanks.

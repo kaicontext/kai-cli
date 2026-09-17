@@ -213,7 +213,9 @@ func TestReviewChallengeClampsIncoherentReadinessInsteadOfWithholding(t *testing
 	if _, issues, _, _, readiness, _ := rcParseReviewOutput(res.Review); len(issues) != 1 || int(readiness) != 3 {
 		t.Fatalf("supported finding lost or readiness not clamped: issues=%v readiness=%d", issues, readiness)
 	}
-	// Nothing found and nothing open, proposed as needs-work: raised to "your call".
+	// Nothing found and nothing open, proposed as needs-work: LEFT ALONE. The
+	// system never raises a score — a contradictory answer must never become a
+	// more permissive merge recommendation. Too cautious is not a defect.
 	b := rcCDChecks()
 	b.Checks[1].Verdict = "refuted" // now both refuted
 	b.MergeReady = 2
@@ -221,8 +223,8 @@ func TestReviewChallengeClampsIncoherentReadinessInsteadOfWithholding(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, readiness, _ := rcParseReviewOutput(res.Review); int(readiness) != 4 {
-		t.Fatalf("clean review's readiness not raised to decide-then-merge: %d", readiness)
+	if _, _, _, _, readiness, _ := rcParseReviewOutput(res.Review); int(readiness) != 2 {
+		t.Fatalf("a cautious score was raised to a more permissive one: %d", readiness)
 	}
 	// A supported draft decision with a proposed clean merge: held at "your call".
 	const decision = "Keep the getter public."
