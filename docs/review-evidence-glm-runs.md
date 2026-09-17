@@ -189,3 +189,43 @@ Facts, stated separately:
   head is logged at this revision; an unparseable `submit_review` payload is not.
 
 No code was changed before this record was written.
+
+## Repeated runs of the UNCHANGED revision `46a449f` — with the Node sandbox, GLM-5.2, `-count=3`
+
+No code changed between these attempts. Each attempt is independent.
+
+| case | attempt 1 | attempt 2 | attempt 3 | pass rate |
+|---|---|---|---|---|
+| #418 | PASS (177s): false-cd refuted, escaping supported | PASS (85s): refuted, supported | **FAIL (127s)**: prose → nudged once → GLM marked BOTH allegations `supported`, **including the false cd claim**; the gate published both | 2/3 |
+| #429 | PASS (38s): supported | **FAIL (66s)**: failed before any verdict was logged — reason **not captured** (see below) | PASS (88s): supported | 2/3 |
+
+### #418 attempt 3 — the serious one
+
+The false allegation ("later lines run outside the workspace after a successful
+cd") was published as a **confirmed defect**. Because it was `supported` with
+`requires_runtime`, the gate's rules mean an experiment source **was** cited.
+So GLM ran an experiment and cited it in support of a claim the experiment
+does not actually establish (a persistent shell's cwd survives a successful
+cd). The gate verified provenance — a real experiment, really cited — but it
+does not, and structurally cannot, verify that the cited output *supports* the
+claim. This is the original #418 failure recurring through a satisfied evidence
+requirement. Its remedy (if any) would have been published as actionable.
+
+**Not captured:** the experiment content GLM cited, and the remedy text. My
+output filter dropped the `record=` line. This is a capture failure on my
+side, not a gap in what the code logs.
+
+### #429 attempt 2 — reason unknown
+
+The run failed without reaching a verdict line and my filter did not match the
+error text. Whether it was a malformed submission, a truncated answer, an
+unexpected tool, or a missing check is **unknown**. Stated as such.
+
+### What this establishes
+
+The current revision does **not** reliably handle the GLM cases: 4/6 with one
+false-positive publication. A single passing run of this revision would have
+been misleading; three were needed to see this.
+
+**Process fix for all further runs:** full `-v` output is written to a file
+before any filtering.
