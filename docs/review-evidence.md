@@ -7,25 +7,94 @@ by the conclusion fallback. A draft without an `ISSUES` entry skips this step.
 The challenge uses a fresh model conversation containing the draft, the original
 review context, and complete successful tool results. It tries to disprove each
 issue, looks for contradictory reasoning, and checks proposed repairs against the
-supported inputs. Each issue must receive a supported or refuted assessment with
-a reason and an exact citation to supplied evidence. Unverified issues, missing
-checks, invented citations, malformed responses, timeouts, and new unchecked
-issues prevent publication. The original draft is never used as the fallback for
-a failed challenge. Deep reviews emit an incomplete bundle and a nonzero exit;
-fast reviews return an error so the workflow can continue to its deep pass.
+supported inputs. Each issue receives a supported, refuted, or unverified
+assessment with a reason, an explicit runtime-evidence classification, and
+evidence.
 
-A bad citation gets one correction attempt before the challenge fails. The
-diagnostic identifies the check, citation, source number, and whether the source
-is missing, the quote is empty, or its text does not match. It logs an escaped
-quote preview capped at 160 characters, rather than calling every mismatch
-invented evidence. The model receives that diagnostic alongside its original
-answer and the unchanged numbered evidence. It can only resubmit the complete
-review; no additional experiments are available. Every original validation is
-applied again, and a second failure withholds the review. Semantic uncertainty
-(`unverified`) is not a citation error and does not trigger this retry.
+**Every allegation's final result is structured data** (`rcAllegationResult`):
+its id, status (`supported` / `refuted` / `unresolved`), the validated evidence
+references (each marked whether it is an experiment from this challenge), the
+reason it is unresolved, and any proposed remedy. **A remedy is attached to its
+allegation id and published as actionable only when that allegation is
+supported.** A fix the model proposed for an allegation that is not supported is
+recorded as `withheldRemedy` and never published as advice. The log records the
+*final* validated verdict — including a downgrade the model did not ask for —
+not the verdict the model submitted.
+
+The published review is **assembled by the system from those results,** not
+copied from a model-authored blob. The challenger returns a scope list, a
+limitations list, per-supported-finding text and remedy, per-decision
+assessments, `intent_match`, and `merge_ready`; the system builds the body and
+the coda. There is deliberately **no free-form assessment or summary field.**
+The `SUMMARY` and the incomplete status are derived from the final counts and
+statuses, and the only review-level prose is structured scope and limitations,
+which describe coverage rather than outcomes. That leaves no free-text slot in
+which a refuted or unresolved allegation could be restated as a confident defect
+— verbatim *or paraphrased*. Consistency is by construction; the gate does not
+rely on matching strings.
+
+**Decisions are assessed, not asserted.** The unrestricted "Decisions" path is
+gone: the challenger cannot introduce a decision of its own — it can only assess
+the decisions the *draft* made, each with a verdict and a citation into the
+sources, exactly like an allegation. A decision the draft never made is dropped
+(and logged); a draft decision left unassessed fails the challenge closed. A
+different heading therefore cannot carry repair advice around the evidence
+requirement. Genuine design decisions the draft made are preserved when
+supported, in both the prose and the `DECISIONS` coda.
+
+The status travels with the review. The emitted bundle carries the `incomplete`
+flag and the full structured `challenge` record (allegations, decisions,
+unresolved list); the CLI's text output prints an explicit `Status: INCOMPLETE`
+line; and the run exits non-zero. Atlas and CI therefore read the same verdict
+the gate decided.
+
+To be precise about what is and is not verified: the system controls the
+**structure and selection** — which allegations get a section at all, which
+remedies are actionable, and what the summary and coda say. The text *inside* a
+supported finding's description and remedy, and the scope, limitation, and
+decision items, is still model-authored; the system selects and places it.
+
+Evidence is cited **by location, not by copied text.** Every source is shown to
+the model with numbered lines; a citation is a source number and a line range,
+and the system extracts those exact lines itself. The reviewer already holds all
+the source material, so a published finding never depends on the model
+reproducing text byte-for-byte — the failure mode where a whitespace or escaping
+difference in a re-typed quote sank an otherwise sound review is gone.
+
+Each allegation is judged **on its own evidence.** A citation whose source
+number or line range is out of bounds is dropped (and logged) — it costs that one
+citation, never the whole review. A supported or refuted verdict needs at least
+one usable citation; a verdict with none is downgraded to unverified. So one
+malformed reference can, at most, drop the single finding it belonged to, while
+every independently supported finding still publishes.
+
+Every check must **classify whether the allegation requires runtime evidence.**
+The classification is mandatory — an omitted flag fails the challenge closed, so
+a model cannot skip the declaration to dodge the experiment requirement. Some
+allegations are settled by reading the source; others assert runtime behavior
+that reading cannot establish (what a shell does after a successful `cd`, whether
+a quoting scheme survives a hostile path). The condition is *does this allegation
+require runtime evidence?* — not *is a sandbox configured?* A runtime allegation
+must be backed by a successful `review_shell` experiment; without one it stays
+**unverified**, whatever the reasoning. Missing runtime evidence is never
+permission to substitute confident reasoning.
+
+Unverified allegations do not withhold the review, but they do make it
+**incomplete** — as a real bundle state, not only prose. The independently
+supported findings publish; each unverified allegation is preserved and listed
+with why it could not be settled; `MERGE_READY` is capped so an unresolved
+runtime claim cannot ride out under a ready-to-merge score; and the emitted
+bundle's `incomplete` flag is set and the run exits non-zero, so Atlas and CI
+never read a partial review as a completed one. Structural failures fail closed
+and withhold the draft entirely: malformed responses, an unknown or duplicated
+check, a missing check, a missing runtime classification, a supported finding
+with no description, an incoherent verdict/readiness pair, timeouts. The original
+draft is never used as the fallback for a withheld challenge. Deep reviews emit
+an incomplete bundle and a nonzero exit; fast reviews return an error so the
+workflow can continue to its deep pass.
 
 This adds a model call when a draft has issues. The challenge has a three-minute
-ceiling, including any citation correction; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews
+ceiling; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews
 may need more context: the conclusion no longer cuts every tool result at 2,000
 characters or retries with only the tail of the conversation. Evidence above a
 1 MiB serialized limit leaves the review incomplete instead of silently removing
@@ -34,6 +103,116 @@ the source needed to check an allegation.
 The challenge is still model judgment. A source citation establishes provenance,
 not proof of behavior, and a second model assessment cannot guarantee correctness.
 The existing finding schema and Atlas citation badges are unchanged by this PR.
+
+## Experiment fidelity and result interpretation
+
+The forensics of a wrong verdict (`docs/review-evidence-glm-runs.md`) showed a
+concrete mechanism: the model tested a *different* command from the one the
+code generates — a hand-escaped one — and took its success as proof the real
+one was safe; it also misread a printout that plainly showed the unescaped
+metacharacters. Three changes address exactly that, and nothing broader:
+
+- **Execute the generated command unchanged.** In `review_shell`'s fidelity
+  mode the model supplies `construct` — Node code that builds and prints the
+  command string — and optional `setup`. The harness feeds the **generated
+  string verbatim** into `/bin/sh`. What this enforces is narrow and should be
+  stated narrowly: the model cannot alter the string *between its own
+  construction and execution*. **The construction code is still
+  model-authored.** Nothing verifies that it matches the source under review;
+  a model that wrote a subtly different construction would have it executed
+  faithfully and wrongly. Unverified construction is a separate risk — it was
+  **not** the demonstrated cause of the observed wrong verdict (that run's
+  constructor matched the code by its own account), but it remains open.
+- **Explicit assertions.** The model declares what it expects to observe —
+  `exit`, `stdout_contains`, `stdout_not_contains`, `pwd`, `pwd_not` — and the
+  harness evaluates each as PASS/FAIL against the recorded exit status, stdout,
+  and the working directory the command actually left behind.
+- **The verdict is connected to what was tested and what was observed.** When
+  the model cites an experiment it must connect it to the allegation with four
+  recorded fields: `addresses_allegation`, `covers_alleged_inputs`,
+  `expectation` (whether its assertions encode the *intended* behavior or the
+  *alleged defect*), and `tested`. The gate then **derives the observation from
+  the record**, not from the model's conclusion: an assertion of intended
+  behavior that failed, or an assertion of the defect that passed, is the
+  alleged violation *observed*; the converse is conformance for the input
+  tested. Four rules follow structurally, and a verdict is never flipped — one
+  the observations do not carry becomes unresolved with the reason recorded:
+  1. An observed violation by a relevant experiment can **support** the
+     defect. A failed directory-equality check is evidence, not a discard.
+  2. A passing example establishes behavior for **that example only**. It can
+     refute the allegation only if `covers_alleged_inputs` is declared, and
+     never when a relevant experiment observed the violation.
+  3. An experiment that does not address the allegation, or was never
+     connected to it, leaves it **unresolved**.
+  4. An experiment that could not run supplies **no runtime conclusion**.
+
+  **Each citation names the assertion(s) it offers.** An experiment may record
+  several assertions; the citation's `assertions` field lists, by number, the
+  recorded assertion(s) offered as evidence *for this allegation*. The
+  observation is derived from those only. The others are preserved on the
+  record but do not count here — an unrelated failure (an echo's wording) is
+  not a violation of a directory allegation. A citation that offers none, or
+  offers one that does not exist, yields no observation. What was offered is
+  recorded on the citation (`assertionsOffered`), so a reader can see exactly
+  which check a verdict relied on. Regression:
+  `TestUnrelatedFailedAssertionCannotSupportDirectoryAllegation` — directory
+  equality passes, an unrelated stdout check fails, the directory assertion is
+  offered: the allegation is not supported.
+
+  The relevance, coverage, and selection bits remain model judgment.
+  Structured fields do not guarantee correctness; they make the claim explicit
+  and auditable in the bundle, so a false "this double-quote test covered `$`
+  and backticks", or an offer of an unrelated assertion, is visible rather
+  than silent.
+
+  **Validated against the preserved wrong-verdict run**
+  (`cmd/kai/review_commit_wrongverdict_test.go`, fixture extracted from that
+  run's bundle by script): its cited experiment — a double quote, all
+  assertions passed — observed conformance and did not cover the alleged
+  inputs. Under these rules it cannot support the defect (no violation
+  observed) and cannot refute it (wrong inputs), with or without an honest
+  `covers_alleged_inputs`; GLM's actual "supported" verdict becomes unresolved
+  and its "no code change needed" remedy is withheld. The one remaining path to
+  the wrong conclusion is a false coverage declaration, which is recorded on
+  the citation.
+
+**Every experiment attempt is recorded, regardless of outcome.** Each record
+carries an `outcome`: `completed` — it ran, and its observations and assertion
+results are valid whether or not the assertions passed — or `not_run` — it
+could not run, `error` says why, and no observation exists. The distinction is
+deliberate: a completed experiment whose assertion failed is an observation
+("expected X, observed Y") and can be useful evidence; a not-run attempt is
+not evidence of anything. Not-run attempts are preserved on the result at
+source 0 (uncitable) so the record shows the attempt and its reason. Mode,
+setup, construct, generated command, exit code, observed working directory,
+stdout, stderr, and each assertion's expected and observed values travel in
+the challenge result and the emitted bundle (`challenge.experiments`). Only
+the console summary is bounded.
+
+**Regression tests for the #429 defect over the actual source.**
+`cmd/kai/review_commit_pr429_test.go` reads the real construction statement
+from `testdata/pr429/app.js.excerpt` (copied verbatim from the PR head; see
+`PROVENANCE`), locates it by text, and evaluates *that* statement under node
+with `wsPath` bound to literal inputs — a plain path, a space, a double quote,
+a single quote, `$HOME`, `$(id -u)`, a backtick — and `command` bound to
+`pwd`. The harness executes the generated command unchanged and verifies the
+observed working directory. Expected results are explicit per input: space and
+quotes reach the intended directory; `$`, `$(…)` and backtick do not. Those
+failed directory-equality assertions are the defect observations. These are
+regression tests for this defect, not a universal review solution, and they
+change no verdict logic.
+
+This does not make review correctness general, and it did **not** close the
+demonstrated failure. What is established: the generated string is executed
+unchanged, and an experiment whose assertions failed cannot be cited as if it
+had confirmed the model's expectation. What is not established: that the
+construction matches the source, or that the tested input bears on the
+allegation. The end-to-end wrong "safe" verdict that followed this change was
+produced by a faithful experiment on an **inadequate input** — a double quote,
+which `JSON.stringify` does escape — whose passing assertions were taken as a
+general claim of safety about `$` and backticks. Passing assertions establish
+behavior for the input tested; they cannot refute a claim about a different
+input. The open design question is recorded in `review-evidence-glm-runs.md`.
 
 ## Optional isolated shell experiments
 
@@ -64,7 +243,7 @@ Normal unit tests cover publication failure, rejected versus supported claims,
 missing/invented citations, full source preservation, and bounded execution setup:
 
 ```sh
-GOWORK=off go test ./cmd/kai -run 'TestReviewChallenge|TestReviewConclusion|TestFastReviewDoesNotPublish|TestReviewSandbox'
+GOWORK=off go test ./cmd/kai -run 'TestReviewChallenge|TestReviewCitation|TestReviewConclusion|TestFastReviewDoesNotPublish|TestReviewSandbox'
 ```
 
 To execute the PR #418 examples in the actual restricted container, set the image

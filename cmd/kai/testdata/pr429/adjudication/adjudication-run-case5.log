@@ -1,0 +1,4 @@
+case 5 attempt 1: model=z-ai/glm-5.2 provider=StreamLake 26s violation=violation remedy=reject alts=[accept:Validate the path before prefixing (e.g.;reject:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-]
+case 5 attempt 2: model=z-ai/glm-5.2 provider=StreamLake 27s violation=violation remedy=reject alts=[cannot_determine:Validate the path before prefixing (e.g.;reject:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-]
+case 5 attempt 3: model=z-ai/glm-5.2 provider=StreamLake 21s violation=violation remedy=reject alts=[accept:Validate the path before prefixing (e.g.;reject:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-]
+expected: {5: {'violation': 'conforms', 'remedy': 'reject'}}

@@ -16,20 +16,30 @@ const rcFalseCDIssue = `frontend/dist/panel-terminal.js:148 — later lines run 
 const rcEscapeIssue = `frontend/dist/panel-terminal.js:148 — workspace expansion is possible inside double quotes`
 const rcCDSource = "cd /tmp && pwd\npwd\n"
 
-func rcTestReview(issues ...string) string {
+// rcTestReview builds a DRAFT (the challenge's input) with the given ISSUES.
+func rcTestReview(issues ...string) string { return rcTestReviewWith(issues, nil) }
+
+// rcTestReviewWith builds a draft carrying both ISSUES and DECISIONS.
+func rcTestReviewWith(issues, decisions []string) string {
 	readiness := "5"
 	match := "verified"
 	if len(issues) > 0 {
 		readiness, match = "3", "partial"
+	} else if len(decisions) > 0 {
+		readiness = "4"
 	}
-	return "Review within the supplied scope.\n" + rcReviewDataMarker + "\nINTENT_MATCH: " + match +
-		"\nMERGE_READY: " + readiness + "\nSUMMARY: Findings checked.\nISSUES:\n" + rcTestBullets(issues)
+	s := "Review within the supplied scope.\n" + rcReviewDataMarker + "\nINTENT_MATCH: " + match +
+		"\nMERGE_READY: " + readiness + "\nSUMMARY: Findings checked.\n"
+	if len(decisions) > 0 {
+		s += "DECISIONS:\n" + rcTestBullets(decisions)
+	}
+	return s + "ISSUES:\n" + rcTestBullets(issues)
 }
 
-func rcTestBullets(issues []string) string {
+func rcTestBullets(items []string) string {
 	var b strings.Builder
-	for _, issue := range issues {
-		b.WriteString("- " + issue + "\n")
+	for _, item := range items {
+		b.WriteString("- " + item + "\n")
 	}
 	return b.String()
 }
@@ -43,25 +53,43 @@ func rcTestAnswer(t *testing.T, answer rcChallengeAnswer) string {
 	return string(b)
 }
 
+func rcBool(b bool) *bool { return &b }
+
 func rcCDChecks() rcChallengeAnswer {
 	return rcChallengeAnswer{
-		Review: rcTestReview(rcEscapeIssue),
+		Scope:       []string{"frontend/dist/panel-terminal.js command construction"},
+		IntentMatch: "partial",
+		MergeReady:  3,
 		Checks: []rcIssueCheck{
-			{Issue: rcFalseCDIssue, Verdict: "refuted", Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, Quote: rcCDSource}}},
-			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "Double quotes still allow parameter expansion.", Evidence: []rcCheckEvidence{{Source: 2, Quote: `cd "$HOME"`}}},
+			{Issue: rcFalseCDIssue, Verdict: "refuted", RequiresRuntime: rcBool(false), Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
+			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "Double quotes still allow parameter expansion.", Finding: "The path is interpolated inside double quotes, so $ expands.", Remedy: "Escape the path before interpolating it into the double-quoted cd.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
 		},
 	}
 }
 
+var rcCDIssues = []string{rcFalseCDIssue, rcEscapeIssue}
+var rcCDSources = []string{rcCDSource, `cd "$HOME"`}
+
 // This tests publication mechanics, not the model's shell knowledge. The live
-// evaluation below separately exercises the actual model on the #418 specimen.
+// evaluations below separately exercise the actual model on the #418 and #429
+// specimens.
 func TestReviewChallengeDropsRefutedIssueAndKeepsSupportedIssue(t *testing.T) {
-	got, err := rcValidateChallenge(rcTestAnswer(t, rcCDChecks()), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`})
+	res, err := rcValidateChallenge(rcTestAnswer(t, rcCDChecks()), rcCDIssues, nil, rcCDSources, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(got, rcFalseCDIssue) || !strings.Contains(got, rcEscapeIssue) {
-		t.Fatalf("wrong published allegations: %s", got)
+	if strings.Contains(res.Review, rcFalseCDIssue) || !strings.Contains(res.Review, rcEscapeIssue) {
+		t.Fatalf("wrong published allegations: %s", res.Review)
+	}
+	if res.Incomplete || len(res.Unresolved) != 0 || strings.Contains(res.Review, "This review is incomplete") {
+		t.Fatalf("a fully resolved review was marked incomplete: %+v", res)
+	}
+	// The structured record carries the same verdicts, by id.
+	if len(res.Allegations) != 2 || res.Allegations[0].Status != "refuted" || res.Allegations[1].Status != "supported" || res.Allegations[1].ID != 2 {
+		t.Fatalf("structured record disagrees with the published review: %+v", res.Allegations)
+	}
+	if res.Allegations[1].Remedy == "" || !strings.Contains(res.Review, "**Remedy:** Escape the path") {
+		t.Fatalf("supported finding's remedy not published as actionable: %+v", res.Allegations[1])
 	}
 }
 
@@ -72,26 +100,33 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 	}{
 		{"missing check", func(a *rcChallengeAnswer) { a.Checks = a.Checks[:1] }},
 		{"duplicate check", func(a *rcChallengeAnswer) { a.Checks[1] = a.Checks[0] }},
-		{"unverified is not refuted", func(a *rcChallengeAnswer) { a.Checks[0].Verdict = "unverified" }},
-		{"invented quote", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].Quote = "made up output" }},
-		{"invented source", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].Source = 99 }},
-		{"no evidence", func(a *rcChallengeAnswer) { a.Checks[0].Evidence = nil }},
-		{"unchecked new issue", func(a *rcChallengeAnswer) { a.Review = rcTestReview("new.go:1 — new allegation") }},
-		{"rejected issue survives", func(a *rcChallengeAnswer) { a.Review = rcTestReview(rcFalseCDIssue, rcEscapeIssue) }},
-		{"supported issue lost", func(a *rcChallengeAnswer) { a.Review = rcTestReview() }},
-		{"contradictory readiness", func(a *rcChallengeAnswer) {
-			a.Review = strings.Replace(a.Review, "MERGE_READY: 3", "MERGE_READY: 5", 1)
-		}},
-		{"missing verdict", func(a *rcChallengeAnswer) { a.Review = "unfinished\n" + rcReviewDataMarker }},
+		{"unknown issue", func(a *rcChallengeAnswer) { a.Checks[0].Issue = "phantom.go:1 — never alleged" }},
+		{"empty reason", func(a *rcChallengeAnswer) { a.Checks[0].Reason = "" }},
+		{"unknown verdict", func(a *rcChallengeAnswer) { a.Checks[0].Verdict = "maybe" }},
+		{"missing runtime classification", func(a *rcChallengeAnswer) { a.Checks[0].RequiresRuntime = nil }},
+		{"supported without finding", func(a *rcChallengeAnswer) { a.Checks[1].Finding = "" }},
+		{"empty scope", func(a *rcChallengeAnswer) { a.Scope = nil }},
+		{"blank-only scope", func(a *rcChallengeAnswer) { a.Scope = []string{"  "} }},
+		{"invalid intent", func(a *rcChallengeAnswer) { a.IntentMatch = "maybe" }},
+		{"invalid merge_ready", func(a *rcChallengeAnswer) { a.MergeReady = 9 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := rcCDChecks()
 			tc.mutate(&a)
-			got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`})
-			if err == nil || got != "" {
-				t.Fatalf("unchecked review escaped: %q, %v", got, err)
+			res, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources, nil)
+			if err == nil || res != nil {
+				t.Fatalf("unchecked review escaped: %+v, %v", res, err)
 			}
 		})
+	}
+	if res, err := rcValidateChallenge("not valid json", rcCDIssues, nil, rcCDSources, nil); err == nil || res != nil {
+		t.Fatalf("accepted malformed challenge JSON: %+v %v", res, err)
+	}
+	// A draft decision left unassessed is a structural failure, like an
+	// unchecked allegation.
+	a := rcCDChecks()
+	if res, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, []string{"Keep the getter public."}, rcCDSources, nil); err == nil || res != nil {
+		t.Fatalf("accepted a challenge that skipped a draft decision: %+v %v", res, err)
 	}
 }
 
@@ -115,14 +150,16 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 		t.Fatalf("sources lost evidence or included speculation: %v", sources)
 	}
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
-		if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Parts[0].(message.TextContent).Text, file) {
+		// The source is presented with numbered lines, so the raw blob no longer
+		// appears verbatim; the end of a large file must still reach the challenge.
+		if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Parts[0].(message.TextContent).Text, "critical source at the end") {
 			t.Fatal("challenge did not get full evidence in a fresh conversation")
 		}
 		return provider.Response{}, errors.New("provider failed")
 	}}
-	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), sources, nil)
-	if err == nil || got != "" {
-		t.Fatalf("failed challenge returned draft: %q %v", got, err)
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), sources, nil)
+	if err == nil || res != nil {
+		t.Fatalf("failed challenge returned draft: %+v %v", res, err)
 	}
 }
 
@@ -181,9 +218,226 @@ func TestFastReviewDoesNotPublishDraftWhenChallengeFails(t *testing.T) {
 		}
 		return provider.Response{}, errors.New("challenge unavailable")
 	}}
-	got, err := rcRunFastReview(context.Background(), p, "test", "", "", "test", "", rcCDSource, nil)
-	if err == nil || got != "" || calls != 2 {
+	got, res, err := rcRunFastReview(context.Background(), p, "test", "test", "", "", "test", "", rcCDSource, nil)
+	if err == nil || got != "" || res != nil || calls != 2 {
 		t.Fatalf("unchecked fast draft escaped: calls=%d result=%q err=%v", calls, got, err)
+	}
+}
+
+// The fast path must surface the structured result to its caller so the bundle
+// is marked incomplete and the run exits non-zero — a published-but-partial fast
+// review must not read as a completed one.
+func TestFastReviewReportsUnresolved(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestReview(rcFalseCDIssue)}}}, nil
+		}
+		a := rcChallengeAnswer{
+			Scope:       []string{"the diff"},
+			IntentMatch: "partial",
+			MergeReady:  4,
+			Checks:      []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "needs a shell"}},
+		}
+		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, a)}}}, nil
+	}}
+	got, res, err := rcRunFastReview(context.Background(), p, "test", "test", "", "", "test", "", rcCDSource, nil)
+	if err != nil {
+		t.Fatalf("fast review withheld a publishable-but-incomplete result: %v", err)
+	}
+	if res == nil || !res.Incomplete || len(res.Unresolved) != 1 || res.Unresolved[0] != rcFalseCDIssue {
+		t.Fatalf("fast review did not report the unresolved allegation: %+v", res)
+	}
+	if !strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("fast review body did not mark itself incomplete: %s", got)
+	}
+}
+
+// Live eval caught this: with no sandbox, the model asks for review_shell
+// anyway, and treating that as fatal withheld every finding — supported ones
+// included. It must be answered with an error tool result and the challenge
+// must continue; the model then submits with the runtime claim unverified.
+func TestReviewChallengeUnavailableSandboxIsNotFatal(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			if !strings.Contains(req.Messages[0].Parts[0].(message.TextContent).Text, "no review_shell sandbox is available") {
+				t.Fatal("initial message did not tell the model no sandbox is available")
+			}
+			return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "exp", Name: "review_shell", Input: `{"script":"pwd"}`}}}, nil
+		}
+		// The model must receive an ERROR tool result, not a fatal end.
+		last := req.Messages[len(req.Messages)-1].Parts[0].(message.ToolResult)
+		if !last.IsError || last.ToolCallID != "exp" || !strings.Contains(last.Content, "not available") {
+			t.Fatalf("model was not told the experiment is unavailable: %+v", last)
+		}
+		a := rcChallengeAnswer{
+			Scope:       []string{"the cd behavior"},
+			IntentMatch: "partial",
+			MergeReady:  4,
+			Checks:      []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "no sandbox to run it"}},
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "final", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil)
+	if err != nil {
+		t.Fatalf("unavailable sandbox withheld the review: %v", err)
+	}
+	if calls != 2 || !res.Incomplete || res.Allegations[0].Status != "unresolved" {
+		t.Fatalf("challenge did not continue to an unresolved, incomplete result: calls=%d %+v", calls, res)
+	}
+	// A genuinely unknown tool, and exceeding the cap, are still fatal.
+	p2 := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "bad", Name: "bash", Input: `{}`}}}, nil
+	}}
+	if res, err := rcChallengeReview(context.Background(), p2, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil); err == nil || res != nil {
+		t.Fatalf("unknown tool accepted: %+v %v", res, err)
+	}
+}
+
+// Live GLM-5.2 on #418: after its fourth experiment the model narrated in
+// prose instead of submitting, and the gate failed closed on the whole review.
+// A submission wrapped in a sentence is still a submission; pure prose gets
+// exactly one nudge to call submit_review; prose twice is a broken answer.
+func TestReviewChallengeProseFinalAnswerIsNudgedOnce(t *testing.T) {
+	valid := rcTestAnswer(t, rcCDChecks())
+	// Embedded JSON is accepted without a nudge.
+	if got := rcExtractJSONObject("Here is my result: " + valid + " — done."); got != valid {
+		t.Fatalf("embedded submission not extracted: %q", got)
+	}
+	if rcExtractJSONObject("I checked both allegations and found {nothing conclusive") != "" {
+		t.Fatal("non-JSON prose with a stray brace was treated as a submission")
+	}
+	// Two candidate answers is an ambiguity; the gate must not guess which one
+	// the model intended.
+	if got := rcExtractJSONObject("Draft: " + valid + "\nRevised: " + valid); got != "" {
+		t.Fatalf("ambiguous multiple JSON objects were accepted as a submission: %q", got)
+	}
+	// Trailing prose after a single object is not an ambiguity.
+	if got := rcExtractJSONObject(valid + "\nThat is my final answer."); got != valid {
+		t.Fatalf("single object with trailing prose was rejected: %q", got)
+	}
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: "I have reviewed the allegations carefully and here is my thinking."}}}, nil
+		}
+		last := req.Messages[len(req.Messages)-1].Parts[0].(message.TextContent).Text
+		if !strings.Contains(last, "Call submit_review now") || len(req.Tools) != 1 {
+			t.Fatalf("second turn was not the single protocol nudge: %q tools=%d", last, len(req.Tools))
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "final", Name: "submit_review", Input: valid}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || calls != 2 || res == nil || res.Allegations[1].Status != "supported" {
+		t.Fatalf("prose answer was not recovered by one nudge: calls=%d err=%v res=%+v", calls, err, res)
+	}
+	// Prose twice is genuinely broken and fails closed — no unbounded retry.
+	calls = 0
+	p2 := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		calls++
+		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: "I still think it is fine."}}}, nil
+	}}
+	if res, err := rcChallengeReview(context.Background(), p2, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil); err == nil || res != nil || calls != 2 {
+		t.Fatalf("repeated prose was not failed closed after one nudge: calls=%d %+v %v", calls, res, err)
+	}
+}
+
+// End-to-end GLM-5.2 on #429: the submit_review payload had "checks" as a JSON
+// string, not an array, and the gate failed closed with no bundle. An
+// unparseable payload is a FORMAT failure and earns exactly one repair nudge
+// carrying the parse error, under the original restrictions; a payload that
+// parses but fails validation is substantive and is never retried.
+func TestReviewChallengeUnparseableSubmissionIsNudgedOnce(t *testing.T) {
+	valid := rcTestAnswer(t, rcCDChecks())
+	malformed := strings.Replace(valid, `"checks":[`, `"checks":"[`, 1) // checks becomes a string
+	malformed = strings.Replace(malformed, `}],"decisions"`, `}]","decisions"`, 1)
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s1", Name: "submit_review", Input: malformed}}}, nil
+		}
+		last := req.Messages[len(req.Messages)-1].Parts[0].(message.ToolResult)
+		if !last.IsError || last.ToolCallID != "s1" || !strings.Contains(last.Content, "could not be parsed") || !strings.Contains(last.Content, "arrays of objects") || len(req.Tools) != 1 {
+			t.Fatalf("second turn was not the single parse-error repair nudge: %+v tools=%d", last, len(req.Tools))
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s2", Name: "submit_review", Input: valid}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || calls != 2 || res == nil || res.Allegations[1].Status != "supported" {
+		t.Fatalf("unparseable submission was not recovered by one nudge: calls=%d err=%v res=%+v", calls, err, res)
+	}
+	// A SEMANTIC failure is never nudged: it fails closed on the first call.
+	calls = 0
+	semantic := rcCDChecks()
+	semantic.Checks[0].Issue = "phantom.go:1 — never alleged"
+	p2 := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		calls++
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, semantic)}}}, nil
+	}}
+	if res, err := rcChallengeReview(context.Background(), p2, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil); err == nil || res != nil || calls != 1 {
+		t.Fatalf("substantive validation failure was retried: calls=%d %+v %v", calls, res, err)
+	}
+	// Malformed twice is a broken answer and fails closed — no unbounded retry.
+	calls = 0
+	p3 := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		calls++
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: malformed}}}, nil
+	}}
+	if res, err := rcChallengeReview(context.Background(), p3, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil); err == nil || res != nil || calls != 2 {
+		t.Fatalf("repeated malformed payload was not failed closed after one nudge: calls=%d %+v %v", calls, res, err)
+	}
+}
+
+// The fast pass may substitute a non-reasoning model for the DRAFT. That
+// substitution must never silently reach the CHALLENGE, which is the
+// publication gate and must use the configured review model. Captured live
+// requests showed every challenge call going to the draft's substitute; this
+// pins the separation and the per-phase record.
+func TestFastDraftDoesNotSubstituteChallenger(t *testing.T) {
+	var requested []string
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		requested = append(requested, req.Model)
+		if len(requested) == 1 { // the draft
+			return provider.Response{ProviderName: "draft-upstream", Parts: []message.ContentPart{message.TextContent{Text: rcTestReview(rcFalseCDIssue)}}}, nil
+		}
+		a := rcChallengeAnswer{Scope: []string{"the diff"}, IntentMatch: "partial", MergeReady: 4,
+			Checks: []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "needs a shell"}}}
+		return provider.Response{ProviderName: "challenge-upstream", Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
+	}}
+	_, res, err := rcRunFastReview(context.Background(), p, "fast-draft-substitute", "configured-review-model", "", "", "test", "", rcCDSource, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requested) < 2 || requested[0] != "fast-draft-substitute" {
+		t.Fatalf("draft was not requested from the fast model: %v", requested)
+	}
+	for _, m := range requested[1:] {
+		if m != "configured-review-model" {
+			t.Fatalf("a challenge request was sent to the draft substitute instead of the review model: %v", requested)
+		}
+	}
+	// The per-phase record: what was requested, and the upstream provider the
+	// gateway reported. The served model is not exposed here and stays empty.
+	if res.Models.Draft.Requested != "fast-draft-substitute" || res.Models.Draft.Provider != "draft-upstream" || res.Models.Draft.Served != "" {
+		t.Fatalf("draft phase not recorded: %+v", res.Models.Draft)
+	}
+	if res.Models.Challenge.Requested != "configured-review-model" || res.Models.Challenge.Provider != "challenge-upstream" || res.Models.Challenge.Served != "" {
+		t.Fatalf("challenge phase not recorded: %+v", res.Models.Challenge)
+	}
+	// The submission schema and the validator now say the same thing about
+	// decisions: required (an empty array when the draft has none).
+	required := rcSubmitReviewToolInfo().Required
+	found := false
+	for _, r := range required {
+		found = found || r == "decisions"
+	}
+	if !found {
+		t.Fatalf("schema does not require decisions while the validator does: %v", required)
 	}
 }
 
@@ -193,8 +447,8 @@ func TestReviewChallengeRejectsTruncatedAnswerAndUnexpectedTool(t *testing.T) {
 		{Parts: []message.ContentPart{message.ToolCall{ID: "bad", Name: "bash", Input: `{"command":"pwd"}`}}},
 	} {
 		p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) { return resp, nil }}
-		if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil); err == nil || got != "" {
-			t.Fatalf("accepted invalid challenge: %q %v", got, err)
+		if res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil); err == nil || res != nil {
+			t.Fatalf("accepted invalid challenge: %+v %v", res, err)
 		}
 	}
 }
@@ -209,25 +463,33 @@ func TestReviewChallengeAcceptsStructuredSubmissionWithCommentary(t *testing.T) 
 			message.ToolCall{ID: "final", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())},
 		}}, nil
 	}}
-	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{rcCDSource, `cd "$HOME"`}, nil)
-	if err != nil || strings.Contains(got, rcFalseCDIssue) || !strings.Contains(got, rcEscapeIssue) {
-		t.Fatalf("bad structured submission: %q %v", got, err)
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || strings.Contains(res.Review, rcFalseCDIssue) || !strings.Contains(res.Review, rcEscapeIssue) {
+		t.Fatalf("bad structured submission: %+v %v", res, err)
 	}
 }
 
-func TestReviewChallengeSkipsDraftWithoutIssues(t *testing.T) {
+func TestReviewChallengeSkipsDraftWithoutIssuesOrDecisions(t *testing.T) {
 	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
-		t.Fatal("a draft without allegations does not need this pass")
+		t.Fatal("a draft without allegations or decisions does not need this pass")
 		return provider.Response{}, nil
 	}}
-	if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || got != rcTestReview() {
-		t.Fatalf("changed issue-free draft: %q %v", got, err)
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil)
+	if err != nil || res == nil || res.Review != rcTestReview() || !res.rcEmpty() {
+		t.Fatalf("changed issue-free draft: %+v %v", res, err)
 	}
 }
 
-// Opt-in model evaluation: uses the configured Kai provider and incurs usage.
-// Unit tests above cannot establish that an LLM knows shell semantics.
-func TestReviewChallengeLiveDesktop418(t *testing.T) {
+// ---- Live evaluations (opt-in; use the configured Kai provider, incur usage) ----
+//
+// Unit tests above cannot establish that an LLM knows shell semantics. These
+// run the real model on the two observed failures. Each runs in two
+// configurations: with the sandbox (runtime claims can be settled) and without
+// (runtime claims must be left unresolved and the review must be incomplete).
+// A mocked answer is never presented as evidence of model quality.
+
+func rcLiveEvalSetup(t *testing.T) (provider.Provider, string) {
+	t.Helper()
 	if os.Getenv("KAI_REVIEW_LIVE_EVAL") != "1" {
 		t.Skip("set KAI_REVIEW_LIVE_EVAL=1 to evaluate the configured model")
 	}
@@ -240,24 +502,117 @@ func TestReviewChallengeLiveDesktop418(t *testing.T) {
 	if prov == nil {
 		t.Fatal("no configured Kai provider")
 	}
-	sandbox := rcConfiguredSandbox()
-	if sandbox == nil {
-		t.Fatal("live evaluation requires KAI_REVIEW_SANDBOX_IMAGE")
+	return prov, model
+}
+
+// rcLiveSandbox returns the configured sandbox, or nil for the without-sandbox
+// configuration. The with-sandbox configuration skips when none is configured
+// rather than pretending.
+func rcLiveSandbox(t *testing.T, want bool) *rcShellSandbox {
+	t.Helper()
+	if !want {
+		return nil
 	}
-	const source = `// frontend/dist/panel-terminal.js: the PTY uses a persistent shell.
+	sb := rcConfiguredSandbox()
+	if sb == nil {
+		t.Skip("with-sandbox configuration requires KAI_REVIEW_SANDBOX_IMAGE")
+	}
+	return sb
+}
+
+const rcLive418Source = `// frontend/dist/panel-terminal.js: the PTY uses a persistent shell.
 // Supports runnable multiline shell fences.
 const ws = this.ctx.workspace;
 const full = ws ? 'cd "' + ws + '" && ' + String(command) : String(command);
 const input = full.replace(/\r?\n/g, "\r") + "\r";
 // Sample workspace path: a literal /tmp/$HOME directory, not a variable.
 `
-	got, err := rcChallengeReview(context.Background(), prov, model, rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{source}, sandbox)
-	if err != nil {
-		t.Fatal(err)
+
+// #418: the false multiline-cd allegation must be refuted and the real escaping
+// defect retained — but only with an experiment. Without a sandbox both are
+// runtime claims and must come back unresolved, with the review incomplete.
+func TestReviewChallengeLiveDesktop418(t *testing.T) {
+	for _, withSandbox := range []bool{true, false} {
+		name := map[bool]string{true: "with-sandbox", false: "without-sandbox"}[withSandbox]
+		t.Run(name, func(t *testing.T) {
+			prov, model := rcLiveEvalSetup(t)
+			sandbox := rcLiveSandbox(t, withSandbox)
+			res, err := rcChallengeReview(context.Background(), prov, model, rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{rcLive418Source}, sandbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("model=%s\n%s\nrecord=%+v", model, res.Review, res.Allegations)
+			_, issues, _, _, _, _ := rcParseReviewOutput(res.Review)
+			if withSandbox {
+				if len(issues) != 1 || issues[0] != rcEscapeIssue {
+					t.Fatalf("expected only the genuine escaping defect: %v", issues)
+				}
+				if res.Allegations[0].Status != "refuted" {
+					t.Fatalf("false cd allegation not refuted: %+v", res.Allegations[0])
+				}
+				return
+			}
+			if len(issues) != 0 || !res.Incomplete {
+				t.Fatalf("without a sandbox runtime claims must be unresolved and the review incomplete: issues=%v record=%+v", issues, res)
+			}
+			for _, a := range res.Allegations {
+				if a.Status != "unresolved" || a.Remedy != "" {
+					t.Fatalf("runtime claim settled or remedied without an experiment: %+v", a)
+				}
+			}
+		})
 	}
-	t.Logf("model=%s\n%s", model, got)
-	_, issues, _, _, _, _ := rcParseReviewOutput(got)
-	if len(issues) != 1 || issues[0] != rcEscapeIssue {
-		t.Fatalf("expected only the genuine escaping defect: %v", issues)
+}
+
+// The specimen states only what the code does and where the string goes. It
+// does NOT tell the model what JSON.stringify emits: establishing that is the
+// experiment's job, so a Node-capable sandbox must run JSON.stringify itself.
+const rcLive429Source = `// frontend/dist/app.js: play-button (data-run-command) click handler.
+const command = commandFromFence(code.textContent);
+// Prefix a cd into the workspace so the command always runs in the
+// correct directory. JSON.stringify quotes the path "safely".
+const wsPath = (window.Panels && typeof window.Panels.workspace === "function") ? window.Panels.workspace() : "";
+const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;
+Panels.setOpen(true);
+Panels.select("terminal", { command: full });
+// The terminal panel writes the string verbatim to its persistent POSIX sh.
+`
+
+const rcStringifyIssue = `frontend/dist/app.js:6 — JSON.stringify does not shell-escape $ or backticks, so a workspace path containing them is expanded by the shell and the cd targets the wrong directory`
+
+// #429: the JSON.stringify path-handling defect is real and must be supported —
+// but only with an experiment showing the expansion. Without a sandbox it is a
+// runtime claim and must be left unresolved, with its remedy withheld.
+func TestReviewChallengeLiveDesktop429(t *testing.T) {
+	for _, withSandbox := range []bool{true, false} {
+		name := map[bool]string{true: "with-sandbox", false: "without-sandbox"}[withSandbox]
+		t.Run(name, func(t *testing.T) {
+			prov, model := rcLiveEvalSetup(t)
+			sandbox := rcLiveSandbox(t, withSandbox)
+			res, err := rcChallengeReview(context.Background(), prov, model, rcTestReview(rcStringifyIssue), []string{rcLive429Source}, sandbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("model=%s\n%s\nrecord=%+v", model, res.Review, res.Allegations)
+			a := res.Allegations[0]
+			if withSandbox {
+				if a.Status != "supported" {
+					t.Fatalf("real JSON.stringify defect not supported with an experiment available: %+v", a)
+				}
+				// The verdict must rest on an experiment this challenge ran, not on
+				// reasoning about what JSON.stringify emits.
+				backed := false
+				for _, ev := range a.Evidence {
+					backed = backed || ev.Experiment
+				}
+				if !backed {
+					t.Fatalf("supported verdict cites no experiment from this challenge: %+v", a.Evidence)
+				}
+				return
+			}
+			if a.Status != "unresolved" || a.Remedy != "" || !res.Incomplete {
+				t.Fatalf("without a sandbox the runtime claim must be unresolved, remedy withheld, review incomplete: %+v incomplete=%v", a, res.Incomplete)
+			}
+		})
 	}
 }

@@ -1,0 +1,4 @@
+case	attempt	model	provider	violation	remedy	alternatives
+5	1	z-ai/glm-5.2	StreamLake	violation	reject	accept:Validate the path before prefixing (e.g.;reject:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-
+5	2	z-ai/glm-5.2	StreamLake	violation	reject	cannot_determine:Validate the path before prefixing (e.g.;reject:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-
+5	3	z-ai/glm-5.2	StreamLake	violation	reject	accept:Validate the path before prefixing (e.g.;reject:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-

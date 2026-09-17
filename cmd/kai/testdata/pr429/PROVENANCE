@@ -1,0 +1,44 @@
+repo:   kaicontext/kai-desktop
+pr:     #429 "fix: prefix play-button commands with cd into the workspace" (OPEN at time of copy)
+ref:    8a0662e58f18e1f6eb1e59d0be8bfe4da18ee486 (PR head)
+path:   frontend/dist/app.js
+lines:  447-453
+copied: verbatim via `sed -n '447,453p'` from the file fetched with
+        gh api -H 'Accept: application/vnd.github.raw' repos/kaicontext/kai-desktop/contents/frontend/dist/app.js?ref=8a0662e5…
+        Not retyped. The test locates the construction statement inside this
+        excerpt by its text and fails if it is not found, so drift is visible.
+
+deep-attempt3-missing-dir.json — the missing-directory case preserved from the
+deep-path capture (attempt 3 at revision 9a4a1ff, 2026-09-17). Fields: the
+requirement (commit subject + the author's comment in the diff), the three
+ISSUES exactly as handed to the challenger, the 18 sources it received (its
+final request, line-number prefixes stripped), the four rcExperimentRecords
+from the emitted bundle, and the raw submit_review payload GLM-5.2 submitted —
+which the validator accepted, publishing "stopping after a failed cd" as a
+confirmed defect with a `cd … ;` remedy. See review_commit_missingdir_test.go.
+
+proposal-eval.sh / proposal-eval.out — the proposal's mechanical checks (old
+construction, remedy construction, outcome equality) executed in the pinned
+sandbox image on the missing-directory case's inputs, 2026-09-17. Not a test;
+the evaluation the record cites.
+
+adjudication/ — the independent adjudication pass, 2026-09-17. adjudicate.py is
+the throwaway harness (not reviewer code): for each of four cases it sends the
+requirement (author's words), the actual diff, recorded execution results
+(exact generated commands run in the pinned image, incl. the pre-change code
+and the remedy where executed), the alleged violation, and the proposed
+remedy — withholding the prior verdict, readiness, the challenger's
+expectation label and reasoning — and asks for the violation and the remedy
+separately. z-ai/glm-5.2, reasoning disabled (as the reviewer configures it),
+3 attempts per case; model and provider confirmed from each response body.
+caseN/case.json = inputs; attemptM-request.json (no auth header) and
+attemptM-response.json (raw body) = every call; summary.tsv = parsed answers.
+Two earlier runs never reached the model (adjudication-run-1-tls-failed.log:
+Python without a CA bundle; adjudication-run-2-403.log: Cloudflare 1010 on
+the Python user agent) and are kept as logs. case3-exec.sh/.out = the
+hypothetical regressed variant executed in the image for case 3's records.
+adjudication/case5 — case 1 repeated with one sentence added to the
+requirement ("If the workspace cannot be entered, do not execute the command
+in another directory; report the failure."); code, records, allegation,
+remedy, system prompt and model settings identical to case 1 (verified
+against case 1's request). summary-case5.tsv, adjudication-run-case5.log.

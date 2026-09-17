@@ -1,0 +1,7 @@
+  // elsewhere. The workspace path is absolute (set by the backend via
+  // Panels.setWorkspace), so quoting it handles spaces safely. If the
+  // command itself already starts with a cd, the extra one is harmless.
+  const wsPath = (window.Panels && typeof window.Panels.workspace === "function") ? window.Panels.workspace() : "";
+  const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;
+  Panels.setOpen(true);
+  Panels.select("terminal", { command: full });

@@ -1,0 +1,4 @@
+regressed|generated=|__EXIT__=0|__PWD__=/tmp|stderr=
+fix|generated=echo COMMAND_RAN|COMMAND_RAN|__EXIT__=0|__PWD__=/tmp|stderr=
+old|generated=echo COMMAND_RAN|COMMAND_RAN|__EXIT__=0|__PWD__=/tmp|stderr=
+fix-with-ws|generated=cd "/tmp/ws" && echo COMMAND_RAN|COMMAND_RAN|__EXIT__=0|__PWD__=/tmp/ws|stderr=
