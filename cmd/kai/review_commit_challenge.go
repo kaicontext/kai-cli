@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -57,6 +58,13 @@ Decisions are assessed, not asserted. Supply exactly one decision entry per DECI
 There must be exactly one check per supplied issue. A "supported" or "refuted" verdict needs at least one citation into the supplied sources (or a successful review_shell result); "supported" additionally needs a non-empty "finding". An "unverified" check means the allegation could not be settled with the evidence available; do not turn missing evidence into an all-clear. Set intent_match and merge_ready from the supported findings only. A fast draft remains a fast, limited review, with merge_ready at most 4.`
 
 const rcEvidenceLimit = 1024 * 1024
+
+// errRCMalformedAnswer marks a submission whose payload could not be parsed
+// into the answer shape at all. It is a FORMAT failure and the only kind that
+// earns the single format-repair nudge. A payload that parses but fails
+// validation (unknown issue, missing check, bad verdict…) is a substantive
+// failure and is never retried.
+var errRCMalformedAnswer = errors.New("invalid challenge JSON")
 
 type rcCheckEvidence struct {
 	Source    int `json:"source"`
@@ -322,12 +330,31 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 				calls = append(calls, call)
 			}
 		}
+		// A sole submission is the answer. If its payload cannot be parsed at
+		// all, that is a FORMAT failure: feed the exact parse error back once,
+		// under the same deadline, with tools restricted to submit_review and
+		// no new evidence, then revalidate the whole resubmission. A payload
+		// that parses but fails validation is substantive and is never retried.
+		if len(calls) == 1 && calls[0].Name == "submit_review" {
+			call := calls[0]
+			res, err := rcValidateChallenge(call.Input, issues, decisions, sources, experiment)
+			if err == nil || !errors.Is(err, errRCMalformedAnswer) || nudged {
+				return res, err
+			}
+			nudged = true
+			fmt.Fprintf(os.Stderr, "  challenge: submit_review payload could not be parsed (%v) — nudging once to resubmit\n%s\n", err, rcIndentBounded(call.Input, 12))
+			msgs = append(msgs, message.Message{Role: message.RoleAssistant, Parts: resp.Parts}, message.Message{Role: message.RoleUser, Parts: []message.ContentPart{message.ToolResult{
+				ToolCallID: call.ID, Name: call.Name, IsError: true,
+				Content: fmt.Sprintf("Your submit_review payload could not be parsed: %v. Resubmit ONCE with the exact structured shape: \"checks\" and \"decisions\" are JSON arrays of objects (not strings), \"scope\"/\"limitations\" are arrays of strings, \"merge_ready\" is an integer, \"requires_runtime\" is a boolean. No further experiments are available; use only the evidence already in this conversation.", err),
+			}}})
+			available = []tools.ToolInfo{rcSubmitReviewToolInfo()}
+			continue
+		}
 		for _, call := range calls {
 			if call.Name == "submit_review" {
-				if len(calls) != 1 {
-					return nil, fmt.Errorf("challenge submitted before its pending experiments completed")
-				}
-				return rcValidateChallenge(call.Input, issues, decisions, sources, experiment)
+				// Only reachable when a submission was mixed with pending
+				// experiments; a sole submission was handled above.
+				return nil, fmt.Errorf("challenge submitted before its pending experiments completed")
 			}
 			toolCalls++
 			if call.Name != "review_shell" || toolCalls > 4 {
@@ -364,7 +391,17 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 		if len(results) == 0 {
 			text := rcResponseText(resp)
 			if answer := rcExtractJSONObject(text); answer != "" {
-				return rcValidateChallenge(answer, issues, decisions, sources, experiment)
+				res, err := rcValidateChallenge(answer, issues, decisions, sources, experiment)
+				if err == nil || !errors.Is(err, errRCMalformedAnswer) || nudged {
+					return res, err
+				}
+				// Same single format-repair budget as a tool submission.
+				nudged = true
+				fmt.Fprintf(os.Stderr, "  challenge: embedded JSON answer could not be parsed (%v) — nudging once to resubmit\n%s\n", err, rcIndentBounded(answer, 12))
+				msgs = append(msgs, message.Message{Role: message.RoleAssistant, Parts: resp.Parts}, message.Message{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{
+					Text: fmt.Sprintf("Your answer could not be parsed: %v. Call submit_review ONCE with the exact structured shape: \"checks\" and \"decisions\" are JSON arrays of objects (not strings), \"scope\"/\"limitations\" are arrays of strings, \"merge_ready\" is an integer, \"requires_runtime\" is a boolean. No further experiments are available; use only the evidence already in this conversation.", err)}}})
+				available = []tools.ToolInfo{rcSubmitReviewToolInfo()}
+				continue
 			}
 			// Not a submission at all. Once, tell the model to submit; a second
 			// non-submission is a genuinely broken answer and fails closed.
@@ -425,7 +462,7 @@ func rcResolveCitations(label string, evidence []rcCheckEvidence, sources []stri
 func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, experiment map[int]bool) (*rcChallengeResult, error) {
 	var answer rcChallengeAnswer
 	if err := json.Unmarshal([]byte(raw), &answer); err != nil {
-		return nil, fmt.Errorf("invalid challenge JSON: %w", err)
+		return nil, fmt.Errorf("%w: %v", errRCMalformedAnswer, err)
 	}
 	scope := rcNonEmpty(answer.Scope)
 	if len(scope) == 0 {

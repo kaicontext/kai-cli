@@ -346,6 +346,53 @@ func TestReviewChallengeProseFinalAnswerIsNudgedOnce(t *testing.T) {
 	}
 }
 
+// End-to-end GLM-5.2 on #429: the submit_review payload had "checks" as a JSON
+// string, not an array, and the gate failed closed with no bundle. An
+// unparseable payload is a FORMAT failure and earns exactly one repair nudge
+// carrying the parse error, under the original restrictions; a payload that
+// parses but fails validation is substantive and is never retried.
+func TestReviewChallengeUnparseableSubmissionIsNudgedOnce(t *testing.T) {
+	valid := rcTestAnswer(t, rcCDChecks())
+	malformed := strings.Replace(valid, `"checks":[`, `"checks":"[`, 1) // checks becomes a string
+	malformed = strings.Replace(malformed, `}],"decisions"`, `}]","decisions"`, 1)
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s1", Name: "submit_review", Input: malformed}}}, nil
+		}
+		last := req.Messages[len(req.Messages)-1].Parts[0].(message.ToolResult)
+		if !last.IsError || last.ToolCallID != "s1" || !strings.Contains(last.Content, "could not be parsed") || !strings.Contains(last.Content, "arrays of objects") || len(req.Tools) != 1 {
+			t.Fatalf("second turn was not the single parse-error repair nudge: %+v tools=%d", last, len(req.Tools))
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s2", Name: "submit_review", Input: valid}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || calls != 2 || res == nil || res.Allegations[1].Status != "supported" {
+		t.Fatalf("unparseable submission was not recovered by one nudge: calls=%d err=%v res=%+v", calls, err, res)
+	}
+	// A SEMANTIC failure is never nudged: it fails closed on the first call.
+	calls = 0
+	semantic := rcCDChecks()
+	semantic.Checks[0].Issue = "phantom.go:1 — never alleged"
+	p2 := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		calls++
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, semantic)}}}, nil
+	}}
+	if res, err := rcChallengeReview(context.Background(), p2, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil); err == nil || res != nil || calls != 1 {
+		t.Fatalf("substantive validation failure was retried: calls=%d %+v %v", calls, res, err)
+	}
+	// Malformed twice is a broken answer and fails closed — no unbounded retry.
+	calls = 0
+	p3 := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		calls++
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: malformed}}}, nil
+	}}
+	if res, err := rcChallengeReview(context.Background(), p3, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil); err == nil || res != nil || calls != 2 {
+		t.Fatalf("repeated malformed payload was not failed closed after one nudge: calls=%d %+v %v", calls, res, err)
+	}
+}
+
 func TestReviewChallengeRejectsTruncatedAnswerAndUnexpectedTool(t *testing.T) {
 	for _, resp := range []provider.Response{
 		{FinishReason: message.FinishReasonMaxTokens, Parts: []message.ContentPart{message.TextContent{Text: `{}`}}},
