@@ -127,20 +127,40 @@ metacharacters. Three changes address exactly that, and nothing broader:
   `exit`, `stdout_contains`, `stdout_not_contains`, `pwd`, `pwd_not` — and the
   harness evaluates each as PASS/FAIL against the recorded exit status, stdout,
   and the working directory the command actually left behind.
-- **The verdict accounts for the assertion results — as currently implemented,
-  too strongly.** The implemented rule is: a supported/refuted verdict on a
-  runtime claim may cite an experiment only if it declared at least one
-  assertion and **all of them passed**; a bare printout (no assertions) can back
-  nothing. That rule correctly stops a failed path-equality check from backing
-  "this quoting is safe." But "all passed" is **not necessary for useful
-  evidence**: if the requirement is "run in the exact workspace directory," a
-  *failed* directory-equality assertion can itself demonstrate the defect. The
-  current rule discards that observation. The right distinction is between a
-  **broken experiment** (it did not run, or its record is incomplete) and a
-  **completed experiment whose assertion failed** — the latter is a valid
-  observation ("expected X, observed Y") that can support an allegation of
-  exactly that behavior. Implementation is paused; this is recorded as a known
-  flaw of the rule, not fixed here.
+- **The verdict is connected to what was tested and what was observed.** When
+  the model cites an experiment it must connect it to the allegation with four
+  recorded fields: `addresses_allegation`, `covers_alleged_inputs`,
+  `expectation` (whether its assertions encode the *intended* behavior or the
+  *alleged defect*), and `tested`. The gate then **derives the observation from
+  the record**, not from the model's conclusion: an assertion of intended
+  behavior that failed, or an assertion of the defect that passed, is the
+  alleged violation *observed*; the converse is conformance for the input
+  tested. Four rules follow structurally, and a verdict is never flipped — one
+  the observations do not carry becomes unresolved with the reason recorded:
+  1. An observed violation by a relevant experiment can **support** the
+     defect. A failed directory-equality check is evidence, not a discard.
+  2. A passing example establishes behavior for **that example only**. It can
+     refute the allegation only if `covers_alleged_inputs` is declared, and
+     never when a relevant experiment observed the violation.
+  3. An experiment that does not address the allegation, or was never
+     connected to it, leaves it **unresolved**.
+  4. An experiment that could not run supplies **no runtime conclusion**.
+
+  The relevance and coverage bits remain model judgment. Structured fields do
+  not guarantee correctness; they make the claim explicit and auditable in the
+  bundle, so a false "this double-quote test covered `$` and backticks" is
+  visible rather than silent.
+
+  **Validated against the preserved wrong-verdict run**
+  (`cmd/kai/review_commit_wrongverdict_test.go`, fixture extracted from that
+  run's bundle by script): its cited experiment — a double quote, all
+  assertions passed — observed conformance and did not cover the alleged
+  inputs. Under these rules it cannot support the defect (no violation
+  observed) and cannot refute it (wrong inputs), with or without an honest
+  `covers_alleged_inputs`; GLM's actual "supported" verdict becomes unresolved
+  and its "no code change needed" remedy is withheld. The one remaining path to
+  the wrong conclusion is a false coverage declaration, which is recorded on
+  the citation.
 
 **Every experiment attempt is recorded, regardless of outcome.** Each record
 carries an `outcome`: `completed` — it ran, and its observations and assertion

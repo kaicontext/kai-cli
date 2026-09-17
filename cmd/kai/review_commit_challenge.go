@@ -39,7 +39,9 @@ Cite evidence BY LOCATION. Each source is shown to you with numbered lines. To c
 
 Every check must classify whether the allegation requires runtime evidence. Set "requires_runtime": true when resolving it means observing behavior that reading the source cannot establish (for example: what a shell does after a successful cd, whether a quoting scheme survives a hostile path, whether a code path actually executes); set it false when the source settles it. This field is mandatory. A "requires_runtime" verdict of "supported" or "refuted" must be backed by a successful review_shell experiment; without one, mark it "unverified". Missing runtime evidence is never permission to substitute confident reasoning. Never cite an experiment you did not run: only a review_shell result present in this conversation counts.
 
-For a runtime claim, use review_shell in FIDELITY mode, which is the only kind of experiment that can back a supported/refuted verdict. Do NOT retype, reconstruct, or "equivalently" escape the command yourself — that is how a wrong verdict was produced before: a hand-escaped command was tested and its success was taken as proof the real one was safe. Instead give "construct": Node code that builds and prints the exact command string the way the code under review builds it (e.g. process.stdout.write('cd ' + JSON.stringify(wsPath) + ' && pwd')); optional "setup" to create the concrete inputs (e.g. mkdir -p a literal directory whose name contains $ or a backtick); and "assertions" stating what you EXPECT to observe (exit code, stdout substring, the working directory the command should leave you in). The harness feeds the generated string verbatim into sh and reports the generated command, exit code, stdout, stderr, the observed working directory, and PASS/FAIL per assertion. Read the assertion results literally: if you asserted the cd would land in the intended directory and it did not, the quoting is NOT safe, whatever the printout looked like. A verdict may cite an experiment only if ALL its assertions passed; a cited experiment with a failed assertion, or with no assertions (a bare printout), is treated as no experiment and the check becomes "unverified". You may call review_shell at most FOUR times in total. Each result is returned as a new numbered SOURCE; an experiment counts only if you CITE that source number in the check's "evidence". It runs synthetic snippets in an isolated container: no repository, credentials, host mounts, or network; POSIX /bin/sh plus node, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
+For a runtime claim, use review_shell in FIDELITY mode, which is the only kind of experiment that can back a supported/refuted verdict. Do NOT retype, reconstruct, or "equivalently" escape the command yourself — that is how a wrong verdict was produced before: a hand-escaped command was tested and its success was taken as proof the real one was safe. Give "construct": Node code that builds and prints the exact command string the way the code under review builds it (e.g. process.stdout.write('cd ' + JSON.stringify(wsPath) + ' && pwd')); optional "setup" to create the concrete inputs; and "assertions" stating what you expect to observe. Test the inputs THE ALLEGATION NAMES: if it alleges $ and backticks are mishandled, create a literal directory containing $ and one containing a backtick and test those — a path with a space or a quote tells you nothing about $. The harness feeds the generated string verbatim into sh and reports the generated command, exit code, stdout, stderr, the observed working directory, and PASS/FAIL per assertion.
+
+When you CITE an experiment in a check's "evidence", you must connect it to the allegation with four fields: "addresses_allegation" (does this experiment exercise the behavior the allegation is about?), "covers_alleged_inputs" (did it use the inputs the allegation names, not merely similar ones?), "expectation" ("intended" if your assertions encode the intended behavior, "defect" if they encode the alleged defect), and "tested" (what input/behavior it exercised). The system then DERIVES what was observed from your assertion results: an assertion of intended behavior that FAILED, or an assertion of the defect that PASSED, is the alleged violation OBSERVED; the converse is conformance for the input tested. The verdict rules follow from that: (1) an observed violation by a relevant experiment can SUPPORT the defect; (2) a passing example establishes behavior for THAT example only — it can REFUTE the allegation only if covers_alleged_inputs is true, and never when a relevant experiment observed the violation; (3) an experiment that does not address the allegation leaves it unresolved; (4) an experiment that could not run supplies no runtime conclusion. A verdict the observations do not carry becomes "unverified" — so read the results literally: if you asserted the cd would land in the intended directory and it did not, that is the violation, whatever the printout looked like. You may call review_shell at most FOUR times in total. Each result is returned as a new numbered SOURCE; an experiment counts only if you CITE that source number. It runs synthetic snippets in an isolated container: no repository, credentials, host mounts, or network; POSIX /bin/sh plus node, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
 
 Finish by calling submit_review (plain JSON is accepted if tool submission is unavailable) with:
 {"scope":["what was reviewed: files, paths, behaviors actually examined"],
@@ -70,6 +72,12 @@ type rcCheckEvidence struct {
 	Source    int `json:"source"`
 	LineStart int `json:"line_start"`
 	LineEnd   int `json:"line_end"`
+	// For a citation of an EXPERIMENT source, the model must connect it to the
+	// allegation. These are judgments, recorded and auditable, not proofs.
+	AddressesAllegation *bool  `json:"addresses_allegation"`  // does this experiment exercise the behavior the allegation is about?
+	CoversAllegedInputs *bool  `json:"covers_alleged_inputs"` // did it use the inputs the allegation names (e.g. $ and backticks), not merely similar ones?
+	Expectation         string `json:"expectation"`           // "intended": assertions encode the intended behavior; "defect": assertions encode the alleged defect
+	Tested              string `json:"tested"`                // what input / behavior the experiment exercised
 }
 
 type rcIssueCheck struct {
@@ -113,6 +121,26 @@ type rcCitationRef struct {
 	LineStart  int  `json:"lineStart"`
 	LineEnd    int  `json:"lineEnd"`
 	Experiment bool `json:"experiment,omitempty"`
+	// For an experiment citation: the model's stated connection to the
+	// allegation, and the observation the gate DERIVED from the record —
+	// "violation" or "conformance" — or "" with the reason none could be drawn.
+	Addresses   bool   `json:"addressesAllegation,omitempty"`
+	Covers      bool   `json:"coversAllegedInputs,omitempty"`
+	Expectation string `json:"expectation,omitempty"`
+	Tested      string `json:"tested,omitempty"`
+	Observed    string `json:"observed,omitempty"`
+	Note        string `json:"note,omitempty"`
+}
+
+// rcRelevance summarizes what a check's cited experiments established with
+// respect to its allegation. Only completed experiments the model says address
+// the allegation count; among those, whether any observed the alleged
+// violation, and whether any observed conformance on the alleged inputs.
+type rcRelevance struct {
+	Relevant            bool   // at least one completed, addressing experiment was cited
+	Violation           bool   // a relevant experiment observed the alleged behavior
+	ConformanceCovering bool   // a relevant experiment observed conformance ON the alleged inputs
+	Reason              string // the most informative reason a citation fell short
 }
 
 // rcAllegationResult is the final, validated result for one of the draft's
@@ -174,6 +202,10 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 	verdict := map[string]any{"type": "string", "enum": []string{"supported", "refuted", "unverified"}}
 	evidence := map[string]any{"type": "object", "properties": map[string]any{
 		"source": intg(), "line_start": intg(), "line_end": intg(),
+		"addresses_allegation":  map[string]any{"type": "boolean", "description": "experiment citations only: does this experiment exercise the behavior the allegation is about?"},
+		"covers_alleged_inputs": map[string]any{"type": "boolean", "description": "experiment citations only: did it use the inputs the allegation names (e.g. $ and backticks), not merely similar ones?"},
+		"expectation":           map[string]any{"type": "string", "enum": []string{"intended", "defect"}, "description": "experiment citations only: do its assertions encode the INTENDED behavior, or the alleged DEFECT?"},
+		"tested":                str(),
 	}, "required": []string{"source", "line_start", "line_end"}}
 	evidenceList := map[string]any{"type": "array", "items": evidence}
 	check := map[string]any{"type": "object", "properties": map[string]any{
@@ -455,32 +487,66 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 // rcResolveCitations validates a check's citations against the sources. It
 // returns the usable references (an out-of-bounds one is dropped and logged,
 // never fatal) and whether any of them is an experiment from this challenge.
-// rcResolveCitations returns the usable references, whether any of them is a
-// QUALIFYING experiment (declared assertions, all passed), and — when an
-// experiment was cited but does not qualify — the precise reason, so the
-// unresolved reason names the failed expectation rather than "no experiment".
-// A cited experiment whose assertion failed is evidence that the model's
-// expectation was wrong; it cannot support any verdict.
-func rcResolveCitations(label string, evidence []rcCheckEvidence, sources []string, experiments map[int]*rcExperimentRecord) ([]rcCitationRef, bool, string) {
+// rcResolveCitations returns the usable references and what the cited
+// experiments established with respect to the allegation. For each experiment
+// citation it records the model's stated connection (addresses / covers /
+// expectation / tested) and DERIVES the observation from the record — a
+// violation or a conformance for the input tested — so the verdict is tied to
+// what was observed, not to whether the model's guess came true. A citation
+// that does not say whether it addresses the allegation, or which way its
+// assertions point, contributes no observation.
+func rcResolveCitations(label string, evidence []rcCheckEvidence, sources []string, experiments map[int]*rcExperimentRecord) ([]rcCitationRef, rcRelevance) {
 	var refs []rcCitationRef
-	qualifying, weak := false, ""
+	var rel rcRelevance
+	note := func(s string) {
+		if rel.Reason == "" {
+			rel.Reason = s
+		}
+	}
 	for i, ev := range evidence {
 		if _, ok := rcExtractCitation(sources, ev); !ok {
 			fmt.Fprintf(os.Stderr, "  challenge: dropped citation %d of %s (source %d, lines %d-%d; available 1..%d) — out of range\n",
 				i+1, label, ev.Source, ev.LineStart, ev.LineEnd, len(sources))
 			continue
 		}
+		ref := rcCitationRef{Source: ev.Source, LineStart: ev.LineStart, LineEnd: ev.LineEnd}
 		rec := experiments[ev.Source]
-		refs = append(refs, rcCitationRef{Source: ev.Source, LineStart: ev.LineStart, LineEnd: ev.LineEnd, Experiment: rec != nil})
+		if rec == nil {
+			refs = append(refs, ref)
+			continue
+		}
+		ref.Experiment, ref.Expectation, ref.Tested = true, ev.Expectation, strings.TrimSpace(ev.Tested)
+		ref.Addresses = ev.AddressesAllegation != nil && *ev.AddressesAllegation
+		ref.Covers = ev.CoversAllegedInputs != nil && *ev.CoversAllegedInputs
+		observed, why := rec.observation(ev.Expectation)
+		ref.Observed, ref.Note = observed, why
+		refs = append(refs, ref)
 		switch {
-		case rec == nil:
-		case rec.qualifies():
-			qualifying = true
-		case weak == "":
-			weak = rec.disqualifyReason()
+		case !rec.completed():
+			note(why) // an experiment that could not run supplies no runtime conclusion
+		case ev.AddressesAllegation == nil:
+			note("the citation did not state whether the experiment addresses the allegation")
+		case !ref.Addresses:
+			note("the model states the cited experiment does not address the allegation" + rcTestedSuffix(ref.Tested))
+		case observed == "":
+			note(why)
+		case observed == rcObservedViolation:
+			rel.Relevant, rel.Violation = true, true
+		case ref.Covers:
+			rel.Relevant, rel.ConformanceCovering = true, true
+		default:
+			rel.Relevant = true
+			note("a passing example on inputs other than the alleged ones" + rcTestedSuffix(ref.Tested) + " establishes behavior for that input only; it does not refute the allegation")
 		}
 	}
-	return refs, qualifying, weak
+	return refs, rel
+}
+
+func rcTestedSuffix(tested string) string {
+	if tested == "" {
+		return ""
+	}
+	return " (tested: " + tested + ")"
 }
 
 // rcValidateChallenge turns the challenger's structured answer into the final
@@ -537,23 +603,36 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 		if check.RequiresRuntime == nil {
 			return nil, fmt.Errorf("challenge did not classify whether %q requires runtime evidence", check.Issue)
 		}
-		refs, qualifying, weak := rcResolveCitations(fmt.Sprintf("check %d", id+1), check.Evidence, sources, experiments)
-		// Final status, with the ACTUAL reason for any downgrade. A runtime
-		// verdict needs a cited experiment whose declared assertions all passed;
-		// a cited experiment that failed an assertion, or declared none, is
-		// named as the reason — the verdict must account for the assertion
-		// results, and a failed path-equality check cannot support "safe".
+		refs, rel := rcResolveCitations(fmt.Sprintf("check %d", id+1), check.Evidence, sources, experiments)
+		// Final status, connected to what was tested and what was observed.
+		// For a runtime allegation:
+		//   - an observed violation by a relevant experiment can SUPPORT the defect;
+		//   - a passing example establishes behavior for that example only — it
+		//     REFUTES the allegation only if it covered the alleged inputs, and
+		//     never when a relevant experiment observed the violation;
+		//   - an experiment that does not address the allegation leaves it unresolved;
+		//   - an experiment that could not run supplies no runtime conclusion.
+		// A verdict is never flipped; a verdict the observations do not carry
+		// becomes unresolved with the reason recorded.
 		status, reason := check.Verdict, strings.TrimSpace(check.Reason)
 		if status == "unverified" {
 			status = "unresolved"
-		} else {
+		} else if len(refs) == 0 {
+			status, reason = "unresolved", "no usable citation to the supplied sources"
+		} else if *check.RequiresRuntime {
+			short := ""
+			if rel.Reason != "" {
+				short = "; " + rel.Reason
+			}
 			switch {
-			case len(refs) == 0:
-				status, reason = "unresolved", "no usable citation to the supplied sources"
-			case *check.RequiresRuntime && !qualifying && weak != "":
-				status, reason = "unresolved", "requires a runtime experiment with passing assertions; "+weak
-			case *check.RequiresRuntime && !qualifying:
-				status, reason = "unresolved", "requires a runtime experiment with passing assertions, and none from this run backs it"
+			case !rel.Relevant:
+				status, reason = "unresolved", "no cited experiment addresses the allegation, so no runtime conclusion can be drawn"+short
+			case status == "supported" && !rel.Violation:
+				status, reason = "unresolved", "supported requires a relevant experiment that observed the alleged violation; none did"+short
+			case status == "refuted" && rel.Violation:
+				status, reason = "unresolved", "a relevant experiment observed the alleged violation, which contradicts refuting it"
+			case status == "refuted" && !rel.ConformanceCovering:
+				status, reason = "unresolved", "refuted requires conformance observed on the alleged inputs themselves"+short
 			}
 		}
 		r := rcAllegationResult{ID: id + 1, Issue: check.Issue, Status: status, RequiresRuntime: *check.RequiresRuntime, Evidence: refs, Reason: reason}
@@ -593,7 +672,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 		if dc.Verdict != "supported" && dc.Verdict != "refuted" && dc.Verdict != "unverified" {
 			return nil, fmt.Errorf("challenge returned an unknown decision verdict %q", dc.Verdict)
 		}
-		refs, _, _ := rcResolveCitations(fmt.Sprintf("decision %d", id+1), dc.Evidence, sources, experiments)
+		refs, _ := rcResolveCitations(fmt.Sprintf("decision %d", id+1), dc.Evidence, sources, experiments)
 		status, reason := dc.Verdict, strings.TrimSpace(dc.Reason)
 		if status == "unverified" {
 			status = "unresolved"

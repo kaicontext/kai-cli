@@ -1,0 +1,53 @@
+{
+  "provenance": "Extracted by script from the preserved end-to-end bundle e2e-429-F-a1-bundle.json (kai-cli feat/review-cite-by-location, fidelity revision 06bb76c; model z-ai/glm-5.2; #429 scratch repo commit c478d2f). Not retyped. This is the run that produced the wrong 'safe' conclusion.",
+  "issue": "frontend/dist/app.js:9 \u2014 If `wsPath` is an empty string (falsy), the ternary returns `command` unchanged, which is correct. But if `wsPath` is a string that contains characters that need escaping for the shell (e.g., backticks, `$()`, newlines), `JSON.stringify` does escape them correctly. The comment says \"safely\" and this is true for JSON quoting, though the actual safety depends on how the terminal panel interprets the string \u2014 the diff shows only that it \"writes the string verbatim\", leaving it to the grounded pass to verify the terminal truly interprets quoted strings safely.",
+  "glmStatus": "supported",
+  "glmReason": "JSON.stringify properly escapes shell-dangerous characters. Testing with SOURCE 4 confirms that when a path containing double quotes is JSON-stringified (e.g., `/tmp/test\"dir` becomes `\"/tmp/test\\\\\"dir\"`), the resulting command `cd \"/tmp/test\\\\\"dir\" && ...` is correctly interpreted by POSIX sh, and the working directory is correctly set to the intended path with special characters preserved. The empty string case is also correct: when `wsPath` is falsy, the original command is returned unchanged (line 30). However, the draft correctly notes that actual end-to-end safety also depends on whether the terminal panel implementation truly executes commands in POSIX sh as the comment claims.",
+  "glmRemedy": "No code change needed for JSON.stringify safety. For complete verification, confirm via integration test that the terminal panel does invoke POSIX sh and execute the verbatim command string as documented.",
+  "glmEvidence": [
+    {
+      "source": 1,
+      "lineStart": 29,
+      "lineEnd": 30
+    },
+    {
+      "source": 4,
+      "lineStart": 13,
+      "lineEnd": 24,
+      "experiment": true
+    }
+  ],
+  "experimentSource": 4,
+  "experiment": {
+    "mode": "construct",
+    "setup": "mkdir -p '/tmp/test\"dir'",
+    "construct": "\n// Simulate what the code does: build a command with JSON-stringified path\nprocess.stdout.write(\n  'cd ' + JSON.stringify('/tmp/test\"dir') + ' && echo \"successfully changed to: $(pwd)\"'\n);\n",
+    "generatedCommand": "cd \"/tmp/test\\\"dir\" && echo \"successfully changed to: $(pwd)\"",
+    "exitCode": 0,
+    "observedPwd": "/tmp/test\"dir",
+    "stdout": "successfully changed to: /tmp/test\"dir\n",
+    "stderr": "",
+    "assertions": [
+      {
+        "kind": "exit",
+        "value": "0",
+        "passed": true,
+        "observed": "0"
+      },
+      {
+        "kind": "stdout_contains",
+        "value": "successfully changed to:",
+        "passed": true,
+        "observed": "successfully changed to: /tmp/test\"dir\n"
+      },
+      {
+        "kind": "pwd",
+        "value": "/tmp/test\"dir",
+        "passed": true,
+        "observed": "/tmp/test\"dir"
+      }
+    ],
+    "hasAssertions": true,
+    "allPassed": true
+  }
+}

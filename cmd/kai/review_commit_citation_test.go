@@ -133,8 +133,12 @@ func TestReviewChallengeRuntimeClaimPublishesWithExperiment(t *testing.T) {
 		Scope:       []string{"the escaping behavior"},
 		IntentMatch: "partial",
 		MergeReady:  3,
-		Checks:      []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "runtime", Finding: "Expands.", Remedy: "Escape the path.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}}},
+		Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "runtime", Finding: "Expands.", Remedy: "Escape the path.", Evidence: []rcCheckEvidence{
+			{Source: 2, LineStart: 1, LineEnd: 1, AddressesAllegation: rcBool(true), CoversAllegedInputs: rcBool(true), Expectation: "defect", Tested: "a path containing $HOME"},
+		}}},
 	}
+	// The experiment asserted the DEFECT (pwd_not the intended dir) and it
+	// passed: the alleged violation was observed.
 	passing := map[int]*rcExperimentRecord{2: {Outcome: rcOutcomeCompleted, Mode: "construct", HasAssertions: true, AllPassed: true,
 		Assertions: []rcAssertionResult{{Kind: "pwd_not", Value: "/tmp/a$HOME", Passed: true, Observed: "/tmp/a"}}}}
 	res, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcEscapeIssue}, nil, []string{`cd "$HOME"`, "expansion observed"}, passing)
@@ -150,39 +154,81 @@ func TestReviewChallengeRuntimeClaimPublishesWithExperiment(t *testing.T) {
 	}
 }
 
-// The verdict must account for assertion results. A cited experiment that
-// declared no assertions (a bare printout — GLM's Source 2) or whose assertion
-// FAILED (the path-equality check a "safe" verdict would need) cannot back a
-// runtime verdict; the check becomes unresolved and the reason names why.
-func TestReviewChallengeRuntimeVerdictRequiresPassingAssertions(t *testing.T) {
-	answer := func(verdict string) rcChallengeAnswer {
+// The verdict is connected to what was tested and what was observed. Four
+// rules: an observed violation by a relevant experiment can SUPPORT the
+// defect; a passing example establishes behavior for that example only and
+// REFUTES the allegation only if it covered the alleged inputs (and never when
+// a violation was observed); an experiment that does not address the
+// allegation leaves it unresolved; an experiment that could not run supplies
+// no runtime conclusion. A verdict is never flipped — one the observations do
+// not carry becomes unresolved, with the reason recorded.
+func TestReviewChallengeVerdictConnectsTestedAndObserved(t *testing.T) {
+	sources := []string{`cd "$HOME"`, "experiment output"}
+	answer := func(verdict string, ev rcCheckEvidence) rcChallengeAnswer {
+		ev.Source, ev.LineStart, ev.LineEnd = 2, 1, 1
 		return rcChallengeAnswer{
 			Scope: []string{"quoting"}, IntentMatch: "partial", MergeReady: 4,
-			Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: verdict, RequiresRuntime: rcBool(true), Reason: "ran it", Finding: "f", Remedy: "fix", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}}},
+			Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: verdict, RequiresRuntime: rcBool(true), Reason: "ran it", Finding: "f", Remedy: "fix", Evidence: []rcCheckEvidence{ev}}},
 		}
 	}
-	sources := []string{`cd "$HOME"`, "experiment output"}
-	// No assertions: a printout is not evidence of behavior.
-	res, err := rcValidateChallenge(rcTestAnswer(t, answer("refuted")), []string{rcEscapeIssue}, nil, sources, map[int]*rcExperimentRecord{2: {Outcome: rcOutcomeCompleted, Mode: "script", HasAssertions: false}})
-	if err != nil {
-		t.Fatal(err)
+	run := func(verdict string, ev rcCheckEvidence, rec *rcExperimentRecord) rcAllegationResult {
+		t.Helper()
+		res, err := rcValidateChallenge(rcTestAnswer(t, answer(verdict, ev)), []string{rcEscapeIssue}, nil, sources, map[int]*rcExperimentRecord{2: rec})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Allegations[0]
 	}
-	if r := res.Allegations[0]; r.Status != "unresolved" || !strings.Contains(r.Reason, "declared no assertions") {
-		t.Fatalf("unasserted experiment backed a refutation: %+v", r)
+	yes, no := rcBool(true), rcBool(false)
+	// Records: the intended-behavior assertion FAILED on the alleged input
+	// (violation observed); the intended-behavior assertion PASSED on a benign
+	// input (conformance for that input).
+	violation := &rcExperimentRecord{Outcome: rcOutcomeCompleted, Mode: "construct", HasAssertions: true, AllPassed: false,
+		Assertions: []rcAssertionResult{{Kind: "pwd", Value: "/tmp/test$dir", Passed: false, Observed: "/tmp"}}}
+	conformance := &rcExperimentRecord{Outcome: rcOutcomeCompleted, Mode: "construct", HasAssertions: true, AllPassed: true,
+		Assertions: []rcAssertionResult{{Kind: "pwd", Value: `/tmp/test"dir`, Passed: true, Observed: `/tmp/test"dir`}}}
+
+	// Rule 1: an observed violation supports the defect — the failed assertion
+	// is the evidence, not a reason to discard it.
+	if r := run("supported", rcCheckEvidence{AddressesAllegation: yes, CoversAllegedInputs: yes, Expectation: "intended", Tested: "$dir"}, violation); r.Status != "supported" || r.Remedy != "fix" || r.Evidence[0].Observed != rcObservedViolation {
+		t.Fatalf("observed violation did not support the defect: %+v", r)
 	}
-	// A failed path-equality assertion cannot support "this quoting is safe".
-	failed := map[int]*rcExperimentRecord{2: {Outcome: rcOutcomeCompleted, Mode: "construct", HasAssertions: true, AllPassed: false,
-		Assertions: []rcAssertionResult{{Kind: "pwd", Value: "/tmp/test$dir", Passed: false, Observed: "/tmp"}}}}
-	res, err = rcValidateChallenge(rcTestAnswer(t, answer("refuted")), []string{rcEscapeIssue}, nil, sources, failed)
-	if err != nil {
-		t.Fatal(err)
+	// The same violation cannot be REFUTED: the observation contradicts it.
+	if r := run("refuted", rcCheckEvidence{AddressesAllegation: yes, CoversAllegedInputs: yes, Expectation: "intended"}, violation); r.Status != "unresolved" || !strings.Contains(r.Reason, "observed the alleged violation") {
+		t.Fatalf("a refutation survived an observed violation: %+v", r)
 	}
-	r := res.Allegations[0]
-	if r.Status != "unresolved" || !strings.Contains(r.Reason, "assertion failed: pwd") || !strings.Contains(r.Reason, `observed "/tmp"`) || r.Remedy != "" || r.WithheldRemedy != "fix" {
-		t.Fatalf("failed assertion backed a 'safe' verdict, or remedy not withheld: %+v", r)
+	// Rule 2: a passing example on a benign input refutes nothing — this is
+	// the preserved wrong-verdict mechanism (a double quote, not $ or backtick).
+	if r := run("refuted", rcCheckEvidence{AddressesAllegation: yes, CoversAllegedInputs: no, Expectation: "intended", Tested: `a path containing "`}, conformance); r.Status != "unresolved" || !strings.Contains(r.Reason, "on the alleged inputs themselves") || !strings.Contains(r.Reason, `tested: a path containing "`) {
+		t.Fatalf("a passing example on the wrong input refuted the allegation: %+v", r)
 	}
-	if !res.Incomplete {
-		t.Fatal("review with an unresolved runtime claim not marked incomplete")
+	// …and it cannot SUPPORT the defect either: no violation was observed.
+	if r := run("supported", rcCheckEvidence{AddressesAllegation: yes, CoversAllegedInputs: no, Expectation: "intended"}, conformance); r.Status != "unresolved" || !strings.Contains(r.Reason, "observed the alleged violation; none did") || r.Remedy != "" || r.WithheldRemedy != "fix" {
+		t.Fatalf("conformance supported a defect, or remedy not withheld: %+v", r)
+	}
+	// Conformance ON the alleged inputs may refute (a model judgment, recorded).
+	if r := run("refuted", rcCheckEvidence{AddressesAllegation: yes, CoversAllegedInputs: yes, Expectation: "intended", Tested: "literal $ and backtick paths"}, conformance); r.Status != "refuted" || !r.Evidence[0].Covers {
+		t.Fatalf("covering conformance did not refute: %+v", r)
+	}
+	// Rule 3: an experiment the model says does not address the allegation, or
+	// one it never connected, leaves it unresolved.
+	if r := run("supported", rcCheckEvidence{AddressesAllegation: no, Expectation: "intended"}, violation); r.Status != "unresolved" || !strings.Contains(r.Reason, "no cited experiment addresses the allegation") {
+		t.Fatalf("a non-addressing experiment backed a verdict: %+v", r)
+	}
+	if r := run("supported", rcCheckEvidence{Expectation: "intended"}, violation); r.Status != "unresolved" || !strings.Contains(r.Reason, "did not state whether the experiment addresses") {
+		t.Fatalf("an unconnected experiment backed a verdict: %+v", r)
+	}
+	// No declared expectation: no observation can be derived.
+	if r := run("supported", rcCheckEvidence{AddressesAllegation: yes}, violation); r.Status != "unresolved" || !strings.Contains(r.Reason, "intended behavior or the alleged defect") {
+		t.Fatalf("an observation was derived without a declared expectation: %+v", r)
+	}
+	// Rule 4: an experiment that could not run supplies no runtime conclusion.
+	if r := run("supported", rcCheckEvidence{AddressesAllegation: yes, Expectation: "intended"}, &rcExperimentRecord{Outcome: rcOutcomeNotRun, Error: "node: not found"}); r.Status != "unresolved" || !strings.Contains(r.Reason, "did not run: node: not found") {
+		t.Fatalf("a not-run experiment backed a verdict: %+v", r)
+	}
+	// A bare printout: no assertions, no observation.
+	if r := run("refuted", rcCheckEvidence{AddressesAllegation: yes, CoversAllegedInputs: yes, Expectation: "intended"}, &rcExperimentRecord{Outcome: rcOutcomeCompleted, Mode: "script"}); r.Status != "unresolved" || !strings.Contains(r.Reason, "declared no assertions") {
+		t.Fatalf("an unasserted printout backed a refutation: %+v", r)
 	}
 }
 
@@ -195,17 +241,21 @@ func TestExperimentRecordDistinguishesNotRunFromFailedAssertion(t *testing.T) {
 	// Could not run: parameter validation fails before any container is used.
 	sb := &rcShellSandbox{image: "x@sha256:" + strings.Repeat("0", 64)}
 	rec, err := sb.runExperiment(context.Background(), `{"script":"pwd","assertions":[{"kind":"exit","value":"0"}]}`)
-	if err == nil || rec == nil || rec.Outcome != rcOutcomeNotRun || rec.Error == "" || rec.completed() || rec.qualifies() {
+	if err == nil || rec == nil || rec.Outcome != rcOutcomeNotRun || rec.Error == "" || rec.completed() {
 		t.Fatalf("not-run attempt not recorded as such: rec=%+v err=%v", rec, err)
 	}
-	if !strings.Contains(rec.render(sb.image), "could not run") || !strings.Contains(rec.disqualifyReason(), "did not run") {
-		t.Fatalf("not-run record does not say so: %s", rec.render(sb.image))
+	if obs, why := rec.observation("intended"); obs != "" || !strings.Contains(why, "did not run") || !strings.Contains(rec.render(sb.image), "could not run") {
+		t.Fatalf("not-run record yielded an observation or does not say so: obs=%q why=%q", obs, why)
 	}
-	// Ran, expectation failed: a valid observation, distinct from the above.
+	// Ran, expectation failed: a valid observation, distinct from the above —
+	// with the intended behavior asserted, the failure IS the violation observed.
 	failed := &rcExperimentRecord{Outcome: rcOutcomeCompleted, Mode: "construct", ObservedPWD: "/tmp", ExitCode: 2}
 	failed.evaluate([]rcAssertion{{Kind: "pwd", Value: "/tmp/test$dir"}})
-	if !failed.completed() || failed.qualifies() || failed.Assertions[0].Passed || failed.Assertions[0].Observed != "/tmp" {
+	if !failed.completed() || failed.Assertions[0].Passed || failed.Assertions[0].Observed != "/tmp" {
 		t.Fatalf("completed-but-failed experiment not recorded as an observation: %+v", failed)
+	}
+	if obs, _ := failed.observation("intended"); obs != rcObservedViolation {
+		t.Fatalf("failed intended-behavior assertion not derived as a violation: %q", obs)
 	}
 	if !strings.Contains(failed.render("img"), `FAIL pwd "/tmp/test$dir" (observed "/tmp")`) {
 		t.Fatalf("failed assertion not rendered as expected-vs-observed: %s", failed.render("img"))
@@ -254,8 +304,11 @@ func TestExperimentRecordParsesConstructOutputAndEvaluates(t *testing.T) {
 	if !rec.HasAssertions || rec.AllPassed || rec.Assertions[0].Passed || !rec.Assertions[1].Passed || !rec.Assertions[2].Passed {
 		t.Fatalf("assertions evaluated wrong: %+v", rec.Assertions)
 	}
-	if !strings.Contains(rec.disqualifyReason(), `pwd "/tmp/test$dir", observed "/tmp"`) {
-		t.Fatalf("disqualify reason does not name the failed expectation: %s", rec.disqualifyReason())
+	if obs, why := rec.observation("intended"); obs != rcObservedViolation || !strings.Contains(why, `pwd "/tmp/test$dir", observed "/tmp"`) {
+		t.Fatalf("derived observation does not name the failed expectation: obs=%q why=%q", obs, why)
+	}
+	if obs, _ := rec.observation("defect"); obs != rcObservedConformance {
+		t.Fatalf("with the defect asserted and not all passing, observation should be conformance: %q", obs)
 	}
 	if err := (&rcExperimentRecord{}).parseConstructOutput("no markers"); err == nil {
 		t.Fatal("incomplete record accepted")
@@ -396,10 +449,12 @@ func TestReviewChallengeRecordsFinalVerdictAndPerClaimReason(t *testing.T) {
 	if res.Allegations[0].Status != "unresolved" || !strings.Contains(res.Allegations[0].Reason, "no usable citation") {
 		t.Fatalf("citation-invalid claim not recorded with its real reason: %+v", res.Allegations[0])
 	}
-	if res.Allegations[1].Status != "unresolved" || !strings.Contains(res.Allegations[1].Reason, "runtime experiment") {
+	// A runtime claim citing only a source (no experiment): no runtime
+	// conclusion can be drawn, and the reason says exactly that.
+	if res.Allegations[1].Status != "unresolved" || !strings.Contains(res.Allegations[1].Reason, "no cited experiment addresses the allegation") {
 		t.Fatalf("runtime claim not recorded with its real reason: %+v", res.Allegations[1])
 	}
-	if !strings.Contains(res.Review, "no usable citation") || !strings.Contains(res.Review, "runtime experiment") {
+	if !strings.Contains(res.Review, "no usable citation") || !strings.Contains(res.Review, "no runtime conclusion") {
 		t.Fatalf("banner does not give per-claim reasons: %s", res.Review)
 	}
 }

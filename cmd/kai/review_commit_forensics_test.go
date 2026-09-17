@@ -157,17 +157,20 @@ func TestForensicsFidelityModeAssertsPathEqualityForJSONStringify(t *testing.T) 
 	if unsafe.GeneratedCommand != `cd "/tmp/test$dir" && pwd` {
 		t.Fatalf("harness did not execute the code's own generated command: %q", unsafe.GeneratedCommand)
 	}
-	if unsafe.qualifies() || unsafe.Assertions[0].Passed || unsafe.Assertions[1].Passed || unsafe.ExitCode == 0 || unsafe.ObservedPWD == "/tmp/test$dir" {
+	if unsafe.Assertions[0].Passed || unsafe.Assertions[1].Passed || unsafe.ExitCode == 0 || unsafe.ObservedPWD == "/tmp/test$dir" {
 		t.Fatalf("expected the JSON.stringify-built cd to be misdirected with FAILED assertions: %+v", unsafe)
 	}
-	if !strings.Contains(unsafe.disqualifyReason(), `pwd "/tmp/test$dir"`) {
-		t.Fatalf("disqualify reason should name the failed path-equality check: %s", unsafe.disqualifyReason())
+	// With the intended behavior asserted, that failure is the violation
+	// observed — evidence of the defect, not a reason to discard the run.
+	if obs, why := unsafe.observation("intended"); obs != rcObservedViolation || !strings.Contains(why, `pwd "/tmp/test$dir"`) {
+		t.Fatalf("misdirected cd not derived as a violation naming the path check: obs=%q why=%q", obs, why)
 	}
-	// The single-quote fix, constructed and asserted the same way, PASSES.
+	// The single-quote fix, constructed and asserted the same way, PASSES —
+	// conformance for that input.
 	fixed := run(`const p = "/tmp/test$dir"; process.stdout.write("cd '" + p.replace(/'/g, "'\\''") + "' && pwd")`,
 		[]rcAssertion{{Kind: "pwd", Value: "/tmp/test$dir"}, {Kind: "exit", Value: "0"}, {Kind: "stdout_contains", Value: "/tmp/test$dir"}})
-	if !fixed.qualifies() || fixed.ObservedPWD != "/tmp/test$dir" {
-		t.Fatalf("expected the single-quoted construction to pass every assertion: %+v", fixed)
+	if obs, _ := fixed.observation("intended"); obs != rcObservedConformance || fixed.ObservedPWD != "/tmp/test$dir" || !fixed.AllPassed {
+		t.Fatalf("expected the single-quoted construction to pass every assertion (conformance): %+v", fixed)
 	}
 	// A free-form script with assertions is refused: assertions need fidelity mode.
 	input, _ := json.Marshal(rcExperimentParams{Script: "pwd", Assertions: []rcAssertion{{Kind: "exit", Value: "0"}}})

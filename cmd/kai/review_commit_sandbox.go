@@ -50,7 +50,7 @@ func rcShellToolInfo() tools.ToolInfo {
 		Name: "review_shell",
 		Description: "Run a synthetic reproduction in a fresh, restricted container (no network, repository, credentials or host mounts; /tmp writable and disposable; five-second deadline; POSIX /bin/sh, not an interactive PTY or Windows shell). " +
 			"TWO MODES. (1) Exploration: give \"script\" — it runs and you see the output, but it has no assertions and CANNOT back a supported/refuted verdict on a runtime claim. " +
-			"(2) Fidelity — REQUIRED for a runtime verdict: give \"construct\" (Node code that prints, to stdout, the exact command string the code under review would build — reproduce the code's own construction, e.g. process.stdout.write('cd ' + JSON.stringify(p) + ' && pwd')), optional \"setup\" (POSIX sh run first, e.g. mkdir -p a literal directory containing $ or backticks), and \"assertions\" (explicit expected results). The harness executes the GENERATED string verbatim in sh and reports the generated command, exit code, stdout, stderr, the observed working directory, and PASS/FAIL per assertion. Do not retype or escape the command yourself. A verdict may cite an experiment only if ALL its assertions passed; a failed assertion means your expectation was wrong and the experiment supports no verdict.",
+			"(2) Fidelity — REQUIRED for a runtime verdict: give \"construct\" (Node code that prints, to stdout, the exact command string the code under review would build — reproduce the code's own construction, e.g. process.stdout.write('cd ' + JSON.stringify(p) + ' && pwd')), optional \"setup\" (POSIX sh run first, e.g. mkdir -p a literal directory containing $ or backticks), and \"assertions\" (explicit expected results). The harness executes the GENERATED string verbatim in sh and reports the generated command, exit code, stdout, stderr, the observed working directory, and PASS/FAIL per assertion. Do not retype or escape the command yourself. Test the inputs the allegation names. When you cite the result, state whether it addresses the allegation, whether it covered the alleged inputs, and whether your assertions encode the intended behavior or the alleged defect; the system derives what was observed from the assertion results, and a failed assertion of intended behavior IS the alleged violation observed.",
 		Parameters: map[string]any{
 			"script":     str("Exploration only: self-contained POSIX shell script (max 8192 bytes). Not usable as evidence for a runtime verdict."),
 			"setup":      str("Fidelity mode: POSIX sh run before construction, e.g. mkdir -p '/tmp/test$dir' (max 4096 bytes)."),
@@ -110,34 +110,52 @@ type rcExperimentRecord struct {
 // are valid — irrespective of assertion results.
 func (r *rcExperimentRecord) completed() bool { return r != nil && r.Outcome == rcOutcomeCompleted }
 
-// qualifies is the CURRENT gate rule for citing an experiment in support of a
-// runtime verdict: it ran, declared at least one assertion, and every assertion
-// passed. This rule is known to be too strong — a completed experiment whose
-// assertion failed can itself demonstrate an alleged behavior — and its
-// revision is paused pending review of the evidence contract. The record
-// preserves the observation either way.
-func (r *rcExperimentRecord) qualifies() bool {
-	return r.completed() && r.HasAssertions && r.AllPassed
-}
+// Observation values derived from a record together with the model's declared
+// expectation. The verdict is connected to what was observed, not to whether
+// the model's guess came true: a failed assertion of INTENDED behavior is a
+// violation observed; a passed assertion of the ALLEGED DEFECT is a violation
+// observed; the converse cases are conformance for the input tested.
+const (
+	rcObservedViolation   = "violation"   // the alleged behavior was observed
+	rcObservedConformance = "conformance" // the code behaved as intended for the input tested
+)
 
-// disqualifyReason says, precisely, why a cited experiment does not meet the
-// current rule — naming the failed expectation and its observed value.
-func (r *rcExperimentRecord) disqualifyReason() string {
+// observation derives what the experiment showed, given whether its assertions
+// encode the intended behavior ("intended") or the alleged defect ("defect").
+// It returns "" with a reason when no observation can be drawn: the experiment
+// did not run, declared no assertions, or the citation did not say which way
+// its assertions point.
+func (r *rcExperimentRecord) observation(expectation string) (string, string) {
 	if r == nil {
-		return "no experiment"
+		return "", "no experiment"
 	}
 	if !r.completed() {
-		return "the cited experiment did not run: " + r.Error
+		return "", "the cited experiment did not run: " + r.Error
 	}
 	if !r.HasAssertions {
-		return "the cited experiment declared no assertions (an unasserted printout cannot establish behavior)"
+		return "", "the cited experiment declared no assertions (an unasserted printout cannot establish behavior)"
 	}
+	failed := ""
 	for _, a := range r.Assertions {
 		if !a.Passed {
-			return fmt.Sprintf("the cited experiment's assertion failed: %s %q, observed %q", a.Kind, a.Value, a.Observed)
+			failed = fmt.Sprintf("%s %q, observed %q", a.Kind, a.Value, a.Observed)
+			break
 		}
 	}
-	return "the cited experiment did not qualify"
+	switch expectation {
+	case "intended":
+		if failed != "" {
+			return rcObservedViolation, "an assertion of the intended behavior failed: " + failed
+		}
+		return rcObservedConformance, "every assertion of the intended behavior passed for the input tested"
+	case "defect":
+		if r.AllPassed {
+			return rcObservedViolation, "the asserted defect behavior was observed"
+		}
+		return rcObservedConformance, "the asserted defect behavior was not observed: " + failed
+	default:
+		return "", "the citation did not declare whether its assertions encode the intended behavior or the alleged defect"
+	}
 }
 
 // render is the SOURCE text the model sees and cites. It is the full record
