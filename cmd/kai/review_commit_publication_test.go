@@ -301,7 +301,8 @@ func TestFastReviewReportsUnresolved(t *testing.T) {
 // kai-desktop#429 ("revised review added an unchecked or rejected allegation",
 // run 89bdabb8) logged only its error line; its payload was never captured, and
 // eight captured attempts with main's binary on the same change did not
-// reproduce that exact error, so this is the captured specimen of the class.
+// reproduce that exact error (see testdata/rewrite-inconsistency/PROVENANCE), so
+// this is the captured specimen of the class.
 //
 // The captured payload predates intent_match/merge_ready as top-level fields
 // (they lived inside the rewritten review). The test supplies them from the

@@ -18,5 +18,8 @@ REVIEW-DATA marker and carried no coda fields, so main rejected the rewrite and
 withheld the whole review. The production failure of the same class on
 kai-desktop#429 (run 89bdabb8: "revised review added an unchecked or rejected
 allegation") logged only its error line — its payload was never captured — and
-eight captured attempts with main's binary on the same change did not reproduce
-that exact error (7 self-consistent reviews, 1 malformed-JSON failure).
+eight captured deep-path attempts with main's binary on the same change did not
+reproduce that exact error: 3 were challenged and self-consistent, 1 was
+withheld for malformed JSON, and 4 never reached the challenge at all (the
+conclusion fallback's text had no usable coda, so main published it
+unchallenged — a separate, pre-existing gap this change does not touch).
