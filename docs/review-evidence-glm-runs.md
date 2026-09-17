@@ -291,3 +291,66 @@ below therefore uses (a) the real attempt-3 bundle (a complete review) and
 gate results from a **stubbed** model — rendered through the real server
 `buildReviewBody`. (b) verifies the server renders a partial review correctly;
 it does not verify that GLM produces one.
+
+## CLI → bundle → server rendering, observed (not inferred)
+
+Rendered through the real server path — `json.Unmarshal` into `findingView`,
+`countReview`, `buildReviewBody`, headline via `reviewIncomplete` — using a
+throwaway, uncommitted harness (deleted after the run).
+
+### (a) The real GLM bundle from e2e R5 attempt 3 (a complete review)
+
+Renders cleanly and **wrongly**: headline "it does what it says, and nothing
+jumped out at me ✅", "4/5 — your call, then merge", "0 confirmed findings, 2
+refuted". The change contains a real defect that GLM refuted with experiments
+cited. The renderer displayed the verdict it was given correctly; the verdict
+was incorrect. That is the substantive risk: a false negative rendered to a
+reader as a clean review. No `withheldRemedy` text appears (the server drops
+the `challenge` record as an unknown field).
+
+### (b) A partial review in the CLI's emission shape (model STUBBED)
+
+GLM produced no partial bundle in three e2e attempts, so this input carries
+gate results from a stubbed model. It verifies the server renders a partial
+review correctly; it says nothing about GLM. All three required properties
+held in the rendered body:
+
+1. **Unresolved claims keep the review incomplete** — headline: "This review
+   did not finish, so treat the change as _not reviewed_ …⚠️"; readiness 3/5;
+   summary "1 confirmed finding, 1 unresolved. Review incomplete".
+2. **Supported findings remain visible** — the `### …after a successful cd`
+   section renders with its **Remedy:** line, and the incomplete banner lists
+   the unresolved allegation with its reason and "No remedy is published for
+   them".
+3. **`withheldRemedy` never appears as actionable advice** — the withheld text
+   ("Single-quote the path…") is absent from the rendered body, as is the
+   literal `withheldRemedy`.
+
+**Fixture artifact, stated precisely:** the rendered partial body also showed
+the raw `===REVIEW-DATA===` coda inside "Full read-through". That is because
+my fixture put the *full* assembled string in `review`. The real CLI emits
+`prose` — the text before the marker — as `review`, and the real attempt-3
+render confirms no coda appears. This is an inaccuracy in my fixture, not a
+pipeline defect.
+
+**Server wording note (out of scope, not changed):** for a *partial* review
+the headline says "treat the change as _not reviewed_" even though a confirmed
+finding is present. The summary line directly beneath carries the true counts,
+so the information is there, but the headline overstates. A kai-server wording
+refinement for the partial case, not made here.
+
+## Bottom line for this evaluation
+
+| configuration | GLM-5.2 result |
+|---|---|
+| #418 / #429 without sandbox | 2/2 first-attempt PASS (correctly unresolved + incomplete) |
+| #429 with Node sandbox, unit specimen | 3/4 PASS; 1 FAIL reason not captured; the pass executed `JSON.stringify` under node |
+| #418 with Node sandbox, unit specimen | 2/3 PASS; 1 FAIL published the FALSE cd claim as supported (experiment misread) |
+| e2e CLI, #429 scratch repo, R5 | 0/3 correct: field omitted; malformed twice (repair bounded correctly); false negative emitted |
+| render, real complete bundle | displays correctly; verdict itself wrong |
+| render, partial (stubbed) | all three properties hold |
+
+The structural gate works as designed: provenance, status coherence,
+remedy gating, incomplete status through CLI/bundle/server. It does **not**
+make GLM-5.2 reliable on these cases, and it cannot catch a cited experiment
+whose output the model misreads — in either direction. Not ready to merge.
