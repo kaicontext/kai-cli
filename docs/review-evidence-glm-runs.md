@@ -662,3 +662,113 @@ those only; the others are preserved on the record; regression added where
 directory equality passes but an unrelated stdout check fails — the directory
 allegation is not supported. What the model offers is recorded on the
 citation, so offering an unrelated assertion is visible.
+
+## Frozen revision `3ed4584` — three CLI → bundle → render attempts, fully captured
+
+**Freeze verified:** binary sha256 `ee46819c25f78093…` identical before and
+after all three attempts; working tree clean at `3ed4584`; no change between
+attempts.
+
+**Capture method (no code change):** a local logging reverse proxy in front of
+the provider base URL, reached by running the CLI under a scratch `HOME` whose
+`~/.kai/credentials.json` is a *copy* with `server_url` rewritten to the proxy
+(the real file was verified untouched). Every request body — the fast-pass
+prompt, the challenger's system prompt, the numbered allegations and decisions,
+the numbered sources, each tool result the model received — and every response
+body (verbatim; gzip on the wire, decoded cleanly) is preserved per attempt in
+`capture/attempt-{1,2,3}/NNN-{request,response}.txt`, plus `stderr.log`,
+`bundle.json`, and `rawdump.log`. Authorization headers redacted in the request
+files only.
+
+### CORRECTION TO THIS ENTIRE RECORD: the e2e challenger was not GLM
+
+The captured challenge requests (`002-request.txt` onward — the calls carrying
+the `submit_review`/`review_shell` tools) all say **`model=anthropic/claude-haiku-4-5`**.
+Confirmed in code: `review_commit.go:346–350` computes
+`fastModel := rcFastModel(model, provKind)` and passes it to
+`rcRunFastReview`, whose line `review_commit_fast.go:195` hands that same
+`model` to `rcChallengeReview`. On the fast path the challenge therefore runs
+on the **fast** model. With `KAI_REVIEW_MODEL=z-ai/glm-5.2`, GLM is a reasoning
+model, so the fast model — and thus the challenger — was substituted to
+`anthropic/claude-haiku-4-5`. The stderr line only says "fast pass uses …";
+I assumed the challenge used the review model. It did not.
+
+Consequences, stated plainly:
+- **Every "e2e" row in this record — including the preserved wrong-verdict run
+  (`e2e-429-F-a1`) and its validation fixture — was challenged by Haiku, not
+  GLM-5.2.** The wrong "safe" verdict was a Haiku verdict.
+- The **unit-specimen** rows (`TestReviewChallengeLiveDesktop4xx`) called
+  `rcChallengeReview` with the review model directly and **were** GLM-5.2.
+- This is pre-existing fast-path behavior (since the challenge was introduced),
+  not something changed in this branch; the error is in my reporting of the
+  model, which the capture requirement exposed. To challenge with GLM on the
+  fast path one would set `KAI_FAST_MODEL` (which also changes the draft
+  author) or change what the fast path passes to the challenge — neither done
+  here (code frozen).
+
+### Exact challenger input, per attempt (from `002-request.txt`)
+
+| attempt | ISSUES TO CHECK | DECISIONS TO ASSESS | sources |
+|---|---|---|---|
+| 1 | (a) `app.js:8` — `window.Panels` not checked before `Panels.setOpen(true)`; (b) `app.js:9` — JSON.stringify quoting is not safe for POSIX sh (`$`/backticks) | none | SOURCE 1 (36 lines: the diff) |
+| 2 | (a) `app.js:8` — `workspace()` called unconditionally inside the ternary | one: "the change alters which directory terminal commands execute in…" | SOURCE 1 |
+| 3 | (a) `app.js:8` — `workspace()` assumed to return a string | one: "the change assumes commands prefixed with `cd <path> &&` will work in the terminal's POSIX sh…" | SOURCE 1 |
+
+Experiment sources were added per turn (SOURCE 2, 3, …) and each tool result
+the model received is in the captured requests.
+
+### Completion, per attempt
+
+| attempt | exit | bundle | outcome |
+|---|---|---|---|
+| 1 | 1 | **emitted** (15,954 B), `incomplete`, readiness 2 | both allegations unresolved; 2 completed experiments + 2 not-run records preserved |
+| 2 | 1 | **emitted** (13,240 B), `incomplete`, readiness 2 | one allegation unresolved; the draft decision assessed (supported) and published under "Decisions (need your call)" |
+| 3 | 1 | **none** | validator rejection: `challenge did not assess every draft decision` — rejected payload captured in full |
+
+Completion: 2 of 3 emitted a bundle (both incomplete); 1 of 3 rejected.
+
+### Correctness, per attempt (separately)
+
+- **Attempt 1, allegation (b) — the real defect.** The model did what the
+  contract asks: fidelity mode, setup creating a literal `/tmp/test$dir`,
+  construct producing `cd "/tmp/test$dir" && cat file.txt`, real execution —
+  **exit 2, observed pwd `/tmp`: the defect reproduced.** It supplied the
+  relevance fields itself: `addresses=true`, `covers=true`,
+  `tested="Shell interpretation of JSON.stringify-quoted path with $"`,
+  `assertions=[1, 3]` (#1 `stdout_contains "intended"`, #3 `pwd == /tmp/test$dir`
+  — both FAILED). It declared **`expectation="defect"`**. Those offered
+  assertions encode the *intended* behavior, not the defect; under "defect",
+  their failure derives *conformance*, and the allegation ended **unresolved**,
+  remedy withheld. No wrong verdict was published — but the reproduced defect
+  was lost to a one-word misdeclaration of direction. That bit is model
+  judgment; the fields made it visible and cannot check it.
+  Allegation (a) cited only the source with `requires_runtime=true` → unresolved.
+- **Attempt 2.** The draft did not allege the JSON.stringify defect, so it was
+  not tested. Allegation (a) cited a script-mode experiment (no assertions) →
+  unresolved, reason recorded. The construct experiment (uncited) had no setup
+  and a nonsensical assertion (stdout contains the command text).
+- **Attempt 3.** No verdict. The draft gave 1 issue + 1 decision; the model
+  submitted 1 check (issue text matched exactly, `refuted`) and **no
+  `decisions`**. Rejected field: `decisions`, absent. Origin: the model's
+  response, against a requirement stated in the prompt ("exactly one decision
+  entry per DECISIONS bullet") but not marked required in the tool schema.
+  Determinable now because the payload is logged.
+
+### Renders (real server path, throwaway harness, deleted after)
+
+- Attempt 1: headline "This review did not finish, so treat the change as
+  _not reviewed_ …⚠️", 2/5, "0 confirmed findings, 2 unresolved"; both
+  allegations listed under the incomplete banner with "No remedy is published";
+  scope and limitations shown. No withheld remedy text appears.
+- Attempt 2: same headline shape, "0 confirmed findings, 1 unresolved"; the
+  supported draft decision rendered under "## Decisions (need your call)" and
+  in the coda.
+- Attempt 3: no bundle to render.
+
+### What this run establishes, and does not
+
+Completion on the frozen revision: 2/3. Correctness: no wrong verdict was
+published in 3 attempts; the one time the real defect was reproduced with the
+model's own relevance fields, a misdeclared `expectation` turned it into
+*unresolved*. None of this is GLM-5.2 evidence on the e2e path (see the
+correction above). Still unmerged; code frozen.
