@@ -354,3 +354,71 @@ The structural gate works as designed: provenance, status coherence,
 remedy gating, incomplete status through CLI/bundle/server. It does **not**
 make GLM-5.2 reliable on these cases, and it cannot catch a cited experiment
 whose output the model misreads — in either direction. Not ready to merge.
+
+## Forensics — the false NEGATIVE (e2e R5 attempt 3: real JSON.stringify defect refuted)
+
+Source: the saved full stderr/bundle of that run, plus deterministic replays of
+GLM's own scripts in the real Node container (`cmd/kai/review_commit_forensics_test.go`,
+`KAI_REVIEW_SANDBOX_TEST=1`). All four replays passed with their stated expected
+results.
+
+**1. What exact script ran?** GLM cited two experiments for the refutation.
+
+- *Source 2* (fully recoverable): a Node script printing `JSON.stringify(path)`
+  and the resulting `cd <json> && echo test` for eight paths (`$dollar`,
+  `` `backticks` ``, `$(command)`, quotes, backslash…). It only *prints*; it
+  never executes a cd.
+- *Source 3* (first ~36 lines recoverable; the tail, including the cited output
+  lines 50–62, was cut by the 40-line experiment-log bound): it `mkdir`s
+  directories literally named `test$dir`, ``test`dir` ``, `test$(dir)`, then
+  runs `sh -c 'cd "/tmp/test\$dir" && pwd && echo "SUCCESS: dollar"'` and the
+  same for backticks and `$(…)`. **The paths inside the double quotes carry
+  backslash-escaped metacharacters (`\$`, `` \` ``).** It also used a `[[ … ]]`
+  bashism (invalid in the container's POSIX sh) in a later block.
+
+**2. What did its output establish?**
+
+- Source 2's output shows `cd "/path/with$dollar" && echo test`,
+  ``cd "/path/with`backticks`" && echo test``, `cd "/path/with$(command)" && echo test`
+  — the metacharacters pass through **unescaped** — while `\` and `"` are
+  escaped. Replay confirmed (`TestForensicsGLMSource2ShowsMetacharactersUnescaped`).
+  This is evidence **for** the allegation.
+- Source 3's "Tests 2–4" print `SUCCESS: dollar/backticks/command-sub`. Replay
+  confirmed (`TestForensicsGLMEscapedCDTestsSucceedBecauseTheyAreHandEscaped`).
+  They succeed because `\$` and `` \` `` inside double quotes are literals in
+  POSIX sh — i.e. the experiment cd'd into the literal directories.
+
+**3. Did it reproduce the alleged behavior?** **No.** `JSON.stringify` never
+emits the backslashes Source 3 relied on, so Source 3 tested a hand-escaped
+string, not the string the code produces. The corrected counterpart — building
+`'cd ' + JSON.stringify("/tmp/test$dir") + ' && pwd'` with the real output and
+running it — is misdirected: `$dir` expands, the cd **fails (exit 2)**, `pwd` is
+never reached, while a single-quoted control reaches the literal directory
+(`TestForensicsRealJSONStringifyOutputMisdirectsCD`). GLM never ran that
+variant. The alleged behavior reproduces exactly as alleged.
+
+**4. Where did the conclusion diverge from the result?** Three separable faults:
+
+- **Bad experiment construction (Source 3):** the input under test was not the
+  code's output. Its SUCCESS lines answer a question that was not asked.
+- **Misreading of a sound experiment (Source 2):** its output plainly shows the
+  unescaped metacharacters; GLM cited those lines as showing the quoting is safe.
+- **A false prior overriding the evidence:** GLM's stated reason —
+  "double-quoted strings in POSIX sh prevent expansion of these characters
+  (backticks and $() are not expanded inside double quotes)" — is the opposite
+  of POSIX behavior. Replay: inside double quotes `$HOME` expands and a backtick
+  runs (`TestForensicsDoubleQuotesDoNotSuppressExpansion`). This belief is what
+  turned "the characters pass through" into "therefore it is safe."
+
+**Diagnosability gap (not changed now):** the experiment log is bounded to 40
+lines, which cut Source 3's tail and the very lines GLM cited (50–62). The
+tool-call input (the full script) is not logged separately. That bound is too
+small for forensics; recorded here rather than changed, per "stop changing the
+gate for now."
+
+## Forensics — the false POSITIVE (#418 attempt 3: false `cd` allegation supported)
+
+**The original run's script is not recoverable**: my output filter dropped the
+`record=` line and the experiment content. A fresh collection with full output
+captured is recorded below if a false positive recurs; any such instance is a
+*new occurrence*, not the original.
