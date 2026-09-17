@@ -451,3 +451,59 @@ real experiments.
 - That single error message conflates three different conditions.
 - The 40-line experiment-log bound cut the very lines GLM cited in the
   false-negative run.
+
+## Fidelity revision `06bb76c` — GLM-5.2, Node sandbox, full output saved
+
+Same model, same image, no code changes between attempts. Each attempt reported
+separately. "Wrong verdict" = a supported/refuted verdict contrary to the
+truth of the allegation.
+
+### Unit specimens, `-count=3` (`glm-fidelity-unit.log`)
+
+| case | attempt | experiments (mode) | final statuses | outcome |
+|---|---|---|---|---|
+| #418 | 1 | 3 construct (`cd "/tmp/$HOME" && pwd` → pwd `/tmp`) | — | **3-minute challenge deadline expired** before submission |
+| #429 | 1 | 3 construct (`cd "/tmp/ws$HOME"`, `` cd "/tmp/ws`pwd`" `` → exit 2, pwd `/tmp`, assertions **FAILED**) | unresolved | defect reproduced, but GLM's assertions encoded the wrong expectation (that the cd succeeds); rule refused a verdict → **unresolved, no wrong verdict** |
+| #418 | 2 | 3 construct (CR-joined multi-line, exit 2) | unresolved, unresolved | no wrong verdict; real escaping defect not established |
+| #429 | 2 | 2 construct (`$HOME`, `` `echo PWNED` `` → exit 2, assertions FAILED) | unresolved | same as #429/1: defect reproduced, expectation wrong → **unresolved** |
+| #418 | 3 | 4 construct incl. `cd "/tmp/$XYZ" && pwd` → pwd `/tmp/expanded_real`, assertions **PASSED** | unresolved (false cd), **supported** (escaping) | **the real defect correctly supported** by a well-designed passing assertion; false cd left unresolved rather than refuted |
+| #429 | 3 | 1 script (no assertions) | — | cut off by `go test`'s 10-minute overall limit — a harness artifact, not an outcome |
+
+**Five completed attempts, zero wrong verdicts** (the previous revision: two
+wrong verdicts in six). The dominant outcome shifted from *wrong* to
+*unresolved*: GLM repeatedly asserted that the `cd` would succeed, the harness
+reported FAIL, and the rule correctly refused to let a failed-assertion
+experiment back any verdict. That is the intended safety property. It is
+**not** correctness: strict expectations were met in 1 of 5.
+
+### End-to-end CLI, #429 scratch repo, 3 attempts (`e2e-429-F-a{1,2,3}-*`)
+
+| attempt | outcome |
+|---|---|
+| 1 | Bundle emitted, exit 0. GLM used fidelity mode correctly — real construction, generated command executed verbatim, 3 assertions all PASSED. **But the input was a path containing a double quote (`/tmp/test"dir`), which `JSON.stringify` does escape.** Its passing assertions backed the conclusion that the quoting is safe; remedy published: "No code change needed." The Haiku-drafted allegation itself was self-negating ("JSON.stringify does escape them correctly… 'safely' is true"). **A faithful experiment on a benign input produced a substantively wrong conclusion.** |
+| 2 | No bundle. GLM misused construct mode — printed several commands and labelled prose as the "command" (exit 127) — then requested a 5th `review_shell`, over the cap → fatal. |
+| 3 | No bundle. One script, one construct that emitted a `node -e …` wrapper as the "command" (exit 1), then a 5th call → fatal. |
+
+### What this establishes, and what it does not
+
+- **Execution fidelity is now enforced.** The model cannot substitute a
+  reconstructed or hand-escaped command; the harness runs the code's own
+  construction and records everything. A failed assertion structurally cannot
+  back a verdict, and on the unit specimens that converted every would-be wrong
+  verdict into *unresolved*.
+- **Input adequacy is not enforced, and cannot be by this mechanism.** e2e
+  attempt 1 is the residual: the model chose a character the code handles
+  (`"`) rather than the ones it does not (`$`, backtick). The harness has no
+  semantic knowledge of which input matters. This is the next design question,
+  not solved here.
+- **Wrong-expectation assertions** are the common failure: GLM asserts success
+  and observes failure. The rule handles it safely (unresolved), but a model
+  that understood the observed failure *is* the defect would have asserted
+  `pwd_not`/`exit != 0` and supported it — as it did once (#418/3).
+- **Other limitations observed, recorded not changed:** a 5th `review_shell`
+  after the cap is fatal rather than answered with an error result; the
+  3-minute challenge budget is tight for 3–4 fidelity experiments (~40–60s
+  each with model turns); the `go test` 10-minute limit truncates a
+  `-count=3` run.
+
+Still unmerged. The original #418 false positive remains unexplained.
