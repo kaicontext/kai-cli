@@ -1507,3 +1507,115 @@ Against the acceptance condition:
 The preserved regression is the acceptance test for whichever of these is
 built. Nothing above changes the four evidence rules, the deadline, the
 one-shot format repair, or the never-flip principle.
+
+## Correction to the proposal: two counterexamples, and the requirement evaluated directly
+
+Two rules above are withdrawn. Both tried to make a *comparison of
+outcomes* decide *desirability*, and a comparison cannot do that: old/new
+runs supply observations; only the requirement says which observation is
+the right one, and reading the requirement is model judgment. The gate's
+job is to make that judgment explicit, cited, tested, and published — not
+to replace it with a rule that cannot establish correctness.
+
+### Counterexample A — a genuine regression (passes before, fails after)
+
+Construct one on the same change. Suppose the requirement includes "when no
+workspace is available the command runs unmodified" (the author's own
+description of the fallback), and the change had instead dropped the
+command whenever `wsPath` is empty. Pre-change: command runs. Post-change:
+nothing runs. That is a real defect against the requirement.
+
+- **Withdrawn Part 2 ("regression-shaped ⇒ behavior change / DECISION")**:
+  the `intended` assertion (`stdout_contains COMMAND_RAN` with no workspace)
+  passes on the old construction and fails on the new — regression-shaped —
+  so the rule would have demoted a genuine defect to a decision with no
+  remedy. **Fails the counterexample.** The shape is identical to the
+  missing-directory case; what differs is only whether the requirement wants
+  the old behavior, which the shape cannot see.
+- **Under the corrected proposal (below)**: the challenger states the
+  requirement's expected behavior for the tested input — "with no
+  workspace, the command runs" — cites the clause, offers
+  `stdout_contains COMMAND_RAN` as the intended assertion, the new
+  construction fails it → violation → `supported`. The old run may be cited
+  as an observation ("the pre-change code ran it") but decides nothing.
+  **Preserved.**
+
+### Counterexample B — a valid fix that restores the previous outcome
+
+For the regression in A, the correct remedy is to restore the fallback: run
+the command unmodified when `wsPath` is empty. Its outcome on that input is
+byte-identical to the pre-change outcome — because the pre-change outcome
+was the right one.
+
+- **Withdrawn Part 3 equality rule ("a remedy whose outcome equals the
+  pre-change outcome is not a correction")**: would have refused the
+  correct fix as "a revert". **Fails the counterexample.** Identity with the
+  old outcome is neither evidence for nor against a remedy.
+- **Under the corrected proposal**: the remedy is executed on the alleged
+  input and the requirement-derived assertion (`COMMAND_RAN`) passes →
+  correction. **Preserved.**
+
+### The missing-directory case, evaluated directly against the decisive requirement
+
+Decisive requirement: **the command must not execute in the wrong
+directory** (author context: "cd into the workspace before running the
+command"; author's comment: "so the command always runs in the correct
+directory"). Evaluated on the recorded and executed outcomes
+(`proposal-eval.out`), input `/bad/missing/path`, command `echo COMMAND_RAN`:
+
+| behavior | observed | executes in the wrong directory? | against the requirement |
+|---|---|---|---|
+| original (the change): `cd "/bad/missing/path" && echo COMMAND_RAN` | no `COMMAND_RAN`; exit 2; pwd `/tmp`; stderr `cd: can't cd to /bad/missing/path: No such file or directory` | **no** — it does not execute at all, and says why on stderr | **conforms**. Not silent. |
+| remedy `cd "/bad/missing/path" ; echo COMMAND_RAN` | `COMMAND_RAN`; exit 0; pwd `/tmp`; same stderr | **yes** — runs in the shell's current directory, not the workspace | **violates** the decisive requirement |
+| remedy "validate the path before prefixing" (prose) | not executable as written | if validation fails, the only conforming action is to not run — which is what `cd &&` already does | redundant at best; unverified |
+| the single-quote remedy for the quoting defect, on this input | no `COMMAND_RAN`; exit 2; pwd `/tmp` | no | conforms (does not disturb this behavior) |
+
+The pre-change outcome (`COMMAND_RAN` in `/tmp`) is the same observation as
+the `cd … ;` remedy's, and it is *also* a violation of the decisive
+requirement — the change exists to remove it. That is what settles the
+case, not the fact that remedy and old code agree. The allegation
+"silently aborts … where the old code ran it unconditionally" describes the
+requirement being met and calls it a defect; the challenger's
+`expectation=intended` assertions (`exit 0`, `COMMAND_RAN`) encode the
+violation and call it intended. Correct verdict: the allegation is
+**refuted** for this input (conformance observed on the alleged input), the
+`cd … ;` remedy is not a correction, and "silently" is contradicted by the
+record.
+
+### The corrected proposal
+
+What is kept, what is withdrawn, and who decides what:
+
+| element | status | mechanical | model judgment |
+|---|---|---|---|
+| Source classing: author context = **requirement**; intent reconstruction, author comments, diff, tool results, experiments each their own class (system-side; no field) | kept | which class a source is | — |
+| A `supported` or `refuted` runtime verdict must **state the requirement's expected behavior for the tested input** and cite the requirement-class clause it derives from; its offered `intended` assertions are that statement made testable | kept (the one submission-side addition; it replaces nothing and adds one stated sentence + a citation) | the citation resolves and is requirement-class (the preserved submission's anchor, the diff's `-` line, would not qualify); the assertions ran; the observation is derived from them as today | **what the requirement expects for this input** — the decisive judgment. Explicitly the challenger's, and explicitly fallible: a challenger that writes "the command runs anyway" as the requirement's expectation is wrong, and the gate cannot know it |
+| Publish, with every runtime finding and every remedy: the cited clause verbatim, the stated expected behavior, the offered assertions with expected/observed, and the record's stderr | kept | yes | — (this is how a wrong judgment becomes visible on the page) |
+| A remedy is a **correction** only if executed on the alleged inputs and the *same* requirement-derived assertions pass under it; otherwise it is a **suggestion, unverified** | kept | it ran; the assertions' outcomes | the assertions (same judgment as above) |
+| Old/new comparison (`construct_old`) | **withdrawn as a rule**; permitted as an *observation* the challenger may cite | — | — |
+| Remedy-outcome equality with the pre-change outcome | **withdrawn** | — | — |
+| `stderr_contains` / `stderr_empty` assertion kinds | kept (tool contract) | outcome | offering it |
+| Experiment budget | **unchanged** (four calls, three minutes). A remedy that cannot be executed within the budget is a suggestion, not a correction. No system-required runs are added | — | how to spend the four calls |
+
+**What this establishes for the preserved regression.** With a faithful
+requirement statement, the acceptance condition is met: the expected
+behavior for a missing directory is "the command does not execute", the
+offered assertion (`stdout_not_contains COMMAND_RAN`) passes on the original
+→ conformance on the alleged input → refuted; the `cd … ;` remedy fails the
+same assertion → not a correction. With the *unfaithful* statement GLM
+actually made, the gate does not catch it — and this proposal does not
+claim to. What changes is that the finding would then read, on the page:
+"requirement cited: *cd into the workspace so the command always runs in the
+correct directory*; expected under it: *the command runs even when the
+directory is missing*; observed: exit 2, `can't cd to /bad/missing/path`".
+The contradiction is published, not buried. Requirement interpretation stays
+model judgment, named as such; correctness is not something the gate can
+establish, and the record should not say it can.
+
+**On the counterexamples.** Both are preserved because nothing in the
+corrected proposal reads the old outcome as a rule: A is supported by a
+requirement-derived assertion failing on the new construction; B's fix is a
+correction because the same assertion passes under it.
+
+The gate is unchanged; nothing here is implemented; the red regression stays
+red; PR #117 stays unmerged.
