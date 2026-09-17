@@ -229,3 +229,27 @@ been misleading; three were needed to see this.
 
 **Process fix for all further runs:** full `-v` output is written to a file
 before any filtering.
+
+## End-to-end CLI run — #429 scratch repo, revision R5 (`3ffccc6`), attempt 1
+
+Same command and repo as the `fae62b5` attempt. Full stdout/stderr saved.
+
+```
+fast pass: one call over the diff, no graph (model anthropic/claude-haiku-4-5, budget 1m40s)…
+challenge: shell experiment 1
+challenge: shell experiment 2
+Error: fast review challenge incomplete (unchecked draft withheld): challenge produced an unknown intent verdict ""
+EXIT=1   (stdout empty — no bundle emitted)
+```
+
+- GLM's `submit_review` payload **parsed this time** (`checks` was an array), so
+  the R5 parse-failure repair was not involved.
+- It omitted the required `intent_match` field (empty string). Under the
+  stated rule this is a substantive validation failure, not a parse failure, so
+  it failed closed immediately with no retry and **no bundle**.
+- This is a **different GLM failure mode** from the `fae62b5` attempt
+  (`checks` as a string). Two e2e attempts, two distinct schema omissions.
+- The repair rule was **not** widened in reaction. Whether a missing required
+  top-level field should count as a "format" failure eligible for the single
+  repair is a design question left open here rather than decided to make a run
+  pass.
