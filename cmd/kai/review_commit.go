@@ -343,13 +343,19 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// Incomplete flag means the review is incomplete even though it has a body.
 	var challenge *rcChallengeResult
 	if fast {
+		// The fast pass may substitute a non-reasoning model for the DRAFT. The
+		// CHALLENGE — the publication gate — always uses the configured review
+		// model; the substitution must never silently reach it.
 		fastModel := rcFastModel(model, provKind)
-		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (model %s, budget %s)…\n",
-			fastModel, rcFastHardDeadline)
+		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (draft model %s, challenge model %s, budget %s)…\n",
+			fastModel, model, rcFastHardDeadline)
 		phase := time.Now()
-		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, model, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
 		if err != nil {
 			return err
+		}
+		if challenge != nil {
+			challenge.Models.Draft.Configured, challenge.Models.Challenge.Configured = model, model
 		}
 		fmt.Fprintf(os.Stderr, "  timing: fast-review=%s\n", time.Since(phase).Round(time.Second))
 	} else {
@@ -992,6 +998,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			return "", inc, nil
 		}
 		raw = res.Review
+		// The deep path drafts with the review model and challenges with it too.
+		res.Models.Draft = rcPhaseModel{Configured: model, Requested: model}
+		res.Models.Challenge.Configured = model
 		inc.Challenge = res
 	}
 	return raw, inc, nil

@@ -218,7 +218,7 @@ func TestFastReviewDoesNotPublishDraftWhenChallengeFails(t *testing.T) {
 		}
 		return provider.Response{}, errors.New("challenge unavailable")
 	}}
-	got, res, err := rcRunFastReview(context.Background(), p, "test", "", "", "test", "", rcCDSource, nil)
+	got, res, err := rcRunFastReview(context.Background(), p, "test", "test", "", "", "test", "", rcCDSource, nil)
 	if err == nil || got != "" || res != nil || calls != 2 {
 		t.Fatalf("unchecked fast draft escaped: calls=%d result=%q err=%v", calls, got, err)
 	}
@@ -242,7 +242,7 @@ func TestFastReviewReportsUnresolved(t *testing.T) {
 		}
 		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, a)}}}, nil
 	}}
-	got, res, err := rcRunFastReview(context.Background(), p, "test", "", "", "test", "", rcCDSource, nil)
+	got, res, err := rcRunFastReview(context.Background(), p, "test", "test", "", "", "test", "", rcCDSource, nil)
 	if err != nil {
 		t.Fatalf("fast review withheld a publishable-but-incomplete result: %v", err)
 	}
@@ -390,6 +390,54 @@ func TestReviewChallengeUnparseableSubmissionIsNudgedOnce(t *testing.T) {
 	}}
 	if res, err := rcChallengeReview(context.Background(), p3, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil); err == nil || res != nil || calls != 2 {
 		t.Fatalf("repeated malformed payload was not failed closed after one nudge: calls=%d %+v %v", calls, res, err)
+	}
+}
+
+// The fast pass may substitute a non-reasoning model for the DRAFT. That
+// substitution must never silently reach the CHALLENGE, which is the
+// publication gate and must use the configured review model. Captured live
+// requests showed every challenge call going to the draft's substitute; this
+// pins the separation and the per-phase record.
+func TestFastDraftDoesNotSubstituteChallenger(t *testing.T) {
+	var requested []string
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		requested = append(requested, req.Model)
+		if len(requested) == 1 { // the draft
+			return provider.Response{ProviderName: "draft-upstream", Parts: []message.ContentPart{message.TextContent{Text: rcTestReview(rcFalseCDIssue)}}}, nil
+		}
+		a := rcChallengeAnswer{Scope: []string{"the diff"}, IntentMatch: "partial", MergeReady: 4,
+			Checks: []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "needs a shell"}}}
+		return provider.Response{ProviderName: "challenge-upstream", Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
+	}}
+	_, res, err := rcRunFastReview(context.Background(), p, "fast-draft-substitute", "configured-review-model", "", "", "test", "", rcCDSource, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requested) < 2 || requested[0] != "fast-draft-substitute" {
+		t.Fatalf("draft was not requested from the fast model: %v", requested)
+	}
+	for _, m := range requested[1:] {
+		if m != "configured-review-model" {
+			t.Fatalf("a challenge request was sent to the draft substitute instead of the review model: %v", requested)
+		}
+	}
+	// The per-phase record: what was requested, and the upstream provider the
+	// gateway reported. The served model is not exposed here and stays empty.
+	if res.Models.Draft.Requested != "fast-draft-substitute" || res.Models.Draft.Provider != "draft-upstream" || res.Models.Draft.Served != "" {
+		t.Fatalf("draft phase not recorded: %+v", res.Models.Draft)
+	}
+	if res.Models.Challenge.Requested != "configured-review-model" || res.Models.Challenge.Provider != "challenge-upstream" || res.Models.Challenge.Served != "" {
+		t.Fatalf("challenge phase not recorded: %+v", res.Models.Challenge)
+	}
+	// The submission schema and the validator now say the same thing about
+	// decisions: required (an empty array when the draft has none).
+	required := rcSubmitReviewToolInfo().Required
+	found := false
+	for _, r := range required {
+		found = found || r == "decisions"
+	}
+	if !found {
+		t.Fatalf("schema does not require decisions while the validator does: %v", required)
 	}
 }
 

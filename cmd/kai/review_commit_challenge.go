@@ -55,7 +55,7 @@ There is no free-form assessment or summary field, and none is wanted: the syste
 
 A remedy belongs to its allegation. Put a proposed fix ONLY in that allegation's "remedy" field; it is published as actionable only when the allegation is supported. Do not place repair advice anywhere else.
 
-Decisions are assessed, not asserted. Supply exactly one decision entry per DECISIONS bullet in the draft, with a verdict and a citation into the supplied sources, just like a check. Do not add decisions the draft did not make. A decision is a genuine design choice the change already makes that still needs a human's yes; it is never a place to propose a repair.
+Decisions are assessed, not asserted. The "decisions" field is REQUIRED: supply exactly one decision entry per DECISIONS bullet in the draft, with a verdict and a citation into the supplied sources, just like a check — and an empty array [] when the draft has no DECISIONS bullets. A submission that omits a draft decision is rejected. Do not add decisions the draft did not make. A decision is a genuine design choice the change already makes that still needs a human's yes; it is never a place to propose a repair.
 
 There must be exactly one check per supplied issue. A "supported" or "refuted" verdict needs at least one citation into the supplied sources (or a successful review_shell result); "supported" additionally needs a non-empty "finding". An "unverified" check means the allegation could not be settled with the evidence available; do not turn missing evidence into an all-clear. Set intent_match and merge_ready from the supported findings only. A fast draft remains a fast, limited review, with merge_ready at most 4.`
 
@@ -191,6 +191,23 @@ type rcChallengeResult struct {
 	// Experiments is the complete record of every review_shell run in this
 	// challenge, keyed by the source number the verdicts cite.
 	Experiments []rcExperimentSource `json:"experiments,omitempty"`
+	// Models records, per phase, which model was configured, which was
+	// requested, and — when the gateway reports it — which upstream provider
+	// served it. The SERVED model itself is not exposed by the provider layer;
+	// a request proves only what was asked for. Effective is confirmed only
+	// from response/provider metadata, otherwise it is unknown.
+	Models struct {
+		Draft     rcPhaseModel `json:"draft"`
+		Challenge rcPhaseModel `json:"challenge"`
+	} `json:"models"`
+}
+
+// rcPhaseModel is the model record for one phase of the review.
+type rcPhaseModel struct {
+	Configured string `json:"configured,omitempty"` // the review model as configured (KAI_REVIEW_MODEL / cfg)
+	Requested  string `json:"requested,omitempty"`  // the model this process put in the request
+	Served     string `json:"served,omitempty"`     // empty: unknown to this process
+	Provider   string `json:"provider,omitempty"`   // upstream serving provider, when the gateway reports it
 }
 
 // rcExperimentSource pairs an experiment's full record with the source number
@@ -240,7 +257,9 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 			"checks":       map[string]any{"type": "array", "items": check},
 			"decisions":    map[string]any{"type": "array", "items": decision},
 		},
-		Required: []string{"scope", "intent_match", "merge_ready", "checks"}}
+		// decisions is REQUIRED so the schema says what the validator enforces:
+		// one entry per DECISIONS bullet in the draft, an empty array otherwise.
+		Required: []string{"scope", "intent_match", "merge_ready", "checks", "decisions"}}
 }
 
 // Keep complete tool results, including evidence past the old 2,000-character
@@ -362,11 +381,16 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	// preserved on the result so the record shows the attempt and its reason,
 	// distinct from a completed experiment whose assertions failed.
 	var notRun []rcExperimentRecord
+	// servedBy is the upstream provider the gateway reported for the most
+	// recent challenge response, when it reports one. The served MODEL is not
+	// exposed here; Requested records only what this process asked for.
+	servedBy := ""
 	finish := func(res *rcChallengeResult, err error) (*rcChallengeResult, error) {
 		if res != nil {
 			for _, r := range notRun {
 				res.Experiments = append(res.Experiments, rcExperimentSource{Source: 0, Record: r})
 			}
+			res.Models.Challenge.Requested, res.Models.Challenge.Provider = model, servedBy
 		}
 		return res, err
 	}
@@ -386,6 +410,9 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 		resp, err := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: msgs, Tools: available, MaxTokens: 6000})
 		if err != nil {
 			return nil, fmt.Errorf("challenge call: %w", err)
+		}
+		if resp.ProviderName != "" {
+			servedBy = resp.ProviderName
 		}
 		if resp.FinishReason == message.FinishReasonMaxTokens {
 			return nil, fmt.Errorf("challenge answer was truncated")
