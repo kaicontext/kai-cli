@@ -112,24 +112,35 @@ code generates — a hand-escaped one — and took its success as proof the real
 one was safe; it also misread a printout that plainly showed the unescaped
 metacharacters. Three changes address exactly that, and nothing broader:
 
-- **Execute the actual command-construction code.** In `review_shell`'s
-  fidelity mode the model supplies `construct` — Node code that builds and
-  prints the command string the way the code under review builds it — and
-  optional `setup`. The harness feeds the **generated string verbatim** into
-  `/bin/sh`. Nothing the model types touches the command between construction
-  and execution.
+- **Execute the generated command unchanged.** In `review_shell`'s fidelity
+  mode the model supplies `construct` — Node code that builds and prints the
+  command string — and optional `setup`. The harness feeds the **generated
+  string verbatim** into `/bin/sh`. What this enforces is narrow and should be
+  stated narrowly: the model cannot alter the string *between its own
+  construction and execution*. **The construction code is still
+  model-authored.** Nothing verifies that it matches the source under review;
+  a model that wrote a subtly different construction would have it executed
+  faithfully and wrongly. Unverified construction is a separate risk — it was
+  **not** the demonstrated cause of the observed wrong verdict (that run's
+  constructor matched the code by its own account), but it remains open.
 - **Explicit assertions.** The model declares what it expects to observe —
   `exit`, `stdout_contains`, `stdout_not_contains`, `pwd`, `pwd_not` — and the
   harness evaluates each as PASS/FAIL against the recorded exit status, stdout,
   and the working directory the command actually left behind.
-- **The verdict accounts for the assertion results.** A supported/refuted
-  verdict on a runtime claim may cite an experiment only if it declared at least
-  one assertion and **all of them passed**. A cited experiment with a failed
-  assertion cannot support any verdict — a failed path-equality check cannot
-  back "this quoting is safe" — and a bare printout (no assertions) cannot
-  either; the check becomes unresolved and the reason names the failed
-  expectation. Free-form `script` mode remains for exploration and can back no
-  verdict.
+- **The verdict accounts for the assertion results — as currently implemented,
+  too strongly.** The implemented rule is: a supported/refuted verdict on a
+  runtime claim may cite an experiment only if it declared at least one
+  assertion and **all of them passed**; a bare printout (no assertions) can back
+  nothing. That rule correctly stops a failed path-equality check from backing
+  "this quoting is safe." But "all passed" is **not necessary for useful
+  evidence**: if the requirement is "run in the exact workspace directory," a
+  *failed* directory-equality assertion can itself demonstrate the defect. The
+  current rule discards that observation. The right distinction is between a
+  **broken experiment** (it did not run, or its record is incomplete) and a
+  **completed experiment whose assertion failed** — the latter is a valid
+  observation ("expected X, observed Y") that can support an allegation of
+  exactly that behavior. Implementation is paused; this is recorded as a known
+  flaw of the rule, not fixed here.
 
 **The complete experiment record is preserved:** mode, setup, construct,
 generated command, exit code, observed working directory, stdout, stderr, and
@@ -137,10 +148,17 @@ each assertion with its observed value travel in the challenge result and the
 emitted bundle (`challenge.experiments`, keyed by the source number the
 verdicts cite). Only the console summary is bounded.
 
-This does not make review correctness general. It closes the demonstrated
-failure: the model can no longer substitute a reconstructed command for the
-real one, and it cannot cite as support an experiment whose own assertions say
-its expectation was wrong.
+This does not make review correctness general, and it did **not** close the
+demonstrated failure. What is established: the generated string is executed
+unchanged, and an experiment whose assertions failed cannot be cited as if it
+had confirmed the model's expectation. What is not established: that the
+construction matches the source, or that the tested input bears on the
+allegation. The end-to-end wrong "safe" verdict that followed this change was
+produced by a faithful experiment on an **inadequate input** — a double quote,
+which `JSON.stringify` does escape — whose passing assertions were taken as a
+general claim of safety about `$` and backticks. Passing assertions establish
+behavior for the input tested; they cannot refute a claim about a different
+input. The open design question is recorded in `review-evidence-glm-runs.md`.
 
 ## Optional isolated shell experiments
 

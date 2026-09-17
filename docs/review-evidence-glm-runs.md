@@ -507,3 +507,55 @@ experiment back any verdict. That is the intended safety property. It is
   `-count=3` run.
 
 Still unmerged. The original #418 false positive remains unexplained.
+
+## Corrections to this record (after review of the fidelity results)
+
+Three statements above were too strong. Corrected here; the earlier text is
+left in place so the correction is visible.
+
+1. **"Zero wrong verdicts on the unit specimens" is subordinate evidence.** The
+   end-to-end run is the one that mirrors production, and it produced a wrong
+   "safe" verdict. That is the result that matters. The unit-specimen outcome
+   shows one thing: when the model's own assertion fails, the rule stops
+   publication — a safety property, not correctness.
+
+2. **"Execution fidelity is enforced" was overstated.** What is enforced: the
+   model cannot alter the generated string between its own construction and
+   execution. The construction code is still model-authored, and nothing
+   verifies it matches the source under review. That is a separate,
+   undemonstrated risk — by its own account, the e2e run's constructor matched
+   the code. **The demonstrated cause of that wrong verdict was inadequate
+   input selection**, not mismatched construction: the model tested a double
+   quote, which `JSON.stringify` escapes, and its passing assertions were taken
+   as a general claim of safety about `$` and backticks.
+
+3. **"All assertions passed" is not necessary for useful evidence.** The
+   implemented rule discards a completed experiment whose assertion failed. But
+   if the requirement is "run in the exact workspace directory," a failed
+   directory-equality assertion *demonstrates* the defect. The system should
+   preserve that observation and distinguish it from a **broken** experiment
+   (did not run; record incomplete). Several unit-specimen attempts above were
+   exactly this case — the defect reproduced, the model's success-expectation
+   failed, and the observation was thrown away as "unresolved." Safe, but
+   evidence lost.
+
+## The open design question
+
+> How do we connect the allegation, the actual code, the tested input, and the
+> observed result — without letting a passing example become a general claim
+> of safety?
+
+No universal automatic answer is promised. Two practical directions, recorded
+for decision rather than implemented:
+
+- **For this case:** tests over the *actual source* covering the alleged `$` and
+  backtick behavior — evaluate the real construction expression from the cited
+  line with those inputs, rather than a model-written analog on an input of the
+  model's choosing.
+- **More broadly:** when an experiment does not address the allegation — wrong
+  input class, wrong code path — the reviewer should **report that as a
+  limitation**, not treat the experiment as a refutation. A passing example on
+  input X establishes behavior for X; it cannot refute a claim about Y.
+
+Implementation is paused. Still unmerged. The original #418 false positive
+remains unexplained.
