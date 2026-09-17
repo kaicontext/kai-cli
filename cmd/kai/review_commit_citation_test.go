@@ -186,3 +186,63 @@ func TestReviewChallengeUnverifiedThroughProvider(t *testing.T) {
 		t.Fatalf("expected an incomplete review naming the unresolved claim: %v %s", unresolved, got)
 	}
 }
+
+// The model-authored assessment/summary/decisions must not assert an allegation
+// the challenge did not support. A summary that confidently repeats a finding
+// validation downgraded fails the challenge closed rather than publishing a
+// review that contradicts its own verdicts.
+func TestReviewChallengeRejectsFreeTextAssertingNonSupportedFinding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*rcChallengeAnswer)
+	}{
+		{"summary repeats a downgraded finding", func(a *rcChallengeAnswer) {
+			a.Checks[1].Evidence = []rcCheckEvidence{{Source: 2, LineStart: 9, LineEnd: 9}} // escape downgraded
+			a.Summary = "Confirmed defect: " + rcEscapeIssue
+		}},
+		{"assessment repeats a refuted finding", func(a *rcChallengeAnswer) {
+			a.Assessment = "The change is broken because " + rcFalseCDIssue // falseCD is refuted
+		}},
+		{"decision repeats a refuted finding", func(a *rcChallengeAnswer) {
+			a.Decisions = []string{rcFalseCDIssue}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := rcCDChecks()
+			tc.mutate(&a)
+			got, _, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+			if err == nil || got != "" {
+				t.Fatalf("published a review whose free text asserts a non-supported finding: %q %v", got, err)
+			}
+		})
+	}
+}
+
+// Each unresolved allegation is reported with its ACTUAL reason. A claim
+// downgraded for an invalid citation must not be described as needing a runtime
+// sandbox, and vice versa.
+func TestReviewChallengeIncompleteBannerGivesPerClaimReason(t *testing.T) {
+	a := rcChallengeAnswer{
+		Assessment:  "Neither allegation could be settled.",
+		IntentMatch: "partial",
+		MergeReady:  4,
+		Summary:     "Two open questions remain.",
+		Checks: []rcIssueCheck{
+			{Issue: rcFalseCDIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "x", Finding: "fix", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 9, LineEnd: 9}}}, // bad citation
+			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "y", Finding: "fix", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},   // runtime, no experiment
+		},
+	}
+	got, unresolved, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unresolved) != 2 {
+		t.Fatalf("want both allegations unresolved: %v", unresolved)
+	}
+	if !strings.Contains(got, "no usable citation") {
+		t.Fatalf("citation-invalid claim not given its real reason: %s", got)
+	}
+	if !strings.Contains(got, "requires a runtime experiment") {
+		t.Fatalf("runtime claim not given its real reason: %s", got)
+	}
+}

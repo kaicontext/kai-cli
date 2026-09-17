@@ -411,7 +411,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// review as a completed one.
 	if len(unresolved) > 0 {
 		incomplete = true
-		fmt.Fprintf(os.Stderr, "  review incomplete: %d allegation(s) unresolved (need runtime evidence): %s\n", len(unresolved), strings.Join(unresolved, "; "))
+		fmt.Fprintf(os.Stderr, "  review incomplete: %d allegation(s) unresolved: %s\n", len(unresolved), strings.Join(unresolved, "; "))
 	}
 
 	// Blast radius: walk the captured graph outward from the changed files so the

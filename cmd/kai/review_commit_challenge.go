@@ -300,8 +300,8 @@ func rcValidateChallenge(raw string, issues, sources []string, experiment map[in
 		wanted[issue] = true
 	}
 	seen := map[string]bool{}
-	keptFinding := map[string]string{} // supported issue -> published finding text
-	unresolvedSet := map[string]bool{}
+	keptFinding := map[string]string{}      // supported issue -> published finding text
+	unresolvedReason := map[string]string{} // unresolved issue -> why it could not be settled
 	for checkIndex, check := range answer.Checks {
 		if !wanted[check.Issue] || seen[check.Issue] || strings.TrimSpace(check.Reason) == "" {
 			return "", nil, fmt.Errorf("challenge omitted reasoning, duplicated a check, or checked an unknown issue")
@@ -326,16 +326,21 @@ func rcValidateChallenge(raw string, issues, sources []string, experiment map[in
 				hasExperiment = true
 			}
 		}
-		// Downgrade a verdict the evidence cannot carry to unverified.
+		// Downgrade a verdict the evidence cannot carry to unverified, keeping the
+		// ACTUAL reason so the published banner does not misreport why. A claim the
+		// model itself left unverified carries the model's own reason.
 		verdict := check.Verdict
-		if verdict != "unverified" {
+		why := ""
+		if verdict == "unverified" {
+			why = strings.TrimSpace(check.Reason)
+		} else {
 			switch {
 			case validCitations == 0:
 				fmt.Fprintf(os.Stderr, "  challenge: %q has no usable citation — recorded as unverified\n", check.Issue)
-				verdict = "unverified"
+				verdict, why = "unverified", "no usable citation to the supplied sources"
 			case *check.RequiresRuntime && !hasExperiment:
 				fmt.Fprintf(os.Stderr, "  challenge: %q needs runtime evidence but no experiment backs it — recorded as unverified\n", check.Issue)
-				verdict = "unverified"
+				verdict, why = "unverified", "requires a runtime experiment, which was not available"
 			}
 		}
 		switch verdict {
@@ -345,14 +350,33 @@ func rcValidateChallenge(raw string, issues, sources []string, experiment map[in
 			}
 			keptFinding[check.Issue] = strings.TrimSpace(check.Finding)
 		case "unverified":
-			unresolvedSet[check.Issue] = true
+			if why == "" {
+				why = "could not be settled with the available evidence"
+			}
+			unresolvedReason[check.Issue] = why
 		}
 	}
 	if len(seen) != len(wanted) {
 		return "", nil, fmt.Errorf("challenge did not check every allegation")
 	}
+	// The model-authored review-level text (assessment, summary, decisions) must
+	// not assert an allegation the challenge did not support. Per-finding defect
+	// prose comes only from supported checks, but a non-supported allegation
+	// repeated verbatim here would still read as a confident defect, so it fails
+	// closed.
+	freeText := append([]string{answer.Assessment, answer.Summary}, answer.Decisions...)
+	for _, issue := range issues {
+		if _, ok := keptFinding[issue]; ok {
+			continue
+		}
+		for _, field := range freeText {
+			if strings.Contains(field, issue) {
+				return "", nil, fmt.Errorf("challenge asserted the non-supported allegation %q in its assessment, summary, or decisions", issue)
+			}
+		}
+	}
 	kept := rcIssueOrder(issues, func(i string) bool { _, ok := keptFinding[i]; return ok })
-	unresolved := rcIssueOrder(issues, func(i string) bool { return unresolvedSet[i] })
+	unresolved := rcIssueOrder(issues, func(i string) bool { _, ok := unresolvedReason[i]; return ok })
 	// Readiness must be coherent with what actually publishes.
 	if (len(kept) > 0 && readiness > finding.ReadinessSmallFixes) ||
 		(len(kept) == 0 && len(unresolved) == 0 && readiness < finding.ReadinessDecideThenMerge) ||
@@ -366,7 +390,7 @@ func rcValidateChallenge(raw string, issues, sources []string, experiment map[in
 	for _, check := range answer.Checks {
 		fmt.Fprintf(os.Stderr, "  challenge: %s — %s\n    %s\n", check.Verdict, check.Issue, check.Reason)
 	}
-	review := rcAssembleReview(answer.Assessment, kept, keptFinding, unresolved, match, readiness, answer.Summary, answer.Decisions)
+	review := rcAssembleReview(answer.Assessment, kept, keptFinding, unresolved, unresolvedReason, match, readiness, answer.Summary, answer.Decisions)
 	return review, unresolved, nil
 }
 
@@ -387,7 +411,7 @@ func rcIssueOrder(issues []string, keep func(string) bool) []string {
 // incomplete banner listing any unresolved allegation, and a single machine
 // coda. Nothing the model wrote about a refuted or unresolved allegation is
 // copied through.
-func rcAssembleReview(assessment string, kept []string, findingText map[string]string, unresolved []string, match finding.Match, readiness finding.Readiness, summary string, decisions []string) string {
+func rcAssembleReview(assessment string, kept []string, findingText map[string]string, unresolved []string, unresolvedReason map[string]string, match finding.Match, readiness finding.Readiness, summary string, decisions []string) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(assessment))
 	if len(kept) > 0 {
@@ -398,11 +422,11 @@ func rcAssembleReview(assessment string, kept []string, findingText map[string]s
 	}
 	if len(unresolved) > 0 {
 		b.WriteString("\n**This review is incomplete.** ")
-		b.WriteString("The following allegation(s) require runtime evidence that this run could not obtain (no isolated experiment was available), so they are neither confirmed nor cleared:\n")
+		b.WriteString("The following allegation(s) could not be confirmed or cleared, for the reason given:\n")
 		for _, issue := range unresolved {
-			fmt.Fprintf(&b, "- %s\n", issue)
+			fmt.Fprintf(&b, "- %s — %s\n", issue, unresolvedReason[issue])
 		}
-		b.WriteString("Re-run the review where an experiment sandbox is configured to settle them.")
+		b.WriteString("Re-run the review with the evidence needed to settle them (an isolated experiment for runtime claims).")
 	}
 	fmt.Fprintf(&b, "\n\n%s\nINTENT_MATCH: %s\nMERGE_READY: %d\nSUMMARY: %s\n", rcReviewDataMarker, string(match), int(readiness), strings.TrimSpace(summary))
 	if len(decisions) > 0 {
