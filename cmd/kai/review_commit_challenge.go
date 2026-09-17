@@ -41,7 +41,7 @@ Every check must classify whether the allegation requires runtime evidence. Set 
 
 For a runtime claim, use review_shell in FIDELITY mode, which is the only kind of experiment that can back a supported/refuted verdict. Do NOT retype, reconstruct, or "equivalently" escape the command yourself — that is how a wrong verdict was produced before: a hand-escaped command was tested and its success was taken as proof the real one was safe. Give "construct": Node code that builds and prints the exact command string the way the code under review builds it (e.g. process.stdout.write('cd ' + JSON.stringify(wsPath) + ' && pwd')); optional "setup" to create the concrete inputs; and "assertions" stating what you expect to observe. Test the inputs THE ALLEGATION NAMES: if it alleges $ and backticks are mishandled, create a literal directory containing $ and one containing a backtick and test those — a path with a space or a quote tells you nothing about $. The harness feeds the generated string verbatim into sh and reports the generated command, exit code, stdout, stderr, the observed working directory, and PASS/FAIL per assertion.
 
-When you CITE an experiment in a check's "evidence", you must connect it to the allegation with four fields: "addresses_allegation" (does this experiment exercise the behavior the allegation is about?), "covers_alleged_inputs" (did it use the inputs the allegation names, not merely similar ones?), "expectation" ("intended" if your assertions encode the intended behavior, "defect" if they encode the alleged defect), and "tested" (what input/behavior it exercised). The system then DERIVES what was observed from your assertion results: an assertion of intended behavior that FAILED, or an assertion of the defect that PASSED, is the alleged violation OBSERVED; the converse is conformance for the input tested. The verdict rules follow from that: (1) an observed violation by a relevant experiment can SUPPORT the defect; (2) a passing example establishes behavior for THAT example only — it can REFUTE the allegation only if covers_alleged_inputs is true, and never when a relevant experiment observed the violation; (3) an experiment that does not address the allegation leaves it unresolved; (4) an experiment that could not run supplies no runtime conclusion. A verdict the observations do not carry becomes "unverified" — so read the results literally: if you asserted the cd would land in the intended directory and it did not, that is the violation, whatever the printout looked like. You may call review_shell at most FOUR times in total. Each result is returned as a new numbered SOURCE; an experiment counts only if you CITE that source number. It runs synthetic snippets in an isolated container: no repository, credentials, host mounts, or network; POSIX /bin/sh plus node, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
+When you CITE an experiment in a check's "evidence", you must connect it to the allegation with five fields: "addresses_allegation" (does this experiment exercise the behavior the allegation is about?), "covers_alleged_inputs" (did it use the inputs the allegation names, not merely similar ones?), "expectation" ("intended" if the offered assertions encode the intended behavior, "defect" if they encode the alleged defect), "tested" (what input/behavior it exercised), and "assertions" — the NUMBER(S) of the recorded assertion(s), as numbered in that experiment's result, that are evidence for THIS allegation. The system DERIVES what was observed from those offered assertions ONLY: an offered assertion of intended behavior that FAILED, or an offered assertion of the defect that PASSED, is the alleged violation OBSERVED; the converse is conformance for the input tested. The experiment's other assertions are kept on the record but do not count for this allegation — a failure unrelated to the alleged behavior (say, an echo's wording) is not a violation of a directory allegation, so offer only the assertion(s) that actually bear on it. The verdict rules follow from that: (1) an observed violation by a relevant experiment can SUPPORT the defect; (2) a passing example establishes behavior for THAT example only — it can REFUTE the allegation only if covers_alleged_inputs is true, and never when a relevant experiment observed the violation; (3) an experiment that does not address the allegation leaves it unresolved; (4) an experiment that could not run supplies no runtime conclusion. A verdict the observations do not carry becomes "unverified" — so read the results literally: if you asserted the cd would land in the intended directory and it did not, that is the violation, whatever the printout looked like. You may call review_shell at most FOUR times in total. Each result is returned as a new numbered SOURCE; an experiment counts only if you CITE that source number. It runs synthetic snippets in an isolated container: no repository, credentials, host mounts, or network; POSIX /bin/sh plus node, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
 
 Finish by calling submit_review (plain JSON is accepted if tool submission is unavailable) with:
 {"scope":["what was reviewed: files, paths, behaviors actually examined"],
@@ -78,6 +78,12 @@ type rcCheckEvidence struct {
 	CoversAllegedInputs *bool  `json:"covers_alleged_inputs"` // did it use the inputs the allegation names (e.g. $ and backticks), not merely similar ones?
 	Expectation         string `json:"expectation"`           // "intended": assertions encode the intended behavior; "defect": assertions encode the alleged defect
 	Tested              string `json:"tested"`                // what input / behavior the experiment exercised
+	// Assertions names, by 1-based number, the recorded assertion(s) offered as
+	// evidence FOR THIS ALLEGATION. The observation is derived from these only;
+	// the experiment's other assertions are preserved but cannot establish
+	// anything here, so an unrelated failure is not a violation of the
+	// behavior alleged.
+	Assertions []int `json:"assertions"`
 }
 
 type rcIssueCheck struct {
@@ -130,6 +136,10 @@ type rcCitationRef struct {
 	Tested      string `json:"tested,omitempty"`
 	Observed    string `json:"observed,omitempty"`
 	Note        string `json:"note,omitempty"`
+	// Offered is the 1-based number(s) of the recorded assertion(s) the model
+	// put forward as evidence for this allegation — what the observation was
+	// derived from, so a reader can see exactly which check was relied on.
+	Offered []int `json:"assertionsOffered,omitempty"`
 }
 
 // rcRelevance summarizes what a check's cited experiments established with
@@ -206,6 +216,7 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 		"covers_alleged_inputs": map[string]any{"type": "boolean", "description": "experiment citations only: did it use the inputs the allegation names (e.g. $ and backticks), not merely similar ones?"},
 		"expectation":           map[string]any{"type": "string", "enum": []string{"intended", "defect"}, "description": "experiment citations only: do its assertions encode the INTENDED behavior, or the alleged DEFECT?"},
 		"tested":                str(),
+		"assertions":            map[string]any{"type": "array", "items": intg(), "description": "experiment citations only, REQUIRED to draw an observation: the number(s) of the recorded assertion(s) that are evidence for THIS allegation. Only these are used; the experiment's other assertions do not count for this allegation."},
 	}, "required": []string{"source", "line_start", "line_end"}}
 	evidenceList := map[string]any{"type": "array", "items": evidence}
 	check := map[string]any{"type": "object", "properties": map[string]any{
@@ -394,6 +405,12 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 		if len(calls) == 1 && calls[0].Name == "submit_review" {
 			call := calls[0]
 			res, err := rcValidateChallenge(call.Input, issues, decisions, sources, experiments)
+			if err != nil && !errors.Is(err, errRCMalformedAnswer) {
+				// A submission the validator rejected is diagnosable only if the
+				// rejected payload is on the record. Log it in full; it is the
+				// model's own JSON. This changes nothing about what is accepted.
+				fmt.Fprintf(os.Stderr, "  challenge: submission rejected by the validator (%v); the rejected payload follows:\n%s\n", err, rcIndentBounded(call.Input, 400))
+			}
 			if err == nil || !errors.Is(err, errRCMalformedAnswer) || nudged {
 				return finish(res, err)
 			}
@@ -453,6 +470,9 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 			text := rcResponseText(resp)
 			if answer := rcExtractJSONObject(text); answer != "" {
 				res, err := rcValidateChallenge(answer, issues, decisions, sources, experiments)
+				if err != nil && !errors.Is(err, errRCMalformedAnswer) {
+					fmt.Fprintf(os.Stderr, "  challenge: submission rejected by the validator (%v); the rejected payload follows:\n%s\n", err, rcIndentBounded(answer, 400))
+				}
 				if err == nil || !errors.Is(err, errRCMalformedAnswer) || nudged {
 					return finish(res, err)
 				}
@@ -518,7 +538,8 @@ func rcResolveCitations(label string, evidence []rcCheckEvidence, sources []stri
 		ref.Experiment, ref.Expectation, ref.Tested = true, ev.Expectation, strings.TrimSpace(ev.Tested)
 		ref.Addresses = ev.AddressesAllegation != nil && *ev.AddressesAllegation
 		ref.Covers = ev.CoversAllegedInputs != nil && *ev.CoversAllegedInputs
-		observed, why := rec.observation(ev.Expectation)
+		ref.Offered = ev.Assertions
+		observed, why := rec.observation(ev.Expectation, ev.Assertions)
 		ref.Observed, ref.Note = observed, why
 		refs = append(refs, ref)
 		switch {
@@ -593,8 +614,16 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 	results := make([]rcAllegationResult, len(issues))
 	for _, check := range answer.Checks {
 		id, known := index[check.Issue]
-		if !known || seen[check.Issue] || strings.TrimSpace(check.Reason) == "" {
-			return nil, fmt.Errorf("challenge omitted reasoning, duplicated a check, or checked an unknown issue")
+		// Three distinct structural failures, each named with the offending
+		// value, so a rejected submission is diagnosable from the log rather
+		// than collapsed into one message.
+		switch {
+		case !known:
+			return nil, fmt.Errorf("challenge checked an issue the draft does not contain: %q", check.Issue)
+		case seen[check.Issue]:
+			return nil, fmt.Errorf("challenge checked the same issue twice: %q", check.Issue)
+		case strings.TrimSpace(check.Reason) == "":
+			return nil, fmt.Errorf("challenge gave no reasoning for issue %q", check.Issue)
 		}
 		seen[check.Issue] = true
 		if check.Verdict != "supported" && check.Verdict != "refuted" && check.Verdict != "unverified" {
@@ -665,8 +694,11 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 			fmt.Fprintf(os.Stderr, "  challenge: dropped decision the draft never made: %q\n", dc.Decision)
 			continue
 		}
-		if dseen[dc.Decision] || strings.TrimSpace(dc.Reason) == "" {
-			return nil, fmt.Errorf("challenge duplicated a decision or omitted its reasoning")
+		if dseen[dc.Decision] {
+			return nil, fmt.Errorf("challenge assessed the same decision twice: %q", dc.Decision)
+		}
+		if strings.TrimSpace(dc.Reason) == "" {
+			return nil, fmt.Errorf("challenge gave no reasoning for decision %q", dc.Decision)
 		}
 		dseen[dc.Decision] = true
 		if dc.Verdict != "supported" && dc.Verdict != "refuted" && dc.Verdict != "unverified" {

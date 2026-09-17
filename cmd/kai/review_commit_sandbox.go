@@ -120,12 +120,17 @@ const (
 	rcObservedConformance = "conformance" // the code behaved as intended for the input tested
 )
 
-// observation derives what the experiment showed, given whether its assertions
-// encode the intended behavior ("intended") or the alleged defect ("defect").
-// It returns "" with a reason when no observation can be drawn: the experiment
-// did not run, declared no assertions, or the citation did not say which way
+// observation derives what the experiment showed FOR THE ASSERTIONS THE
+// CITATION OFFERS, given whether those assertions encode the intended behavior
+// ("intended") or the alleged defect ("defect"). selected holds 1-based
+// indexes into the record's assertions; only those contribute to the
+// observation. The others are preserved on the record but cannot establish
+// anything for this allegation — an unrelated failure is not a violation of
+// the behavior alleged. It returns "" with a reason when no observation can be
+// drawn: the experiment did not run, declared no assertions, the citation
+// offered none or offered ones that do not exist, or it did not say which way
 // its assertions point.
-func (r *rcExperimentRecord) observation(expectation string) (string, string) {
+func (r *rcExperimentRecord) observation(expectation string, selected []int) (string, string) {
 	if r == nil {
 		return "", "no experiment"
 	}
@@ -135,24 +140,33 @@ func (r *rcExperimentRecord) observation(expectation string) (string, string) {
 	if !r.HasAssertions {
 		return "", "the cited experiment declared no assertions (an unasserted printout cannot establish behavior)"
 	}
-	failed := ""
-	for _, a := range r.Assertions {
+	if len(selected) == 0 {
+		return "", "the citation did not say which recorded assertion(s) are offered as evidence for this allegation"
+	}
+	failed, allPassed := "", true
+	for _, idx := range selected {
+		if idx < 1 || idx > len(r.Assertions) {
+			return "", fmt.Sprintf("the citation offered assertion %d, but the record has %d", idx, len(r.Assertions))
+		}
+		a := r.Assertions[idx-1]
 		if !a.Passed {
-			failed = fmt.Sprintf("%s %q, observed %q", a.Kind, a.Value, a.Observed)
-			break
+			allPassed = false
+			if failed == "" {
+				failed = fmt.Sprintf("#%d %s %q, observed %q", idx, a.Kind, a.Value, a.Observed)
+			}
 		}
 	}
 	switch expectation {
 	case "intended":
 		if failed != "" {
-			return rcObservedViolation, "an assertion of the intended behavior failed: " + failed
+			return rcObservedViolation, "an offered assertion of the intended behavior failed: " + failed
 		}
-		return rcObservedConformance, "every assertion of the intended behavior passed for the input tested"
+		return rcObservedConformance, "every offered assertion of the intended behavior passed for the input tested"
 	case "defect":
-		if r.AllPassed {
-			return rcObservedViolation, "the asserted defect behavior was observed"
+		if allPassed {
+			return rcObservedViolation, "the offered assertion(s) of the defect behavior passed: the alleged behavior was observed"
 		}
-		return rcObservedConformance, "the asserted defect behavior was not observed: " + failed
+		return rcObservedConformance, "an offered assertion of the defect behavior failed: the alleged behavior was not observed: " + failed
 	default:
 		return "", "the citation did not declare whether its assertions encode the intended behavior or the alleged defect"
 	}
@@ -182,13 +196,13 @@ func (r *rcExperimentRecord) render(image string) string {
 	}
 	fmt.Fprintf(&b, "stdout:\n%s\nstderr:\n%s\n", r.Stdout, r.Stderr)
 	if r.HasAssertions {
-		b.WriteString("Assertions (each is an observation — expected vs observed):\n")
-		for _, a := range r.Assertions {
+		b.WriteString("Assertions (numbered; each is an observation — expected vs observed. When you cite this experiment, list the NUMBER(S) of the assertion(s) that are evidence for the allegation):\n")
+		for i, a := range r.Assertions {
 			mark := "PASS"
 			if !a.Passed {
 				mark = "FAIL"
 			}
-			fmt.Fprintf(&b, "  %s %s %q (observed %q)\n", mark, a.Kind, a.Value, a.Observed)
+			fmt.Fprintf(&b, "  %d. %s %s %q (observed %q)\n", i+1, mark, a.Kind, a.Value, a.Observed)
 		}
 		fmt.Fprintf(&b, "All assertions passed: %v\n", r.AllPassed)
 	} else {

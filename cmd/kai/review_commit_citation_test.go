@@ -134,7 +134,7 @@ func TestReviewChallengeRuntimeClaimPublishesWithExperiment(t *testing.T) {
 		IntentMatch: "partial",
 		MergeReady:  3,
 		Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "runtime", Finding: "Expands.", Remedy: "Escape the path.", Evidence: []rcCheckEvidence{
-			{Source: 2, LineStart: 1, LineEnd: 1, AddressesAllegation: rcBool(true), CoversAllegedInputs: rcBool(true), Expectation: "defect", Tested: "a path containing $HOME"},
+			{Source: 2, LineStart: 1, LineEnd: 1, AddressesAllegation: rcBool(true), CoversAllegedInputs: rcBool(true), Expectation: "defect", Tested: "a path containing $HOME", Assertions: []int{1}},
 		}}},
 	}
 	// The experiment asserted the DEFECT (pwd_not the intended dir) and it
@@ -166,6 +166,9 @@ func TestReviewChallengeVerdictConnectsTestedAndObserved(t *testing.T) {
 	sources := []string{`cd "$HOME"`, "experiment output"}
 	answer := func(verdict string, ev rcCheckEvidence) rcChallengeAnswer {
 		ev.Source, ev.LineStart, ev.LineEnd = 2, 1, 1
+		if ev.Assertions == nil {
+			ev.Assertions = []int{1} // every record here has one assertion; offer it
+		}
 		return rcChallengeAnswer{
 			Scope: []string{"quoting"}, IntentMatch: "partial", MergeReady: 4,
 			Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: verdict, RequiresRuntime: rcBool(true), Reason: "ran it", Finding: "f", Remedy: "fix", Evidence: []rcCheckEvidence{ev}}},
@@ -244,7 +247,7 @@ func TestExperimentRecordDistinguishesNotRunFromFailedAssertion(t *testing.T) {
 	if err == nil || rec == nil || rec.Outcome != rcOutcomeNotRun || rec.Error == "" || rec.completed() {
 		t.Fatalf("not-run attempt not recorded as such: rec=%+v err=%v", rec, err)
 	}
-	if obs, why := rec.observation("intended"); obs != "" || !strings.Contains(why, "did not run") || !strings.Contains(rec.render(sb.image), "could not run") {
+	if obs, why := rec.observation("intended", []int{1}); obs != "" || !strings.Contains(why, "did not run") || !strings.Contains(rec.render(sb.image), "could not run") {
 		t.Fatalf("not-run record yielded an observation or does not say so: obs=%q why=%q", obs, why)
 	}
 	// Ran, expectation failed: a valid observation, distinct from the above —
@@ -254,7 +257,7 @@ func TestExperimentRecordDistinguishesNotRunFromFailedAssertion(t *testing.T) {
 	if !failed.completed() || failed.Assertions[0].Passed || failed.Assertions[0].Observed != "/tmp" {
 		t.Fatalf("completed-but-failed experiment not recorded as an observation: %+v", failed)
 	}
-	if obs, _ := failed.observation("intended"); obs != rcObservedViolation {
+	if obs, _ := failed.observation("intended", []int{1}); obs != rcObservedViolation {
 		t.Fatalf("failed intended-behavior assertion not derived as a violation: %q", obs)
 	}
 	if !strings.Contains(failed.render("img"), `FAIL pwd "/tmp/test$dir" (observed "/tmp")`) {
@@ -304,11 +307,23 @@ func TestExperimentRecordParsesConstructOutputAndEvaluates(t *testing.T) {
 	if !rec.HasAssertions || rec.AllPassed || rec.Assertions[0].Passed || !rec.Assertions[1].Passed || !rec.Assertions[2].Passed {
 		t.Fatalf("assertions evaluated wrong: %+v", rec.Assertions)
 	}
-	if obs, why := rec.observation("intended"); obs != rcObservedViolation || !strings.Contains(why, `pwd "/tmp/test$dir", observed "/tmp"`) {
-		t.Fatalf("derived observation does not name the failed expectation: obs=%q why=%q", obs, why)
+	// Offer the pwd assertion (#1): intended → its failure is the violation.
+	if obs, why := rec.observation("intended", []int{1}); obs != rcObservedViolation || !strings.Contains(why, `#1 pwd "/tmp/test$dir", observed "/tmp"`) {
+		t.Fatalf("derived observation does not name the failed offered assertion: obs=%q why=%q", obs, why)
 	}
-	if obs, _ := rec.observation("defect"); obs != rcObservedConformance {
-		t.Fatalf("with the defect asserted and not all passing, observation should be conformance: %q", obs)
+	if obs, _ := rec.observation("defect", []int{1}); obs != rcObservedConformance {
+		t.Fatalf("with the defect asserted and the offered assertion failing, observation should be conformance: %q", obs)
+	}
+	// Offer only the passing assertions (#2, #3): intended → conformance; the
+	// failed pwd assertion is preserved on the record but not offered.
+	if obs, _ := rec.observation("intended", []int{2, 3}); obs != rcObservedConformance {
+		t.Fatalf("unoffered failure leaked into the observation: %q", obs)
+	}
+	if obs, why := rec.observation("intended", nil); obs != "" || !strings.Contains(why, "did not say which recorded assertion") {
+		t.Fatalf("an observation was drawn with no assertion offered: obs=%q why=%q", obs, why)
+	}
+	if obs, why := rec.observation("intended", []int{9}); obs != "" || !strings.Contains(why, "offered assertion 9, but the record has 3") {
+		t.Fatalf("a non-existent offered assertion was accepted: obs=%q why=%q", obs, why)
 	}
 	if err := (&rcExperimentRecord{}).parseConstructOutput("no markers"); err == nil {
 		t.Fatal("incomplete record accepted")

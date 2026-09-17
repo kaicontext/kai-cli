@@ -86,13 +86,16 @@ func TestWrongVerdictRunCannotProduceTheWrongConclusion(t *testing.T) {
 		})
 	}
 	yes, no := rcBool(true), rcBool(false)
-	honest := rcCheckEvidence{AddressesAllegation: yes, CoversAllegedInputs: no, Expectation: "intended", Tested: `a path containing a double quote`}
+	// Offer assertion #3 — the pwd equality — as the evidence for a directory
+	// allegation. (#1 exit and #2 stdout-wording are preserved on the record
+	// but are not what bears on where the cd landed.)
+	honest := rcCheckEvidence{AddressesAllegation: yes, CoversAllegedInputs: no, Expectation: "intended", Tested: `a path containing a double quote`, Assertions: []int{3}}
 	// Every field below that did NOT exist in the original run is supplied by
 	// this test, and is listed so the validation is not mistaken for a replay
 	// of what the model would have produced:
 	//   - outcome=completed on the record (the field postdates the run)
-	//   - addresses_allegation, covers_alleged_inputs, expectation, tested on
-	//     the citation (none existed in that run's evidence)
+	//   - addresses_allegation, covers_alleged_inputs, expectation, tested, and
+	//     assertions=[3] on the citation (none existed in that run's evidence)
 	//   - requires_runtime=true on the check (the run's allegation carried it)
 	//   - the verdict under test ("supported" as GLM gave it; "refuted" as its
 	//     reasoning expresses); scope/intent/merge_ready/finding fixtures
@@ -155,42 +158,57 @@ func TestWrongVerdictRunCannotProduceTheWrongConclusion(t *testing.T) {
 	}
 }
 
-// KNOWN GAP, characterized so it fails loudly if the rule changes: under
-// expectation "intended", the observation is derived from ANY failed
-// assertion. An assertion UNRELATED to the alleged behavior — here a stdout
-// substring — failing while the directory-equality check PASSES still yields
-// "violation observed", and "supported" goes through. The observation is not
-// tied to the specific assertion that encodes the alleged behavior. The
-// converse direction is safe by construction: "defect" requires ALL assertions
-// to pass, so an unrelated failure blocks rather than manufactures support.
-func TestKnownGapUnrelatedFailedAssertionCanSupportAllegation(t *testing.T) {
+// REGRESSION for the assertion-selection bug. An experiment records two
+// assertions: the directory-equality check for the alleged behavior, which
+// PASSES (the cd landed where intended), and an unrelated stdout-wording check,
+// which FAILS. The citation offers the directory assertion as evidence for the
+// directory allegation. The observation is derived from the offered assertion
+// only — conformance — so "supported" must NOT go through: an unrelated
+// failure is not a violation of the behavior alleged. The failed assertion is
+// preserved on the record; it simply does not count for this allegation.
+func TestUnrelatedFailedAssertionCannotSupportDirectoryAllegation(t *testing.T) {
 	sources := []string{`cd "$HOME"`, "experiment output"}
 	rec := &rcExperimentRecord{Outcome: rcOutcomeCompleted, Mode: "construct", HasAssertions: true, AllPassed: false, ObservedPWD: "/tmp/test$dir",
 		Assertions: []rcAssertionResult{
-			{Kind: "pwd", Value: "/tmp/test$dir", Passed: true, Observed: "/tmp/test$dir"},                       // the alleged behavior: cd landed correctly
-			{Kind: "stdout_contains", Value: "successfully changed", Passed: false, Observed: "/tmp/test$dir\n"}, // unrelated: echo wording
+			{Kind: "pwd", Value: "/tmp/test$dir", Passed: true, Observed: "/tmp/test$dir"},                       // #1 the alleged behavior: cd landed correctly
+			{Kind: "stdout_contains", Value: "successfully changed", Passed: false, Observed: "/tmp/test$dir\n"}, // #2 unrelated: echo wording
 		}}
-	ev := rcCheckEvidence{Source: 2, LineStart: 1, LineEnd: 1, AddressesAllegation: rcBool(true), CoversAllegedInputs: rcBool(true), Expectation: "intended", Tested: "$dir"}
-	a := rcChallengeAnswer{Scope: []string{"x"}, IntentMatch: "partial", MergeReady: 3,
-		Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "r", Finding: "f", Remedy: "fix", Evidence: []rcCheckEvidence{ev}}}}
-	res, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcEscapeIssue}, nil, sources, map[int]*rcExperimentRecord{2: rec})
-	if err != nil {
-		t.Fatal(err)
+	submit := func(ev rcCheckEvidence) rcAllegationResult {
+		t.Helper()
+		ev.Source, ev.LineStart, ev.LineEnd = 2, 1, 1
+		a := rcChallengeAnswer{Scope: []string{"x"}, IntentMatch: "partial", MergeReady: 3,
+			Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "r", Finding: "f", Remedy: "fix", Evidence: []rcCheckEvidence{ev}}}}
+		res, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcEscapeIssue}, nil, sources, map[int]*rcExperimentRecord{2: rec})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := res.Allegations[0]
+		t.Logf("offered=%v → status=%s observed=%q note=%q", r.Evidence[0].Offered, r.Status, r.Evidence[0].Observed, r.Evidence[0].Note)
+		return r
 	}
-	r := res.Allegations[0]
-	t.Logf("KNOWN GAP: pwd assertion PASSED (behavior intact) but an unrelated stdout assertion failed → status=%s observed=%q reason=%q", r.Status, r.Evidence[0].Observed, r.Reason)
-	if r.Status != "supported" || r.Evidence[0].Observed != rcObservedViolation {
-		t.Fatalf("the gap appears closed — update this characterization and the record: %+v", r)
+	base := rcCheckEvidence{AddressesAllegation: rcBool(true), CoversAllegedInputs: rcBool(true), Expectation: "intended", Tested: "$dir"}
+
+	// The directory assertion offered: it passed, so the observation is
+	// conformance and the allegation cannot be supported.
+	dir := base
+	dir.Assertions = []int{1}
+	if r := submit(dir); r.Status != "unresolved" || r.Evidence[0].Observed != rcObservedConformance || r.Remedy != "" || r.WithheldRemedy != "fix" {
+		t.Fatalf("an unrelated failed assertion supported the directory allegation: %+v", r)
 	}
-	// The safe direction: with "defect" expectation, one unrelated failure
-	// means not-all-passed, so no violation is derived and no support results.
-	ev.Expectation = "defect"
-	a.Checks[0].Evidence = []rcCheckEvidence{ev}
-	res, err = rcValidateChallenge(rcTestAnswer(t, a), []string{rcEscapeIssue}, nil, sources, map[int]*rcExperimentRecord{2: rec})
-	if err != nil {
-		t.Fatal(err)
+	// The record still carries the unrelated failure — preserved, not erased.
+	if rec.AllPassed || rec.Assertions[1].Passed {
+		t.Fatalf("the unrelated failed assertion was not preserved on the record: %+v", rec)
 	}
-	if r := res.Allegations[0]; r.Status != "unresolved" {
-		t.Fatalf("defect-expectation with an unrelated failure produced support: %+v", r)
+	// Nothing offered: no observation can be drawn.
+	if r := submit(base); r.Status != "unresolved" || !strings.Contains(r.Reason, "did not say which recorded assertion") {
+		t.Fatalf("an observation was drawn with no assertion offered: %+v", r)
+	}
+	// Both offered: the unrelated failure is now among the offered assertions
+	// and drives a violation — the model's choice to offer it is recorded as
+	// [1 2] on the citation, so what was relied on is visible and auditable.
+	both := base
+	both.Assertions = []int{1, 2}
+	if r := submit(both); r.Status != "supported" || len(r.Evidence[0].Offered) != 2 {
+		t.Fatalf("offering the unrelated assertion should be visible on the record: %+v", r)
 	}
 }

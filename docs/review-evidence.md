@@ -146,10 +146,24 @@ metacharacters. Three changes address exactly that, and nothing broader:
      connected to it, leaves it **unresolved**.
   4. An experiment that could not run supplies **no runtime conclusion**.
 
-  The relevance and coverage bits remain model judgment. Structured fields do
-  not guarantee correctness; they make the claim explicit and auditable in the
-  bundle, so a false "this double-quote test covered `$` and backticks" is
-  visible rather than silent.
+  **Each citation names the assertion(s) it offers.** An experiment may record
+  several assertions; the citation's `assertions` field lists, by number, the
+  recorded assertion(s) offered as evidence *for this allegation*. The
+  observation is derived from those only. The others are preserved on the
+  record but do not count here — an unrelated failure (an echo's wording) is
+  not a violation of a directory allegation. A citation that offers none, or
+  offers one that does not exist, yields no observation. What was offered is
+  recorded on the citation (`assertionsOffered`), so a reader can see exactly
+  which check a verdict relied on. Regression:
+  `TestUnrelatedFailedAssertionCannotSupportDirectoryAllegation` — directory
+  equality passes, an unrelated stdout check fails, the directory assertion is
+  offered: the allegation is not supported.
+
+  The relevance, coverage, and selection bits remain model judgment.
+  Structured fields do not guarantee correctness; they make the claim explicit
+  and auditable in the bundle, so a false "this double-quote test covered `$`
+  and backticks", or an offer of an unrelated assertion, is visible rather
+  than silent.
 
   **Validated against the preserved wrong-verdict run**
   (`cmd/kai/review_commit_wrongverdict_test.go`, fixture extracted from that

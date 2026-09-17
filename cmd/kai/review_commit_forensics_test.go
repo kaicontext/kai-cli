@@ -162,14 +162,14 @@ func TestForensicsFidelityModeAssertsPathEqualityForJSONStringify(t *testing.T) 
 	}
 	// With the intended behavior asserted, that failure is the violation
 	// observed — evidence of the defect, not a reason to discard the run.
-	if obs, why := unsafe.observation("intended"); obs != rcObservedViolation || !strings.Contains(why, `pwd "/tmp/test$dir"`) {
+	if obs, why := unsafe.observation("intended", []int{1}); obs != rcObservedViolation || !strings.Contains(why, `pwd "/tmp/test$dir"`) {
 		t.Fatalf("misdirected cd not derived as a violation naming the path check: obs=%q why=%q", obs, why)
 	}
 	// The single-quote fix, constructed and asserted the same way, PASSES —
 	// conformance for that input.
 	fixed := run(`const p = "/tmp/test$dir"; process.stdout.write("cd '" + p.replace(/'/g, "'\\''") + "' && pwd")`,
 		[]rcAssertion{{Kind: "pwd", Value: "/tmp/test$dir"}, {Kind: "exit", Value: "0"}, {Kind: "stdout_contains", Value: "/tmp/test$dir"}})
-	if obs, _ := fixed.observation("intended"); obs != rcObservedConformance || fixed.ObservedPWD != "/tmp/test$dir" || !fixed.AllPassed {
+	if obs, _ := fixed.observation("intended", []int{1}); obs != rcObservedConformance || fixed.ObservedPWD != "/tmp/test$dir" || !fixed.AllPassed {
 		t.Fatalf("expected the single-quoted construction to pass every assertion (conformance): %+v", fixed)
 	}
 	// A free-form script with assertions is refused: assertions need fidelity mode.

@@ -627,3 +627,38 @@ about whether GLM populates the contract sensibly.** The original failure is
 NOT shown fixed. What is shown: the rules block the preserved record under
 test-supplied classifications (A–C), one dishonest path remains (D), and the
 derivation has an exploitable gap (unrelated failed assertion).
+
+## Diagnosis of the three live failures (verdict-contract revision), from their full logs
+
+What the logs contain: the harness's console lines only — the fast-pass model
+substitution, a bounded summary of each experiment, and the final error. They
+do **not** contain the rejected `submit_review` payload, the draft's ISSUES
+list the challenger was given, the full tool results the model received, or
+the model's reasoning. Two of the three rejections therefore lost their
+rejected values; that is stated per attempt.
+
+| attempt | error | origin | exact rejected field | what the model received | determinable? |
+|---|---|---|---|---|---|
+| 1 | `challenge omitted reasoning, duplicated a check, or checked an unknown issue` | **validator** (structural check on `checks`), on the model's submission | one of: an `issue` string not in the draft; a duplicated `issue`; an empty `reason` — **the message conflates them and the payload was not logged, so which one is not determinable** | the draft + the Haiku-drafted ISSUES bullets, sources, and three experiment results (one construct all-passed, one not) | **no** — rejected value lost |
+| 2 | `challenge requested unavailable tool "review_shell" (call 5; maximum 4)` | **tool contract** — the four-call cap enforced by the harness; not the validator | the fifth tool call itself; no submission was made | four experiment results: two script-mode (no assertions); two construct-mode in which the model's `construct` printed `echo hello`, then label text `BUILT_COMMAND_START…END` as the "command" (exit 127) | **yes** — the model misused construct mode (did not print the command the code builds), then asked for a fifth experiment; the cap made that fatal |
+| 3 | `challenge did not state what it reviewed (empty scope)` | **validator** (required-field check), on the model's submission | `scope` — empty or all-blank; **whether GLM sent `[]`, `[""]`, or omitted the key is not determinable** (payload not logged) | one script-mode experiment result (no assertions) | **partly** — the field is known; its value is lost |
+
+Classification: attempt 2 is a model response failure against the tool
+contract, fully determinable. Attempts 1 and 3 are validator rejections of the
+model's submission whose rejected values were never captured — a
+diagnosability failure on our side, not a protocol conclusion. No retry was
+added and no validation was loosened in reaction.
+
+**Diagnosability changes made (not protocol, not loosening):** the validator
+now logs the rejected submission payload in full on any structural rejection;
+and the single conflated message is split into three that name the offending
+value ("checked an issue the draft does not contain: …", "checked the same
+issue twice: …", "gave no reasoning for issue …"), likewise for decisions. The
+next such run will show exactly what was rejected.
+
+**Assertion-selection bug fixed** (same commit): each experiment citation
+now names the recorded assertion(s) it offers; the observation is derived from
+those only; the others are preserved on the record; regression added where
+directory equality passes but an unrelated stdout check fails — the directory
+allegation is not supported. What the model offers is recorded on the
+citation, so offering an unrelated assertion is visible.
