@@ -1619,3 +1619,105 @@ correction because the same assertion passes under it.
 
 The gate is unchanged; nothing here is implemented; the red regression stays
 red; PR #117 stays unmerged.
+
+## The proposal as an evidence-display change: the preserved bad submission, rendered
+
+Treating the corrected proposal as a display improvement only — the gate
+frozen, verdicts and remedy publication exactly as today — this is what the
+assembled review would show for deep attempt 3's allegation #1, built from
+the fixture's fields (`finding`, `remedy`, `reason`, the citation's
+`expectation`/`tested`/`assertions`, and the recorded experiment). The
+submission predates the proposal, so it carries no requirement statement;
+the display says so rather than inventing one. Text in the current format is
+unchanged; the added block is marked ▶.
+
+```
+**This review did not finish, so treat the change as _not reviewed_ — not as reviewed and clean.** How far it got is below. ⚠️
+**Where I'd land: 2/5 — needs work.**
+2 confirmed findings, 1 unresolved. Review incomplete; see the unresolved allegations. Intent verified; readiness: needs work.
+
+## Findings
+
+### frontend/dist/app.js:9 — `cd <path> && <command>` silently aborts the command when the workspace directory is missing or stale, where the old code ran it unconditionally; depends on `workspace()` never returning a non-existent path, which I could not read.
+When workspace() returns a path to a non-existent directory, `cd "<path>" && <command>` causes cd to fail, && short-circuits, and the command never runs — a regression from the pre-change behavior which ran the command unconditionally without a cd prefix.
+
+▶ **Evidence (runtime; the observation is confirmed, the reading of it is the challenger's):**
+▶ - Requirement cited: **none.** Citations: the diff (source 1, lines 24–31) and the code (source 3, lines 8–14). Neither is the author's stated requirement ("play button: cd into the workspace before running the command").
+▶ - Expected behavior, as the challenger declared it (`expectation: intended`): exit `0`; stdout contains `COMMAND_RAN` — the command runs when the workspace directory is missing.
+▶ - Tested: cd into a non-existent path (/bad/missing/path) via the exact app.js construction; asserted command would run (echo COMMAND_RAN) and exit 0
+▶ - Ran (verbatim): `cd "/bad/missing/path" && echo COMMAND_RAN` → exit 2; working directory after: `/tmp`; stdout: (empty)
+▶ - stderr: `/tmp/__kai_run.sh: cd: line 1: can't cd to /bad/missing/path: No such file or directory`
+▶ - Offered assertions: 1. FAIL exit "0" (observed "2") · 2. FAIL stdout_contains "COMMAND_RAN" (observed "")
+▶ - Observation: violation — an offered assertion of the declared intended behavior failed.
+
+**Remedy** ▶ *(model-authored; not executed — unverified)*: Validate the path before prefixing (e.g. check existence), or switch to `cd ... ; <command>` to preserve unconditional execution (dropping the working-directory guarantee when cd fails), or confirm workspace() never returns a non-existent path and document the assumption.
+```
+
+What a reader can now see that was hidden: the "intended" behavior the
+verdict rests on is *the command runs when the directory is missing*; the
+requirement that would make that intended is not cited because none does;
+the stderr line contradicts "silently" two lines under the word; the remedy
+was never run.
+
+### What would still be published incorrectly
+
+| published element | as rendered | why it is wrong | does the display change it? |
+|---|---|---|---|
+| headline under `## Findings` | "`cd <path> && <command>` **silently** aborts the command … where the old code ran it unconditionally" | the behavior conforms to the requirement; "silently" is refuted by the record | **no** — a finding's headline is the allegation text; still a confirmed finding |
+| count and summary | "**2 confirmed findings**, 1 unresolved" | one of the two is not a defect | **no** — derived from statuses, which are unchanged |
+| readiness | "2/5 — needs work" | the model set `merge_ready` from its supported findings, this one included; the gate only caps | **no** |
+| finding body | "a regression from the pre-change behavior which ran the command unconditionally" | frames the requirement's behavior as a regression | **no** — model-authored, published on `supported` |
+| remedy | `cd ... ; <command>` under **Remedy** | executes the command in the wrong directory — the hazard the change removes | **relabelled only** ("not executed — unverified"); still under Remedy, still reads as the correction |
+| intent line | "Intent verified" | correct, but sits beside a finding whose premise inverts that intent | no |
+| Atlas / PR comment | the server renders from the bundle's issues and drops the `challenge` record | none of the ▶ block reaches the server surface | **no** — the display change is CLI/text-only until the server renders the structured record |
+
+Net: an author reading the CLI output carefully could catch the false
+finding from the evidence block. An author reading the headline, the count,
+the readiness, or the Atlas render would not. The red regression
+(`TestStoppingAfterFailedCdIsNotPublishedAsADefect`) would still be red
+under this display change — by design of the exercise: it is not a fix.
+
+### Decision: inspectable, or prevented?
+
+The acceptance condition is "stopping after a failed cd is **not published
+as a confirmed defect**, and the wrong-directory remedy is **not published
+as a correction**". That is prevention. The display proposal makes the
+judgment inspectable and leaves both published — it fails the acceptance
+condition on its own terms. So the intended outcome is **prevention**, and
+the display work is worth doing only as a component of something that
+prevents, not as the deliverable.
+
+What can prevent it without a mechanical rule that pretends to establish
+correctness (the constraint that stands):
+
+1. **Anchor requirement (gate rule, narrow).** A `supported` runtime verdict
+   whose expected-behavior statement is missing or cites no requirement-class
+   clause is **unresolved**, reason "the intended behavior was not derived
+   from the stated requirement". Prevents *this* submission (anchored to the
+   diff's `-` line), not a re-anchored one that cites the subject and still
+   declares "runs anyway" intended. Mechanical; makes no correctness claim;
+   the unresolved reason is true.
+2. **Confirm observations, not defects (labelling rule for the class).** The
+   gate can confirm that a behavior was observed; whether it is a defect is
+   the requirement reading, which is judgment. Publish runtime findings as
+   "**Observed:** with a missing workspace directory, the command does not
+   run (exit 2; stderr `can't cd …`). **Challenger's reading:** a regression
+   against the pre-change behavior, citing [clause]. **Your call.**" — under
+   a heading that is not "confirmed finding", not counted as a confirmed
+   defect, remedy published as the challenger's suggestion, never as the
+   correction. Prevents the false *defect label* for the whole class by
+   construction, including re-anchored submissions. Cost, stated: the true
+   quoting defect gets the same label ("Observed: misdirected for `$` and
+   backtick; challenger's reading: violates 'runs in the correct
+   directory'"), and readiness can no longer be lowered by a runtime finding
+   on the challenger's reading alone. Whether that trade is acceptable is
+   the design decision — it redefines what "confirmed" means in this review.
+3. **A second, narrow judgment** — a separate call that answers only "does
+   the stated expected behavior follow from the cited clause?" — is the
+   "another judging model" deferred earlier; recorded, not proposed.
+
+**Recommendation:** the intended outcome is prevention; (1) + (2) achieve it
+for the case and the class without claiming the gate can establish
+correctness; the display block is then the evidence panel under (2), not a
+standalone improvement. Not implemented — this is the decision to make
+before implementing anything. Gate frozen; regression red; PR unmerged.
