@@ -47,8 +47,8 @@ func rcCDChecks() rcChallengeAnswer {
 	return rcChallengeAnswer{
 		Review: rcTestReview(rcEscapeIssue),
 		Checks: []rcIssueCheck{
-			{Issue: rcFalseCDIssue, Verdict: "refuted", Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, Quote: rcCDSource}}},
-			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "Double quotes still allow parameter expansion.", Evidence: []rcCheckEvidence{{Source: 2, Quote: `cd "$HOME"`}}},
+			{Issue: rcFalseCDIssue, Verdict: "refuted", Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
+			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "Double quotes still allow parameter expansion.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
 		},
 	}
 }
@@ -56,12 +56,15 @@ func rcCDChecks() rcChallengeAnswer {
 // This tests publication mechanics, not the model's shell knowledge. The live
 // evaluation below separately exercises the actual model on the #418 specimen.
 func TestReviewChallengeDropsRefutedIssueAndKeepsSupportedIssue(t *testing.T) {
-	got, err := rcValidateChallenge(rcTestAnswer(t, rcCDChecks()), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`})
+	got, err := rcValidateChallenge(rcTestAnswer(t, rcCDChecks()), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(got, rcFalseCDIssue) || !strings.Contains(got, rcEscapeIssue) {
 		t.Fatalf("wrong published allegations: %s", got)
+	}
+	if strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("a fully resolved review was marked incomplete: %s", got)
 	}
 }
 
@@ -72,10 +75,9 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 	}{
 		{"missing check", func(a *rcChallengeAnswer) { a.Checks = a.Checks[:1] }},
 		{"duplicate check", func(a *rcChallengeAnswer) { a.Checks[1] = a.Checks[0] }},
-		{"unverified is not refuted", func(a *rcChallengeAnswer) { a.Checks[0].Verdict = "unverified" }},
-		{"invented quote", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].Quote = "made up output" }},
-		{"invented source", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].Source = 99 }},
-		{"no evidence", func(a *rcChallengeAnswer) { a.Checks[0].Evidence = nil }},
+		{"unknown issue", func(a *rcChallengeAnswer) { a.Checks[0].Issue = "phantom.go:1 — never alleged" }},
+		{"empty reason", func(a *rcChallengeAnswer) { a.Checks[0].Reason = "" }},
+		{"unknown verdict", func(a *rcChallengeAnswer) { a.Checks[0].Verdict = "maybe" }},
 		{"unchecked new issue", func(a *rcChallengeAnswer) { a.Review = rcTestReview("new.go:1 — new allegation") }},
 		{"rejected issue survives", func(a *rcChallengeAnswer) { a.Review = rcTestReview(rcFalseCDIssue, rcEscapeIssue) }},
 		{"supported issue lost", func(a *rcChallengeAnswer) { a.Review = rcTestReview() }},
@@ -87,11 +89,14 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := rcCDChecks()
 			tc.mutate(&a)
-			got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`})
+			got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
 			if err == nil || got != "" {
 				t.Fatalf("unchecked review escaped: %q, %v", got, err)
 			}
 		})
+	}
+	if got, err := rcValidateChallenge("not valid json", []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil); err == nil || got != "" {
+		t.Fatalf("accepted malformed challenge JSON: %q %v", got, err)
 	}
 }
 
@@ -115,7 +120,9 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 		t.Fatalf("sources lost evidence or included speculation: %v", sources)
 	}
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
-		if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Parts[0].(message.TextContent).Text, file) {
+		// The source is presented with numbered lines, so the raw blob no longer
+		// appears verbatim; the end of a large file must still reach the challenge.
+		if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Parts[0].(message.TextContent).Text, "critical source at the end") {
 			t.Fatal("challenge did not get full evidence in a fresh conversation")
 		}
 		return provider.Response{}, errors.New("provider failed")

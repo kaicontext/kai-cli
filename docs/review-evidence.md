@@ -7,25 +7,44 @@ by the conclusion fallback. A draft without an `ISSUES` entry skips this step.
 The challenge uses a fresh model conversation containing the draft, the original
 review context, and complete successful tool results. It tries to disprove each
 issue, looks for contradictory reasoning, and checks proposed repairs against the
-supported inputs. Each issue must receive a supported or refuted assessment with
-a reason and an exact citation to supplied evidence. Unverified issues, missing
-checks, invented citations, malformed responses, timeouts, and new unchecked
-issues prevent publication. The original draft is never used as the fallback for
-a failed challenge. Deep reviews emit an incomplete bundle and a nonzero exit;
+supported inputs. Each issue receives a supported, refuted, or unverified
+assessment with a reason and evidence.
+
+Evidence is cited **by location, not by copied text.** Every source is shown to
+the model with numbered lines; a citation is a source number and a line range,
+and the system extracts those exact lines itself. The reviewer already holds all
+the source material, so a published finding never depends on the model
+reproducing text byte-for-byte — the failure mode where a whitespace or escaping
+difference in a re-typed quote sank an otherwise sound review is gone.
+
+Each allegation is judged **on its own evidence.** A citation whose source
+number or line range is out of bounds is dropped (and logged) — it costs that one
+citation, never the whole review. A supported or refuted verdict needs at least
+one usable citation; a verdict with none is downgraded to unverified. So one
+malformed reference can, at most, drop the single finding it belonged to, while
+every independently supported finding still publishes.
+
+Some allegations can be settled by reading the source; others assert runtime
+behavior that reading cannot establish (what a shell does after a successful
+`cd`, whether a quoting scheme survives a hostile path). The condition is *does
+this allegation require runtime evidence?* — not *is a sandbox configured?* A
+runtime allegation must be backed by a successful `review_shell` experiment;
+without one it stays **unverified**, whatever the reasoning. Missing runtime
+evidence is never permission to substitute confident reasoning.
+
+Unverified allegations do not withhold the review. The independently supported
+findings publish; each unverified allegation is preserved and listed with why it
+could not be settled; and the review is marked **incomplete** (with MERGE_READY
+capped so an unresolved runtime claim cannot ride out under a ready-to-merge
+score). Structural failures still fail closed and withhold the draft: malformed
+responses, an unknown or duplicated check, a missing check, a revised review that
+drops a supported finding or smuggles a refuted one back in, timeouts, and new
+unchecked issues. The original draft is never used as the fallback for a
+withheld challenge. Deep reviews emit an incomplete bundle and a nonzero exit;
 fast reviews return an error so the workflow can continue to its deep pass.
 
-A bad citation gets one correction attempt before the challenge fails. The
-diagnostic identifies the check, citation, source number, and whether the source
-is missing, the quote is empty, or its text does not match. It logs an escaped
-quote preview capped at 160 characters, rather than calling every mismatch
-invented evidence. The model receives that diagnostic alongside its original
-answer and the unchanged numbered evidence. It can only resubmit the complete
-review; no additional experiments are available. Every original validation is
-applied again, and a second failure withholds the review. Semantic uncertainty
-(`unverified`) is not a citation error and does not trigger this retry.
-
 This adds a model call when a draft has issues. The challenge has a three-minute
-ceiling, including any citation correction; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews
+ceiling; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews
 may need more context: the conclusion no longer cuts every tool result at 2,000
 characters or retries with only the tail of the conversation. Evidence above a
 1 MiB serialized limit leaves the review incomplete instead of silently removing
@@ -64,7 +83,7 @@ Normal unit tests cover publication failure, rejected versus supported claims,
 missing/invented citations, full source preservation, and bounded execution setup:
 
 ```sh
-GOWORK=off go test ./cmd/kai -run 'TestReviewChallenge|TestReviewConclusion|TestFastReviewDoesNotPublish|TestReviewSandbox'
+GOWORK=off go test ./cmd/kai -run 'TestReviewChallenge|TestReviewCitation|TestReviewConclusion|TestFastReviewDoesNotPublish|TestReviewSandbox'
 ```
 
 To execute the PR #418 examples in the actual restricted container, set the image

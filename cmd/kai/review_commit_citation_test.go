@@ -2,173 +2,166 @@ package main
 
 import (
 	"context"
-	"errors"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/provider"
 )
 
-func TestReviewCitationDiagnostics(t *testing.T) {
+// Evidence is cited by location; the system extracts the text. Out-of-range
+// sources and out-of-bounds line ranges are reported unusable so the caller can
+// drop that one citation rather than trust a fabricated excerpt.
+func TestReviewCitationExtractsByLocation(t *testing.T) {
+	sources := []string{rcCDSource, `cd "$HOME"`}
 	for _, tc := range []struct {
-		name, quote string
-		source      int
-		want        string
+		name   string
+		ev     rcCheckEvidence
+		want   string
+		wantOK bool
 	}{
-		{"source", "pwd", 99, "source number is out of range"},
-		{"empty", " \n", 1, "quote is empty"},
-		{"mismatch", "cd /tmp && pwd; pwd", 1, "quote does not exactly match"},
+		{"first line", rcCheckEvidence{Source: 1, LineStart: 1, LineEnd: 1}, "cd /tmp && pwd", true},
+		{"line range", rcCheckEvidence{Source: 1, LineStart: 1, LineEnd: 2}, "cd /tmp && pwd\npwd", true},
+		{"single line source", rcCheckEvidence{Source: 2, LineStart: 1, LineEnd: 1}, `cd "$HOME"`, true},
+		{"source out of range", rcCheckEvidence{Source: 9, LineStart: 1, LineEnd: 1}, "", false},
+		{"source zero", rcCheckEvidence{Source: 0, LineStart: 1, LineEnd: 1}, "", false},
+		{"line past end", rcCheckEvidence{Source: 1, LineStart: 1, LineEnd: 9}, "", false},
+		{"inverted range", rcCheckEvidence{Source: 1, LineStart: 2, LineEnd: 1}, "", false},
+		{"line zero", rcCheckEvidence{Source: 1, LineStart: 0, LineEnd: 1}, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := rcCDChecks()
-			a.Checks[0].Evidence[0] = rcCheckEvidence{Source: tc.source, Quote: tc.quote}
-			_, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`})
-			var citation *rcCitationError
-			if !errors.As(err, &citation) || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "check 1, citation 1") {
-				t.Fatalf("imprecise error: %v", err)
+			got, ok := rcExtractCitation(sources, tc.ev)
+			if ok != tc.wantOK || got != tc.want {
+				t.Fatalf("extract=%q,%v want %q,%v", got, ok, tc.want, tc.wantOK)
 			}
 		})
 	}
-	e := (&rcCitationError{Quote: strings.Repeat("x", 10000) + "\nsecret-tail"}).Error()
-	if len(e) > 400 || strings.Contains(e, "secret-tail") || strings.Contains(e, "\n") {
-		t.Fatal("diagnostic quote is unbounded or not escaped")
+	// The model cites against the numbered rendering; the numbers it sees must be
+	// the line coordinates extraction resolves.
+	if n := rcNumberedSource(1, rcCDSource); !strings.Contains(n, "    1| cd /tmp && pwd") || !strings.Contains(n, "    2| pwd") || strings.Contains(n, "    3|") {
+		t.Fatalf("numbered source miscounts lines: %q", n)
 	}
 }
 
-// Deliberately seeds a citation formatting error in the #418-derived specimen.
-// This evaluates live correction, not the unknown exact production mismatch.
-func TestReviewCitationLiveRepairDesktop418(t *testing.T) {
-	if os.Getenv("KAI_REVIEW_LIVE_EVAL") != "1" {
-		t.Skip("opt-in paid model evaluation")
+// One unusable citation drops that citation, not the finding: a supported check
+// with any valid citation survives, and the review is not marked incomplete.
+func TestReviewChallengeToleratesOneBadCitation(t *testing.T) {
+	a := rcChallengeAnswer{
+		Review: rcTestReview(rcEscapeIssue),
+		Checks: []rcIssueCheck{
+			{Issue: rcFalseCDIssue, Verdict: "refuted", Reason: "cd persists", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
+			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "expansion", Evidence: []rcCheckEvidence{
+				{Source: 2, LineStart: 1, LineEnd: 1}, // valid
+				{Source: 2, LineStart: 9, LineEnd: 9}, // unusable, dropped
+			}},
+		},
 	}
-	if dir := os.Getenv("KAI_REVIEW_EVAL_CONFIG_DIR"); dir != "" {
-		old := kaiDir
-		kaiDir = dir
-		t.Cleanup(func() { kaiDir = old })
-	}
-	prov, model, _ := rcReviewProvider()
-	if prov == nil {
-		t.Fatal("no configured provider")
-	}
-	sources := []string{rcCDSource, `cd "$HOME"`}
-	a := rcCDChecks()
-	a.Checks[0].Evidence[0].Quote = "cd /tmp && pwd; pwd"
-	raw := rcTestAnswer(t, a)
-	failed := provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "original", Name: "submit_review", Input: raw}}}
-	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Check these two issues:\n" + rcFalseCDIssue + "\n" + rcEscapeIssue + "\nSOURCE 1:\n" + sources[0] + "\nSOURCE 2:\n" + sources[1]}}}}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	got, err := rcValidateOrRepairCitation(ctx, prov, model, msgs, failed, raw, "original", []string{rcFalseCDIssue, rcEscapeIssue}, sources)
+	got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, issues, _, _, _, _ := rcParseReviewOutput(got)
 	if len(issues) != 1 || issues[0] != rcEscapeIssue {
-		t.Fatalf("correction changed the expected findings: %v", issues)
+		t.Fatalf("a valid citation lost its finding: %v", issues)
 	}
-	t.Logf("model=%s: corrected seeded citation mismatch; retained only escaping defect", model)
-}
-
-func TestReviewCitationCorrection(t *testing.T) {
-	for _, structured := range []bool{false, true} {
-		for _, outcome := range []string{"corrected", "mismatch", "unverified", "missing-check", "new-issue", "truncated", "tool", "provider-error", "cancelled"} {
-			t.Run(outcome+map[bool]string{false: "-text", true: "-tool"}[structured], func(t *testing.T) {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				calls := 0
-				var firstCtx context.Context
-				p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
-					calls++
-					a := rcCDChecks()
-					if calls == 1 {
-						firstCtx = c
-						a.Checks[0].Evidence[0].Quote = "paraphrased evidence"
-						if outcome == "cancelled" {
-							cancel()
-						}
-					} else {
-						if calls > 2 {
-							t.Fatal("unbounded retry")
-						}
-						if c != firstCtx {
-							t.Fatal("correction reset deadline")
-						}
-						if len(req.Tools) != 1 || req.Tools[0].Name != "submit_review" {
-							t.Fatal("correction gained tools")
-						}
-						if len(req.Messages) != 3 {
-							t.Fatal("original evidence or failed answer lost")
-						}
-						last := req.Messages[2].Parts[0]
-						var feedback string
-						if structured {
-							r, ok := last.(message.ToolResult)
-							if !ok || !r.IsError || r.ToolCallID != "submission" {
-								t.Fatalf("bad tool feedback: %#v", last)
-							}
-							feedback = r.Content
-						} else {
-							feedback = last.(message.TextContent).Text
-						}
-						if !strings.Contains(feedback, "check 1, citation 1, source 1") || !strings.Contains(feedback, "paraphrased evidence") {
-							t.Fatal("missing precise feedback")
-						}
-						switch outcome {
-						case "mismatch":
-							a.Checks[0].Evidence[0].Quote = "still wrong"
-						case "unverified":
-							a.Checks[0].Verdict = "unverified"
-						case "missing-check":
-							a.Checks = a.Checks[:1]
-						case "new-issue":
-							a.Review = rcTestReview("invented new defect")
-						case "truncated":
-							return provider.Response{FinishReason: message.FinishReasonMaxTokens}, nil
-						case "tool":
-							return provider.Response{Parts: []message.ContentPart{message.ToolCall{Name: "review_shell", Input: `{"script":"pwd"}`}}}, nil
-						case "provider-error":
-							return provider.Response{}, errors.New("provider down")
-						}
-					}
-					var part message.ContentPart = message.TextContent{Text: rcTestAnswer(t, a)}
-					if structured {
-						part = message.ToolCall{ID: "submission", Name: "submit_review", Input: rcTestAnswer(t, a)}
-					}
-					return provider.Response{Parts: []message.ContentPart{part}}, nil
-				}}
-				got, err := rcChallengeReview(ctx, p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{rcCDSource, `cd "$HOME"`}, nil)
-				if outcome == "corrected" {
-					if err != nil || !strings.Contains(got, rcEscapeIssue) || strings.Contains(got, rcFalseCDIssue) {
-						t.Fatalf("correction rejected: %q %v", got, err)
-					}
-				} else if err == nil || got != "" {
-					t.Fatalf("unchecked result escaped: %q %v", got, err)
-				}
-				want := 2
-				if outcome == "cancelled" {
-					want = 1
-				}
-				if calls != want {
-					t.Fatalf("calls=%d want %d", calls, want)
-				}
-			})
-		}
+	if strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("a resolved finding was marked incomplete: %s", got)
 	}
 }
 
-func TestReviewCitationDoesNotRetrySemanticUncertainty(t *testing.T) {
-	calls := 0
+// A supported finding whose only citation is unusable is dropped from the
+// published ISSUES and surfaced as unresolved — while the OTHER supported
+// finding still publishes. One bad citation costs one finding, never the review.
+func TestReviewChallengeDropsUnbackedFindingKeepsTheRest(t *testing.T) {
+	a := rcChallengeAnswer{
+		Review: rcTestReview(rcFalseCDIssue, rcEscapeIssue),
+		Checks: []rcIssueCheck{
+			{Issue: rcFalseCDIssue, Verdict: "supported", Reason: "real", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
+			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "claimed", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 5, LineEnd: 9}}},
+		},
+	}
+	got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	if err != nil {
+		t.Fatalf("one bad citation withheld the whole review: %v", err)
+	}
+	_, issues, _, _, _, _ := rcParseReviewOutput(got)
+	if len(issues) != 1 || issues[0] != rcFalseCDIssue {
+		t.Fatalf("published wrong ISSUES: %v", issues)
+	}
+	if !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcEscapeIssue) {
+		t.Fatalf("unresolved allegation not surfaced: %s", got)
+	}
+}
+
+// A runtime allegation needs a review_shell experiment. Without one it is
+// unresolved even though the model claimed support; with one it publishes.
+func TestReviewChallengeRuntimeClaimNeedsExperiment(t *testing.T) {
+	runtime := rcChallengeAnswer{
+		Review: rcTestReview(rcEscapeIssue),
+		Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: true, Reason: "runtime", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}}},
+	}
+	got, err := rcValidateChallenge(rcTestAnswer(t, runtime), []string{rcEscapeIssue}, []string{`cd "$HOME"`}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, issues, _, _, _, _ := rcParseReviewOutput(got); len(issues) != 0 {
+		t.Fatalf("runtime claim published without an experiment: %v", issues)
+	}
+	if !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcEscapeIssue) {
+		t.Fatalf("unresolved runtime claim not surfaced: %s", got)
+	}
+	// With an experiment source backing it, the same claim publishes.
+	runtime.Checks[0].Evidence[0].Source = 2 // cite the experiment result
+	got, err = rcValidateChallenge(rcTestAnswer(t, runtime), []string{rcEscapeIssue}, []string{`cd "$HOME"`, "expansion observed"}, map[int]bool{2: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, issues, _, _, _, _ := rcParseReviewOutput(got); len(issues) != 1 || issues[0] != rcEscapeIssue {
+		t.Fatalf("experiment-backed runtime claim not published: %v", issues)
+	}
+	if strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("experiment-backed claim wrongly marked incomplete: %s", got)
+	}
+}
+
+// An unverified allegation no longer withholds the whole review: the supported
+// findings publish, the unresolved one is listed, and the review is incomplete.
+func TestReviewChallengeUnverifiedPublishesSupportedAndMarksIncomplete(t *testing.T) {
+	a := rcChallengeAnswer{
+		Review: rcTestReview(rcEscapeIssue),
+		Checks: []rcIssueCheck{
+			{Issue: rcFalseCDIssue, Verdict: "unverified", Reason: "could not settle without a shell"},
+			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "expansion", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
+		},
+	}
+	got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, issues, _, _, _, _ := rcParseReviewOutput(got)
+	if len(issues) != 1 || issues[0] != rcEscapeIssue {
+		t.Fatalf("supported finding not published alongside an unresolved one: %v", issues)
+	}
+	if !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcFalseCDIssue) {
+		t.Fatalf("unresolved allegation not surfaced: %s", got)
+	}
+}
+
+// The whole challenge runs end-to-end through the provider path (structured
+// submission) and reaches the same incomplete-but-published outcome.
+func TestReviewChallengeUnverifiedThroughProvider(t *testing.T) {
+	a := rcChallengeAnswer{
+		Review: rcTestReview(),
+		Checks: []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", Reason: "needs a shell"}},
+	}
 	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
-		calls++
-		a := rcCDChecks()
-		a.Checks[0].Verdict = "unverified"
 		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, a)}}}, nil
 	}}
-	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{rcCDSource, `cd "$HOME"`}, nil)
-	if calls != 1 || err == nil || got != "" {
-		t.Fatalf("uncertainty retried or published: calls=%d %q %v", calls, got, err)
+	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil)
+	if err != nil {
+		t.Fatalf("unverified allegation withheld the review: %v", err)
+	}
+	if !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcFalseCDIssue) {
+		t.Fatalf("expected an incomplete review naming the unresolved claim: %s", got)
 	}
 }
