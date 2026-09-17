@@ -21,3 +21,19 @@ proposal-eval.sh / proposal-eval.out — the proposal's mechanical checks (old
 construction, remedy construction, outcome equality) executed in the pinned
 sandbox image on the missing-directory case's inputs, 2026-09-17. Not a test;
 the evaluation the record cites.
+
+adjudication/ — the independent adjudication pass, 2026-09-17. adjudicate.py is
+the throwaway harness (not reviewer code): for each of four cases it sends the
+requirement (author's words), the actual diff, recorded execution results
+(exact generated commands run in the pinned image, incl. the pre-change code
+and the remedy where executed), the alleged violation, and the proposed
+remedy — withholding the prior verdict, readiness, the challenger's
+expectation label and reasoning — and asks for the violation and the remedy
+separately. z-ai/glm-5.2, reasoning disabled (as the reviewer configures it),
+3 attempts per case; model and provider confirmed from each response body.
+caseN/case.json = inputs; attemptM-request.json (no auth header) and
+attemptM-response.json (raw body) = every call; summary.tsv = parsed answers.
+Two earlier runs never reached the model (adjudication-run-1-tls-failed.log:
+Python without a CA bundle; adjudication-run-2-403.log: Cloudflare 1010 on
+the Python user agent) and are kept as logs. case3-exec.sh/.out = the
+hypothetical regressed variant executed in the image for case 3's records.

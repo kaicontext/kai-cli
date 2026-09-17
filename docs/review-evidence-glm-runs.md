@@ -1721,3 +1721,86 @@ for the case and the class without claiming the gate can establish
 correctness; the display block is then the evidence panel under (2), not a
 standalone improvement. Not implemented — this is the decision to make
 before implementing anything. Gate frozen; regression red; PR unmerged.
+
+## Independent adjudication pass — does a fresh judgment reject the harmful recommendation and keep the valid ones?
+
+A throwaway harness (`cmd/kai/testdata/pr429/adjudication/adjudicate.py`;
+not reviewer code; gate untouched) gave a fresh GLM-5.2 call, per case: the
+**requirement** in the author's words; the **actual diff**; **recorded
+execution results** — the exact generated commands run in the pinned image,
+including the pre-change code and the proposed remedy on the same inputs
+where executed; the **alleged violation**; the **proposed remedy**. Withheld:
+the prior verdict, readiness, the challenger's `expectation` label and
+reasoning. It was asked to answer the **violation** and the **remedy**
+separately, judged against the requirement, using only the records for
+runtime behavior, and to assess each remedy alternative. Same model
+configuration as the reviewer (`z-ai/glm-5.2`, reasoning disabled); three
+attempts per case; **every request (auth stripped) and raw response is
+preserved** under `adjudication/caseN/`; model and provider confirmed from
+each response body (`z-ai/glm-5.2`, Ambient, all 12 calls). Two earlier
+runs never reached the model (a CA-bundle failure, then Cloudflare 1010 on
+the Python user agent) and are kept as logs.
+
+Note what the adjudicator had that the original challenger did not: the
+remedy's recorded execution and the pre-change code's recorded execution.
+
+### Cases
+
+| # | case | requirement given | expected |
+|---|---|---|---|
+| 1 | the preserved false finding (missing directory) | actual: "play button: cd into the workspace before running the command" + author's comment "so the command always runs in the correct directory" | conforms / reject |
+| 2 | the real quoting defect (`$`, backtick) | actual | violation / accept |
+| 3 | genuine regression + valid restoration: a hypothetical variant whose fallback sends `""` when no workspace is known (executed in the image: nothing runs), requirement adds "when no workspace is known, run the command unmodified, exactly as before"; the remedy restores `: command` — byte-identical to the pre-change outcome | hypothetical, stated | violation / accept |
+| 4 | requirement-flipped control: same code and records as case 1, requirement "always run the command … a missing or stale workspace path must never stop the command from running" — does it read the requirement or pattern-match `cd … ;`? | hypothetical, stated | violation / accept `cd … ;` |
+
+### Results (`adjudication/summary.tsv`)
+
+| case | attempt 1 | attempt 2 | attempt 3 |
+|---|---|---|---|
+| 1 false finding | **cannot_determine** / **reject** (`cd … ;`: reject) | **violation** / **reject** (`cd … ;`: cannot_determine) | **violation** / **accept** (`cd … ;`: **accept**) |
+| 2 quoting | violation / accept | violation / accept | violation / accept |
+| 3 regression + restoration | violation / accept | violation / accept | violation / accept |
+| 4 flipped control | violation / accept (`cd … ;`) | violation / accept (`cd … ;`, also "validate") | violation / accept (`cd … ;`) |
+
+### Determination
+
+- **Valid findings and fixes retained: 9/9.** The quoting defect was found
+  and its single-quote remedy accepted every time; the genuine regression
+  was found and the restoring fix accepted every time — including that the
+  fix's outcome equals the pre-change outcome, which did not count against
+  it; the flipped control accepted `cd … ;` every time, so the adjudicator
+  reads the requirement rather than pattern-matching the remedy.
+- **Harmful recommendation rejected: 2/3; endorsed 1/3.** Attempt 1 rejected
+  `cd … ;` for the right reason ("the command runs but is not in the
+  workspace"). Attempt 2 rejected the remedy overall while calling `cd … ;`
+  undetermined. Attempt 3 **accepted** it, writing that the remedy
+  "explicitly acknowledges and accepts dropping the working-directory
+  guarantee when cd fails" — the exact hazard, named and waved through.
+- **The false violation: adjudicated "conforms" 0/3.** Attempt 1 said the
+  requirement does not specify the missing-path case (cannot_determine);
+  attempts 2 and 3 read "cd into the workspace **before running the
+  command**" as a promise that the command runs, and called not running it a
+  violation. None weighted the author's comment "always runs in the correct
+  directory" as decisive. The reading I recorded earlier as "the decisive
+  requirement" is a reading; given only the author's words, the same model
+  read the same sentence three ways.
+- **Where the disagreement lives.** Not in the evidence — every attempt
+  cited exit 2, empty stdout, the stderr line, and the pre-change record
+  correctly — but in the requirement reading. With identical inputs the
+  adjudicator's requirement-clause field was "cd into the workspace before
+  running the command" three times and its conclusion differed each time.
+
+**Answer to the question asked:** an independent adjudication pass retains
+valid findings and fixes reliably in this sample, and rejects the harmful
+recommendation more often than not, but it does not reliably prevent the
+false finding: one attempt in three would have published it, with the
+harmful remedy, on the same recorded evidence. As a gate it would be a
+second model judgment with a ~1/3 miss rate on this case (n=3; same model
+the reviewer uses; providers uniform). This is the empirical basis for the
+decision above: requirement interpretation varied across independent passes
+of the same model on the same words, so prevention that does not depend on
+a single model's reading is option (2) — confirm the observation, publish
+the reading as the challenger's, and leave the requirement call to the
+author — or a requirement stated by the author with an explicit "must not"
+clause the reviewer can test. Nothing implemented; gate frozen; regression
+red; PR #117 unmerged.

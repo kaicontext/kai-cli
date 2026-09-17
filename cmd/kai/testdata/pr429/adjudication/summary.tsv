@@ -1,0 +1,13 @@
+case	attempt	model	provider	violation	remedy	alternatives
+1	1	z-ai/glm-5.2	Ambient	cannot_determine	reject	cannot_determine:Validate the path before prefixing (e.g.;reject:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-
+1	2	z-ai/glm-5.2	Ambient	violation	reject	cannot_determine:Validate the path before prefixing (e.g.;cannot_determine:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-
+1	3	z-ai/glm-5.2	Ambient	violation	accept	cannot_determine:Validate the path before prefixing (e.g.;accept:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-
+2	1	z-ai/glm-5.2	Ambient	violation	accept	accept:Replace JSON.stringify with single-quote
+2	2	z-ai/glm-5.2	Ambient	violation	accept	accept:Replace JSON.stringify with single-quote
+2	3	z-ai/glm-5.2	Ambient	violation	accept	accept:Replace JSON.stringify with single-quote
+3	1	z-ai/glm-5.2	Ambient	violation	accept	accept:Restore the fallback so the unmodified c
+3	2	z-ai/glm-5.2	Ambient	violation	accept	accept:Restore the fallback so the unmodified c
+3	3	z-ai/glm-5.2	Ambient	violation	accept	accept:Restore the fallback so the unmodified c
+4	1	z-ai/glm-5.2	Ambient	violation	accept	cannot_determine:Validate the path before prefixing (e.g.;accept:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-
+4	2	z-ai/glm-5.2	Ambient	violation	accept	accept:Validate the path before prefixing (e.g.;accept:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-
+4	3	z-ai/glm-5.2	Ambient	violation	accept	cannot_determine:Validate the path before prefixing (e.g.;accept:switch to `cd ... ; <command>` to preser;cannot_determine:confirm workspace() never returns a non-
