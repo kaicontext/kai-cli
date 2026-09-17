@@ -135,13 +135,78 @@ func TestReviewChallengeRuntimeClaimPublishesWithExperiment(t *testing.T) {
 		MergeReady:  3,
 		Checks:      []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "runtime", Finding: "Expands.", Remedy: "Escape the path.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}}},
 	}
-	res, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcEscapeIssue}, nil, []string{`cd "$HOME"`, "expansion observed"}, map[int]bool{2: true})
+	passing := map[int]*rcExperimentRecord{2: {Mode: "construct", HasAssertions: true, AllPassed: true,
+		Assertions: []rcAssertionResult{{Kind: "pwd_not", Value: "/tmp/a$HOME", Passed: true, Observed: "/tmp/a"}}}}
+	res, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcEscapeIssue}, nil, []string{`cd "$HOME"`, "expansion observed"}, passing)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := res.Allegations[0]
 	if r.Status != "supported" || r.Remedy != "Escape the path." || res.Incomplete || !r.Evidence[0].Experiment {
 		t.Fatalf("experiment-backed runtime claim not published as actionable: %+v", r)
+	}
+	if len(res.Experiments) != 1 || res.Experiments[0].Source != 2 || !res.Experiments[0].Record.AllPassed {
+		t.Fatalf("complete experiment record not preserved on the result: %+v", res.Experiments)
+	}
+}
+
+// The verdict must account for assertion results. A cited experiment that
+// declared no assertions (a bare printout — GLM's Source 2) or whose assertion
+// FAILED (the path-equality check a "safe" verdict would need) cannot back a
+// runtime verdict; the check becomes unresolved and the reason names why.
+func TestReviewChallengeRuntimeVerdictRequiresPassingAssertions(t *testing.T) {
+	answer := func(verdict string) rcChallengeAnswer {
+		return rcChallengeAnswer{
+			Scope: []string{"quoting"}, IntentMatch: "partial", MergeReady: 4,
+			Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: verdict, RequiresRuntime: rcBool(true), Reason: "ran it", Finding: "f", Remedy: "fix", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}}},
+		}
+	}
+	sources := []string{`cd "$HOME"`, "experiment output"}
+	// No assertions: a printout is not evidence of behavior.
+	res, err := rcValidateChallenge(rcTestAnswer(t, answer("refuted")), []string{rcEscapeIssue}, nil, sources, map[int]*rcExperimentRecord{2: {Mode: "script", HasAssertions: false}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := res.Allegations[0]; r.Status != "unresolved" || !strings.Contains(r.Reason, "declared no assertions") {
+		t.Fatalf("unasserted experiment backed a refutation: %+v", r)
+	}
+	// A failed path-equality assertion cannot support "this quoting is safe".
+	failed := map[int]*rcExperimentRecord{2: {Mode: "construct", HasAssertions: true, AllPassed: false,
+		Assertions: []rcAssertionResult{{Kind: "pwd", Value: "/tmp/test$dir", Passed: false, Observed: "/tmp"}}}}
+	res, err = rcValidateChallenge(rcTestAnswer(t, answer("refuted")), []string{rcEscapeIssue}, nil, sources, failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := res.Allegations[0]
+	if r.Status != "unresolved" || !strings.Contains(r.Reason, "assertion failed: pwd") || !strings.Contains(r.Reason, `observed "/tmp"`) || r.Remedy != "" || r.WithheldRemedy != "fix" {
+		t.Fatalf("failed assertion backed a 'safe' verdict, or remedy not withheld: %+v", r)
+	}
+	if !res.Incomplete {
+		t.Fatal("review with an unresolved runtime claim not marked incomplete")
+	}
+}
+
+// Pure tests of the fidelity-mode record: parsing the driver's output and
+// evaluating assertions against it.
+func TestExperimentRecordParsesConstructOutputAndEvaluates(t *testing.T) {
+	out := rcGenBegin + "\n" + `cd "/tmp/test$dir" && pwd && echo REACHED` + "\n" + rcGenEnd + "\n" +
+		rcRunBegin + "\n" + "sh: cd: can't cd\n" + rcExitMarker + "2\n" + rcPWDMarker + "/tmp\n"
+	rec := &rcExperimentRecord{Mode: "construct"}
+	if err := rec.parseConstructOutput(out); err != nil {
+		t.Fatal(err)
+	}
+	if rec.GeneratedCommand != `cd "/tmp/test$dir" && pwd && echo REACHED` || rec.ExitCode != 2 || rec.ObservedPWD != "/tmp" || !strings.Contains(rec.Stdout, "can't cd") {
+		t.Fatalf("record parsed wrong: %+v", rec)
+	}
+	rec.evaluate([]rcAssertion{{Kind: "pwd", Value: "/tmp/test$dir"}, {Kind: "exit", Value: "2"}, {Kind: "stdout_not_contains", Value: "REACHED"}})
+	if !rec.HasAssertions || rec.AllPassed || rec.Assertions[0].Passed || !rec.Assertions[1].Passed || !rec.Assertions[2].Passed {
+		t.Fatalf("assertions evaluated wrong: %+v", rec.Assertions)
+	}
+	if !strings.Contains(rec.disqualifyReason(), `pwd "/tmp/test$dir", observed "/tmp"`) {
+		t.Fatalf("disqualify reason does not name the failed expectation: %s", rec.disqualifyReason())
+	}
+	if err := (&rcExperimentRecord{}).parseConstructOutput("no markers"); err == nil {
+		t.Fatal("incomplete record accepted")
 	}
 }
 

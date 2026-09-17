@@ -104,6 +104,44 @@ The challenge is still model judgment. A source citation establishes provenance,
 not proof of behavior, and a second model assessment cannot guarantee correctness.
 The existing finding schema and Atlas citation badges are unchanged by this PR.
 
+## Experiment fidelity and result interpretation
+
+The forensics of a wrong verdict (`docs/review-evidence-glm-runs.md`) showed a
+concrete mechanism: the model tested a *different* command from the one the
+code generates — a hand-escaped one — and took its success as proof the real
+one was safe; it also misread a printout that plainly showed the unescaped
+metacharacters. Three changes address exactly that, and nothing broader:
+
+- **Execute the actual command-construction code.** In `review_shell`'s
+  fidelity mode the model supplies `construct` — Node code that builds and
+  prints the command string the way the code under review builds it — and
+  optional `setup`. The harness feeds the **generated string verbatim** into
+  `/bin/sh`. Nothing the model types touches the command between construction
+  and execution.
+- **Explicit assertions.** The model declares what it expects to observe —
+  `exit`, `stdout_contains`, `stdout_not_contains`, `pwd`, `pwd_not` — and the
+  harness evaluates each as PASS/FAIL against the recorded exit status, stdout,
+  and the working directory the command actually left behind.
+- **The verdict accounts for the assertion results.** A supported/refuted
+  verdict on a runtime claim may cite an experiment only if it declared at least
+  one assertion and **all of them passed**. A cited experiment with a failed
+  assertion cannot support any verdict — a failed path-equality check cannot
+  back "this quoting is safe" — and a bare printout (no assertions) cannot
+  either; the check becomes unresolved and the reason names the failed
+  expectation. Free-form `script` mode remains for exploration and can back no
+  verdict.
+
+**The complete experiment record is preserved:** mode, setup, construct,
+generated command, exit code, observed working directory, stdout, stderr, and
+each assertion with its observed value travel in the challenge result and the
+emitted bundle (`challenge.experiments`, keyed by the source number the
+verdicts cite). Only the console summary is bounded.
+
+This does not make review correctness general. It closes the demonstrated
+failure: the model can no longer substitute a reconstructed command for the
+real one, and it cannot cite as support an experiment whose own assertions say
+its expectation was wrong.
+
 ## Optional isolated shell experiments
 
 Set `KAI_REVIEW_SANDBOX_IMAGE` to a trusted, **preloaded, digest-pinned** Docker

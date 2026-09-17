@@ -132,6 +132,50 @@ node /tmp/test_json_escape.js
 	}
 }
 
+// The #429 case in FIDELITY mode: the harness runs the code's own construction
+// and feeds the generated string verbatim into sh, then evaluates explicit
+// assertions. EXPECTED: with the real JSON.stringify output, the assertion that
+// the cd lands in the intended directory FAILS and the exit assertion shows the
+// cd failed — so this experiment cannot back "the quoting is safe"; the
+// single-quote fix, asserted the same way, PASSES. The model is not in the loop
+// between construction and execution.
+func TestForensicsFidelityModeAssertsPathEqualityForJSONStringify(t *testing.T) {
+	sb := forensicsSandbox(t)
+	run := func(construct string, assertions []rcAssertion) *rcExperimentRecord {
+		t.Helper()
+		input, _ := json.Marshal(rcExperimentParams{Setup: "mkdir -p '/tmp/test$dir'", Construct: construct, Assertions: assertions})
+		rec, err := sb.runExperiment(context.Background(), string(input))
+		if err != nil {
+			t.Fatalf("fidelity experiment did not run: %v", err)
+		}
+		t.Logf("generated=%q exit=%d pwd=%q allPassed=%v assertions=%+v", rec.GeneratedCommand, rec.ExitCode, rec.ObservedPWD, rec.AllPassed, rec.Assertions)
+		return rec
+	}
+	// The code under review's construction, verbatim.
+	unsafe := run(`process.stdout.write('cd ' + JSON.stringify("/tmp/test$dir") + ' && pwd')`,
+		[]rcAssertion{{Kind: "pwd", Value: "/tmp/test$dir"}, {Kind: "exit", Value: "0"}})
+	if unsafe.GeneratedCommand != `cd "/tmp/test$dir" && pwd` {
+		t.Fatalf("harness did not execute the code's own generated command: %q", unsafe.GeneratedCommand)
+	}
+	if unsafe.qualifies() || unsafe.Assertions[0].Passed || unsafe.Assertions[1].Passed || unsafe.ExitCode == 0 || unsafe.ObservedPWD == "/tmp/test$dir" {
+		t.Fatalf("expected the JSON.stringify-built cd to be misdirected with FAILED assertions: %+v", unsafe)
+	}
+	if !strings.Contains(unsafe.disqualifyReason(), `pwd "/tmp/test$dir"`) {
+		t.Fatalf("disqualify reason should name the failed path-equality check: %s", unsafe.disqualifyReason())
+	}
+	// The single-quote fix, constructed and asserted the same way, PASSES.
+	fixed := run(`const p = "/tmp/test$dir"; process.stdout.write("cd '" + p.replace(/'/g, "'\\''") + "' && pwd")`,
+		[]rcAssertion{{Kind: "pwd", Value: "/tmp/test$dir"}, {Kind: "exit", Value: "0"}, {Kind: "stdout_contains", Value: "/tmp/test$dir"}})
+	if !fixed.qualifies() || fixed.ObservedPWD != "/tmp/test$dir" {
+		t.Fatalf("expected the single-quoted construction to pass every assertion: %+v", fixed)
+	}
+	// A free-form script with assertions is refused: assertions need fidelity mode.
+	input, _ := json.Marshal(rcExperimentParams{Script: "pwd", Assertions: []rcAssertion{{Kind: "exit", Value: "0"}}})
+	if _, err := sb.runExperiment(context.Background(), string(input)); err == nil {
+		t.Fatal("assertions were accepted on a free-form script")
+	}
+}
+
 // The shell fact GLM stated as its reason ("double-quoted strings in POSIX sh
 // prevent expansion of these characters") is the opposite of POSIX behavior.
 // EXPECTED: inside double quotes $HOME expands and a backtick runs a command;

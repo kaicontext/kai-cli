@@ -39,7 +39,7 @@ Cite evidence BY LOCATION. Each source is shown to you with numbered lines. To c
 
 Every check must classify whether the allegation requires runtime evidence. Set "requires_runtime": true when resolving it means observing behavior that reading the source cannot establish (for example: what a shell does after a successful cd, whether a quoting scheme survives a hostile path, whether a code path actually executes); set it false when the source settles it. This field is mandatory. A "requires_runtime" verdict of "supported" or "refuted" must be backed by a successful review_shell experiment; without one, mark it "unverified". Missing runtime evidence is never permission to substitute confident reasoning. Never cite an experiment you did not run: only a review_shell result present in this conversation counts.
 
-For shell or language-runtime claims, prefer a minimal reproduction using review_shell when available. You may call it at most FOUR times in total; combine related assertions into one script. Each review_shell result is returned to you as a new numbered SOURCE. An experiment only counts if you CITE that source number (and the line range of the output) in the check's "evidence" — a runtime verdict whose evidence cites only the code, not the experiment's source number, is treated as having no experiment and is downgraded to "unverified". It runs only synthetic snippets in an isolated container: no repository, credentials, host mounts, or network. Its environment is POSIX /bin/sh, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
+For a runtime claim, use review_shell in FIDELITY mode, which is the only kind of experiment that can back a supported/refuted verdict. Do NOT retype, reconstruct, or "equivalently" escape the command yourself — that is how a wrong verdict was produced before: a hand-escaped command was tested and its success was taken as proof the real one was safe. Instead give "construct": Node code that builds and prints the exact command string the way the code under review builds it (e.g. process.stdout.write('cd ' + JSON.stringify(wsPath) + ' && pwd')); optional "setup" to create the concrete inputs (e.g. mkdir -p a literal directory whose name contains $ or a backtick); and "assertions" stating what you EXPECT to observe (exit code, stdout substring, the working directory the command should leave you in). The harness feeds the generated string verbatim into sh and reports the generated command, exit code, stdout, stderr, the observed working directory, and PASS/FAIL per assertion. Read the assertion results literally: if you asserted the cd would land in the intended directory and it did not, the quoting is NOT safe, whatever the printout looked like. A verdict may cite an experiment only if ALL its assertions passed; a cited experiment with a failed assertion, or with no assertions (a bare printout), is treated as no experiment and the check becomes "unverified". You may call review_shell at most FOUR times in total. Each result is returned as a new numbered SOURCE; an experiment counts only if you CITE that source number in the check's "evidence". It runs synthetic snippets in an isolated container: no repository, credentials, host mounts, or network; POSIX /bin/sh plus node, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
 
 Finish by calling submit_review (plain JSON is accepted if tool submission is unavailable) with:
 {"scope":["what was reviewed: files, paths, behaviors actually examined"],
@@ -150,6 +150,16 @@ type rcChallengeResult struct {
 	Decisions   []rcDecisionResult   `json:"decisions,omitempty"`
 	Unresolved  []string             `json:"unresolved,omitempty"`
 	Incomplete  bool                 `json:"incomplete,omitempty"`
+	// Experiments is the complete record of every review_shell run in this
+	// challenge, keyed by the source number the verdicts cite.
+	Experiments []rcExperimentSource `json:"experiments,omitempty"`
+}
+
+// rcExperimentSource pairs an experiment's full record with the source number
+// under which it was shown to, and cited by, the model.
+type rcExperimentSource struct {
+	Source int                `json:"source"`
+	Record rcExperimentRecord `json:"record"`
 }
 
 // rcEmpty reports whether the result carries no structured record (the draft
@@ -298,11 +308,12 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	if b.Len() > rcEvidenceLimit {
 		return nil, fmt.Errorf("challenge evidence exceeds %d bytes; refusing to discard evidence", rcEvidenceLimit)
 	}
-	// experiment records which one-based source numbers are review_shell results
-	// produced during this challenge. Only those satisfy the runtime-evidence
-	// requirement; the original run's tool output does not, and neither does an
-	// experiment the model merely says it ran.
-	experiment := map[int]bool{}
+	// experiments records, by one-based source number, the complete record of
+	// each review_shell run produced during THIS challenge. Only an experiment
+	// with declared assertions that all passed can back a runtime verdict; the
+	// original run's tool output cannot, an experiment the model merely says it
+	// ran cannot, and an unasserted printout cannot.
+	experiments := map[int]*rcExperimentRecord{}
 	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}}
 	available := []tools.ToolInfo{rcSubmitReviewToolInfo()}
 	if sandbox != nil {
@@ -337,7 +348,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 		// that parses but fails validation is substantive and is never retried.
 		if len(calls) == 1 && calls[0].Name == "submit_review" {
 			call := calls[0]
-			res, err := rcValidateChallenge(call.Input, issues, decisions, sources, experiment)
+			res, err := rcValidateChallenge(call.Input, issues, decisions, sources, experiments)
 			if err == nil || !errors.Is(err, errRCMalformedAnswer) || nudged {
 				return res, err
 			}
@@ -372,26 +383,27 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "  challenge: shell experiment %d\n", toolCalls)
-			result, err := sandbox.run(ctx, call.Input)
-			tr := message.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: result}
+			rec, err := sandbox.runExperiment(ctx, call.Input)
+			tr := message.ToolResult{ToolCallID: call.ID, Name: call.Name}
 			if err != nil {
 				tr.Content = "Experiment unavailable: " + err.Error()
 				tr.IsError = true
 			} else {
-				sources = append(sources, result)
-				experiment[len(sources)] = true
-				tr.Content = rcNumberedSource(len(sources), result)
-				// Show what the experiment actually produced, so an operator can
-				// see the evidence a runtime verdict rests on rather than trust
-				// the model's account of it. Bounded: long output is cut.
-				fmt.Fprintf(os.Stderr, "  challenge: experiment %d output (source %d):\n%s\n", toolCalls, len(sources), rcIndentBounded(result, 40))
+				rendered := rec.render(sandbox.image)
+				sources = append(sources, rendered)
+				experiments[len(sources)] = rec
+				tr.Content = rcNumberedSource(len(sources), rendered)
+				// The console gets a bounded summary — generated command, exit,
+				// observed directory, each assertion's PASS/FAIL. The complete
+				// record travels in the result and the bundle.
+				fmt.Fprintf(os.Stderr, "  challenge: experiment %d (source %d): %s\n", toolCalls, len(sources), rec.summary())
 			}
 			results = append(results, tr)
 		}
 		if len(results) == 0 {
 			text := rcResponseText(resp)
 			if answer := rcExtractJSONObject(text); answer != "" {
-				res, err := rcValidateChallenge(answer, issues, decisions, sources, experiment)
+				res, err := rcValidateChallenge(answer, issues, decisions, sources, experiments)
 				if err == nil || !errors.Is(err, errRCMalformedAnswer) || nudged {
 					return res, err
 				}
@@ -426,21 +438,32 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 // rcResolveCitations validates a check's citations against the sources. It
 // returns the usable references (an out-of-bounds one is dropped and logged,
 // never fatal) and whether any of them is an experiment from this challenge.
-func rcResolveCitations(label string, evidence []rcCheckEvidence, sources []string, experiment map[int]bool) ([]rcCitationRef, bool) {
+// rcResolveCitations returns the usable references, whether any of them is a
+// QUALIFYING experiment (declared assertions, all passed), and — when an
+// experiment was cited but does not qualify — the precise reason, so the
+// unresolved reason names the failed expectation rather than "no experiment".
+// A cited experiment whose assertion failed is evidence that the model's
+// expectation was wrong; it cannot support any verdict.
+func rcResolveCitations(label string, evidence []rcCheckEvidence, sources []string, experiments map[int]*rcExperimentRecord) ([]rcCitationRef, bool, string) {
 	var refs []rcCitationRef
-	hasExperiment := false
+	qualifying, weak := false, ""
 	for i, ev := range evidence {
 		if _, ok := rcExtractCitation(sources, ev); !ok {
 			fmt.Fprintf(os.Stderr, "  challenge: dropped citation %d of %s (source %d, lines %d-%d; available 1..%d) — out of range\n",
 				i+1, label, ev.Source, ev.LineStart, ev.LineEnd, len(sources))
 			continue
 		}
-		refs = append(refs, rcCitationRef{Source: ev.Source, LineStart: ev.LineStart, LineEnd: ev.LineEnd, Experiment: experiment[ev.Source]})
-		if experiment[ev.Source] {
-			hasExperiment = true
+		rec := experiments[ev.Source]
+		refs = append(refs, rcCitationRef{Source: ev.Source, LineStart: ev.LineStart, LineEnd: ev.LineEnd, Experiment: rec != nil})
+		switch {
+		case rec == nil:
+		case rec.qualifies():
+			qualifying = true
+		case weak == "":
+			weak = rec.disqualifyReason()
 		}
 	}
-	return refs, hasExperiment
+	return refs, qualifying, weak
 }
 
 // rcValidateChallenge turns the challenger's structured answer into the final
@@ -459,7 +482,7 @@ func rcResolveCitations(label string, evidence []rcCheckEvidence, sources []stri
 // draft decision left unassessed, or an incoherent verdict/readiness pair. A
 // decision the draft never made is dropped and logged — it cannot be used to
 // introduce advice — but does not sink the supported findings.
-func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, experiment map[int]bool) (*rcChallengeResult, error) {
+func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, experiments map[int]*rcExperimentRecord) (*rcChallengeResult, error) {
 	var answer rcChallengeAnswer
 	if err := json.Unmarshal([]byte(raw), &answer); err != nil {
 		return nil, fmt.Errorf("%w: %v", errRCMalformedAnswer, err)
@@ -497,8 +520,12 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 		if check.RequiresRuntime == nil {
 			return nil, fmt.Errorf("challenge did not classify whether %q requires runtime evidence", check.Issue)
 		}
-		refs, hasExperiment := rcResolveCitations(fmt.Sprintf("check %d", id+1), check.Evidence, sources, experiment)
-		// Final status, with the ACTUAL reason for any downgrade.
+		refs, qualifying, weak := rcResolveCitations(fmt.Sprintf("check %d", id+1), check.Evidence, sources, experiments)
+		// Final status, with the ACTUAL reason for any downgrade. A runtime
+		// verdict needs a cited experiment whose declared assertions all passed;
+		// a cited experiment that failed an assertion, or declared none, is
+		// named as the reason — the verdict must account for the assertion
+		// results, and a failed path-equality check cannot support "safe".
 		status, reason := check.Verdict, strings.TrimSpace(check.Reason)
 		if status == "unverified" {
 			status = "unresolved"
@@ -506,8 +533,10 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 			switch {
 			case len(refs) == 0:
 				status, reason = "unresolved", "no usable citation to the supplied sources"
-			case *check.RequiresRuntime && !hasExperiment:
-				status, reason = "unresolved", "requires a runtime experiment, and none from this run backs it"
+			case *check.RequiresRuntime && !qualifying && weak != "":
+				status, reason = "unresolved", "requires a runtime experiment with passing assertions; "+weak
+			case *check.RequiresRuntime && !qualifying:
+				status, reason = "unresolved", "requires a runtime experiment with passing assertions, and none from this run backs it"
 			}
 		}
 		r := rcAllegationResult{ID: id + 1, Issue: check.Issue, Status: status, RequiresRuntime: *check.RequiresRuntime, Evidence: refs, Reason: reason}
@@ -547,7 +576,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 		if dc.Verdict != "supported" && dc.Verdict != "refuted" && dc.Verdict != "unverified" {
 			return nil, fmt.Errorf("challenge returned an unknown decision verdict %q", dc.Verdict)
 		}
-		refs, _ := rcResolveCitations(fmt.Sprintf("decision %d", id+1), dc.Evidence, sources, experiment)
+		refs, _, _ := rcResolveCitations(fmt.Sprintf("decision %d", id+1), dc.Evidence, sources, experiments)
 		status, reason := dc.Verdict, strings.TrimSpace(dc.Reason)
 		if status == "unverified" {
 			status = "unresolved"
@@ -614,6 +643,15 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 
 	summary := rcDeriveSummary(len(kept), refuted, len(unresolved), match, readiness)
 	res := &rcChallengeResult{Allegations: results, Decisions: dresults, Unresolved: unresolved, Incomplete: len(unresolved) > 0}
+	// Preserve every experiment's complete record, in source order, so the
+	// bundle carries the code, inputs, generated command, output, exit status
+	// and assertion results the verdicts rest on.
+	for src := 1; src <= len(sources); src++ {
+		if rec := experiments[src]; rec != nil {
+			r := *rec
+			res.Experiments = append(res.Experiments, rcExperimentSource{Source: src, Record: r})
+		}
+	}
 	res.Review = rcAssembleReview(scope, limitations, results, findingText, match, readiness, summary, keptDecisions)
 	return res, nil
 }
