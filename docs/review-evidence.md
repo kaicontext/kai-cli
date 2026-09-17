@@ -8,21 +8,33 @@ The challenge uses a fresh model conversation containing the draft, the original
 review context, and complete successful tool results. It tries to disprove each
 issue, looks for contradictory reasoning, and checks proposed repairs against the
 supported inputs. Each issue must receive a supported or refuted assessment with
-a reason and an exact citation to supplied evidence. Unverified issues, missing
-checks, invented citations, malformed responses, timeouts, and new unchecked
-issues prevent publication. The original draft is never used as the fallback for
-a failed challenge. Deep reviews emit an incomplete bundle and a nonzero exit;
-fast reviews return an error so the workflow can continue to its deep pass.
+a reason and a citation into the supplied evidence. Unverified issues, missing
+checks, citations to locations that do not exist, malformed responses, timeouts,
+and new unchecked issues prevent publication. The original draft is never used
+as the fallback for a failed challenge. Deep reviews emit an incomplete bundle
+and a nonzero exit; fast reviews return an error so the workflow can continue to
+its deep pass.
 
-A bad citation gets one correction attempt before the challenge fails. The
-diagnostic identifies the check, citation, source number, and whether the source
-is missing, the quote is empty, or its text does not match. It logs an escaped
-quote preview capped at 160 characters, rather than calling every mismatch
-invented evidence. The model receives that diagnostic alongside its original
-answer and the unchanged numbered evidence. It can only resubmit the complete
-review; no additional experiments are available. Every original validation is
-applied again, and a second failure withholds the review. Semantic uncertainty
+Citations are by location. Every source is shown to the model with one-based
+numbered lines; a citation names the source number and a line range, and the
+system copies those lines itself. This removes the requirement that the model
+reproduce an excerpt byte-for-byte — the failure that withheld whole reviews
+over a mis-copied quotation. It does not check that the cited lines support the
+claim: a location that exists is valid whatever it says, and a location that
+does not exist (unknown source, range before line 1, reversed, or past the last
+line) still fails validation.
+
+A bad citation location gets one correction attempt before the challenge fails.
+The diagnostic identifies the check, citation, source number, line range, and
+reason. The model receives that diagnostic alongside its original answer and the
+unchanged numbered evidence. It can only resubmit the complete review; no
+additional experiments are available. Every original validation is applied
+again, and a second failure withholds the review. Semantic uncertainty
 (`unverified`) is not a citation error and does not trigger this retry.
+
+The fast pass may draft with a substituted non-reasoning model; the challenge
+that decides publication is always sent to the configured review model, and the
+run logs which model was requested for each phase.
 
 This adds a model call when a draft has issues. The challenge has a three-minute
 ceiling, including any citation correction; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews

@@ -23,8 +23,10 @@ Trace the actual state and control flow through a concrete example. Distinguish 
 
 For shell or language-runtime claims, prefer a minimal reproduction using review_shell when available. You may call it at most FOUR times in total; combine related assertions into one script. It runs only synthetic snippets in an isolated container: no repository, credentials, host mounts, or network. Its environment is POSIX /bin/sh, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present. If the needed runtime is unavailable and the supplied evidence does not establish the behavior, mark the allegation unverified.
 
+Cite evidence BY LOCATION. Each source is shown to you with numbered lines. To cite, give the source number and the one-based line range; the system copies those exact lines itself. Never retype an excerpt. A citation whose source number or line range does not exist is invalid.
+
 Finish by calling submit_review with this shape (plain JSON is accepted if tool submission is unavailable):
-{"review":"complete revised review with the original ===REVIEW-DATA=== coda format", "checks":[{"issue":"exact original ISSUES bullet, without its list marker", "verdict":"supported|refuted|unverified", "reason":"concrete reasoning, including the counterexample considered", "evidence":[{"source":1,"quote":"verbatim excerpt from that numbered source"}]}]}
+{"review":"complete revised review with the original ===REVIEW-DATA=== coda format", "checks":[{"issue":"exact original ISSUES bullet, without its list marker", "verdict":"supported|refuted|unverified", "reason":"concrete reasoning, including the counterexample considered", "evidence":[{"source":1,"line_start":3,"line_end":5}]}]}
 
 There must be exactly one check per supplied issue. Both supported and refuted checks need evidence from the supplied sources or a successful review_shell tool result. Source numbers are one-based. Do not cite the draft, another check, or your own assertion as evidence. An unverified check means the review cannot be published yet; do not turn missing evidence into an all-clear.
 
@@ -32,9 +34,15 @@ The revised review must contain ONLY the supported issues, copied verbatim into 
 
 const rcEvidenceLimit = 1024 * 1024
 
+// rcCheckEvidence cites evidence BY LOCATION: a source number and a one-based
+// line range within that source. The system extracts the lines; the model
+// never copies text. That removes the requirement that the model reproduce an
+// excerpt byte-for-byte — it does not check that the cited lines support the
+// claim, and a location that does not exist still fails validation.
 type rcCheckEvidence struct {
-	Source int    `json:"source"`
-	Quote  string `json:"quote"`
+	Source    int `json:"source"`
+	LineStart int `json:"line_start"`
+	LineEnd   int `json:"line_end"`
 }
 
 type rcIssueCheck struct {
@@ -51,9 +59,10 @@ type rcChallengeAnswer struct {
 
 func rcSubmitReviewToolInfo() tools.ToolInfo {
 	str := func() map[string]any { return map[string]any{"type": "string"} }
+	intg := func() map[string]any { return map[string]any{"type": "integer"} }
 	evidence := map[string]any{"type": "object", "properties": map[string]any{
-		"source": map[string]any{"type": "integer"}, "quote": str(),
-	}, "required": []string{"source", "quote"}}
+		"source": intg(), "line_start": intg(), "line_end": intg(),
+	}, "required": []string{"source", "line_start", "line_end"}}
 	check := map[string]any{"type": "object", "properties": map[string]any{
 		"issue": str(), "verdict": map[string]any{"type": "string", "enum": []string{"supported", "refuted", "unverified"}},
 		"reason": str(), "evidence": map[string]any{"type": "array", "items": evidence},
@@ -87,6 +96,43 @@ func rcChallengeSources(transcript []message.Message) []string {
 	return sources
 }
 
+// rcSourceLines splits a source into the lines the model cites against. A
+// single trailing newline is dropped so a source ending in "\n" does not
+// report a phantom empty last line.
+func rcSourceLines(body string) []string {
+	return strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+}
+
+// rcNumberedSource renders one source with one-based line numbers — the
+// coordinate system the model cites in. rcExtractCitation splits the same way,
+// so a cited range maps back to exactly the lines the model saw.
+func rcNumberedSource(n int, body string) string {
+	lines := rcSourceLines(body)
+	suffix := "s"
+	if len(lines) == 1 {
+		suffix = ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "SOURCE %d (%d line%s):\n", n, len(lines), suffix)
+	for i, line := range lines {
+		fmt.Fprintf(&b, "%5d| %s\n", i+1, line)
+	}
+	return b.String()
+}
+
+// rcExtractCitation returns the exact source text a citation names, or ok=false
+// with the reason when the source number or line range does not exist.
+func rcExtractCitation(sources []string, ev rcCheckEvidence) (text, reason string, ok bool) {
+	if ev.Source < 1 || ev.Source > len(sources) {
+		return "", "source number is out of range", false
+	}
+	lines := rcSourceLines(sources[ev.Source-1])
+	if ev.LineStart < 1 || ev.LineEnd < ev.LineStart || ev.LineEnd > len(lines) {
+		return "", fmt.Sprintf("line range is out of bounds (source has %d line(s))", len(lines)), false
+	}
+	return strings.Join(lines[ev.LineStart-1:ev.LineEnd], "\n"), "", true
+}
+
 func rcResponseText(resp provider.Response) string {
 	var b strings.Builder
 	for _, p := range resp.Parts {
@@ -112,7 +158,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 		fmt.Fprintf(&b, "- %s\n", issue)
 	}
 	for i, source := range sources {
-		fmt.Fprintf(&b, "\nSOURCE %d:\n%s\n", i+1, source)
+		fmt.Fprintf(&b, "\n%s", rcNumberedSource(i+1, source))
 	}
 	if b.Len() > rcEvidenceLimit {
 		return "", fmt.Errorf("challenge evidence exceeds %d bytes; refusing to discard evidence", rcEvidenceLimit)
@@ -159,7 +205,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 				tr.IsError = true
 			} else {
 				sources = append(sources, result)
-				tr.Content = fmt.Sprintf("SOURCE %d:\n%s", len(sources), result)
+				tr.Content = rcNumberedSource(len(sources), result)
 			}
 			results = append(results, tr)
 		}
@@ -174,21 +220,17 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	return "", fmt.Errorf("challenge ended without a complete answer")
 }
 
-// A citation mismatch is a protocol failure, not proof that the model invented
-// evidence. Keep exact matching, but identify the failed check and allow one
-// resubmission within the ORIGINAL deadline. Never retry semantic uncertainty.
+// An invalid citation LOCATION is a protocol failure, not proof that the model
+// invented evidence. Identify the failed check and allow one resubmission
+// within the ORIGINAL deadline. Never retry semantic uncertainty.
 type rcCitationError struct {
 	Check, Citation, Source, SourceCount int
-	Reason, Quote                        string
+	LineStart, LineEnd                   int
+	Reason                               string
 }
 
 func (e *rcCitationError) Error() string {
-	quote := []rune(e.Quote)
-	suffix := ""
-	if len(quote) > 160 {
-		quote, suffix = quote[:160], " (truncated)"
-	}
-	return fmt.Sprintf("challenge citation invalid: check %d, citation %d, source %d (available 1..%d): %s; quote=%q%s", e.Check, e.Citation, e.Source, e.SourceCount, e.Reason, string(quote), suffix)
+	return fmt.Sprintf("challenge citation invalid: check %d, citation %d, source %d (available 1..%d), lines %d-%d: %s", e.Check, e.Citation, e.Source, e.SourceCount, e.LineStart, e.LineEnd, e.Reason)
 }
 
 func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, raw, callID string, issues, sources []string) (string, error) {
@@ -200,7 +242,7 @@ func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, mod
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("challenge citation correction: %w", ctx.Err())
 	}
-	feedback := err.Error() + "\nCorrect the citation using the numbered sources already provided, then resubmit the COMPLETE answer via submit_review. Quotes must be copied verbatim from their cited source; do not paraphrase, normalize whitespace, or invent evidence. The diagnostic quote may be truncated; the original submitted answer is above. Recheck all citations. Do not treat this validation error as evidence about the allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. All original checks and review consistency requirements still apply. No additional experiments are available. This is the only correction attempt."
+	feedback := err.Error() + "\nCorrect the citation using the numbered sources already provided, then resubmit the COMPLETE answer via submit_review. Cite the source number and a one-based line range that exists in that source; the system copies the lines, so do not retype or paraphrase anything. The original submitted answer is above. Recheck all citations. Do not treat this validation error as evidence about the allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. All original checks and review consistency requirements still apply. No additional experiments are available. This is the only correction attempt."
 	var correction message.ContentPart = message.TextContent{Text: feedback}
 	if callID != "" {
 		correction = message.ToolResult{ToolCallID: callID, Name: "submit_review", Content: feedback, IsError: true}
@@ -258,17 +300,10 @@ func rcValidateChallenge(raw string, issues, sources []string) (string, error) {
 			return "", fmt.Errorf("challenge supplied no evidence")
 		}
 		for citationIndex, evidence := range check.Evidence {
-			reason := ""
-			switch {
-			case evidence.Source < 1 || evidence.Source > len(sources):
-				reason = "source number is out of range"
-			case strings.TrimSpace(evidence.Quote) == "":
-				reason = "quote is empty"
-			case !strings.Contains(sources[evidence.Source-1], evidence.Quote):
-				reason = "quote does not exactly match the cited source"
-			}
-			if reason != "" {
-				return "", &rcCitationError{Check: checkIndex + 1, Citation: citationIndex + 1, Source: evidence.Source, SourceCount: len(sources), Reason: reason, Quote: evidence.Quote}
+			// The system extracts the cited lines; only a location that does
+			// not exist fails. Whether the lines support the claim is not checked.
+			if _, reason, ok := rcExtractCitation(sources, evidence); !ok {
+				return "", &rcCitationError{Check: checkIndex + 1, Citation: citationIndex + 1, Source: evidence.Source, SourceCount: len(sources), LineStart: evidence.LineStart, LineEnd: evidence.LineEnd, Reason: reason}
 			}
 		}
 		if check.Verdict == "supported" {

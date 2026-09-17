@@ -339,11 +339,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// — see rcIncomplete. Used solely when the review produced nothing to parse.
 	var inc *rcIncomplete
 	if fast {
+		// The fast pass may substitute a non-reasoning model for the DRAFT. The
+		// CHALLENGE — the publication gate — uses the configured review model;
+		// the substitution must never silently reach it.
 		fastModel := rcFastModel(model, provKind)
-		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (model %s, budget %s)…\n",
-			fastModel, rcFastHardDeadline)
+		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (draft model %s, challenge model %s, budget %s)…\n",
+			fastModel, model, rcFastHardDeadline)
 		phase := time.Now()
-		raw, err = rcRunFastReview(ctx, prov, fastModel, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		raw, err = rcRunFastReview(ctx, prov, fastModel, model, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
 		if err != nil {
 			return err
 		}

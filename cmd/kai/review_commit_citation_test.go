@@ -12,19 +12,26 @@ import (
 	"github.com/kaicontext/kai-engine/provider"
 )
 
+// Invalid citation handling. A location that does not exist — an unknown
+// source number, a line range starting before 1, reversed, or past the last
+// line — is a precise, retryable citation error that names the check, the
+// citation and the reason. Validation still fails on it; cite-by-location
+// removed the exact-quote requirement, not the location check.
 func TestReviewCitationDiagnostics(t *testing.T) {
 	for _, tc := range []struct {
-		name, quote string
-		source      int
-		want        string
+		name       string
+		source     int
+		start, end int
+		want       string
 	}{
-		{"source", "pwd", 99, "source number is out of range"},
-		{"empty", " \n", 1, "quote is empty"},
-		{"mismatch", "cd /tmp && pwd; pwd", 1, "quote does not exactly match"},
+		{"source", 99, 1, 1, "source number is out of range"},
+		{"start before 1", 1, 0, 1, "line range is out of bounds (source has 2 line(s))"},
+		{"reversed", 1, 2, 1, "line range is out of bounds"},
+		{"past the end", 1, 1, 3, "line range is out of bounds (source has 2 line(s))"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := rcCDChecks()
-			a.Checks[0].Evidence[0] = rcCheckEvidence{Source: tc.source, Quote: tc.quote}
+			a.Checks[0].Evidence[0] = rcCheckEvidence{Source: tc.source, LineStart: tc.start, LineEnd: tc.end}
 			_, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`})
 			var citation *rcCitationError
 			if !errors.As(err, &citation) || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "check 1, citation 1") {
@@ -32,9 +39,16 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 			}
 		})
 	}
-	e := (&rcCitationError{Quote: strings.Repeat("x", 10000) + "\nsecret-tail"}).Error()
-	if len(e) > 400 || strings.Contains(e, "secret-tail") || strings.Contains(e, "\n") {
-		t.Fatal("diagnostic quote is unbounded or not escaped")
+	// A valid location that exists but is the WRONG evidence passes validation:
+	// the system does not judge relevance. Stated here so the limit is tested,
+	// not implied.
+	a := rcCDChecks()
+	a.Checks[0].Evidence[0] = rcCheckEvidence{Source: 2, LineStart: 1, LineEnd: 1}
+	if _, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}); err != nil {
+		t.Fatalf("an existing location is valid regardless of relevance: %v", err)
+	}
+	if e := (&rcCitationError{Check: 1, Citation: 1, Source: 1, SourceCount: 2, LineStart: 1, LineEnd: 99, Reason: "line range is out of bounds"}).Error(); strings.Contains(e, "\n") || len(e) > 400 {
+		t.Fatalf("diagnostic is not a single bounded line: %q", e)
 	}
 }
 
@@ -55,10 +69,10 @@ func TestReviewCitationLiveRepairDesktop418(t *testing.T) {
 	}
 	sources := []string{rcCDSource, `cd "$HOME"`}
 	a := rcCDChecks()
-	a.Checks[0].Evidence[0].Quote = "cd /tmp && pwd; pwd"
+	a.Checks[0].Evidence[0].LineEnd = 99 // a location that does not exist
 	raw := rcTestAnswer(t, a)
 	failed := provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "original", Name: "submit_review", Input: raw}}}
-	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Check these two issues:\n" + rcFalseCDIssue + "\n" + rcEscapeIssue + "\nSOURCE 1:\n" + sources[0] + "\nSOURCE 2:\n" + sources[1]}}}}
+	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Check these two issues:\n" + rcFalseCDIssue + "\n" + rcEscapeIssue + "\n" + rcNumberedSource(1, sources[0]) + rcNumberedSource(2, sources[1])}}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	got, err := rcValidateOrRepairCitation(ctx, prov, model, msgs, failed, raw, "original", []string{rcFalseCDIssue, rcEscapeIssue}, sources)
@@ -85,7 +99,7 @@ func TestReviewCitationCorrection(t *testing.T) {
 					a := rcCDChecks()
 					if calls == 1 {
 						firstCtx = c
-						a.Checks[0].Evidence[0].Quote = "paraphrased evidence"
+						a.Checks[0].Evidence[0].LineEnd = 99 // a location that does not exist
 						if outcome == "cancelled" {
 							cancel()
 						}
@@ -113,12 +127,12 @@ func TestReviewCitationCorrection(t *testing.T) {
 						} else {
 							feedback = last.(message.TextContent).Text
 						}
-						if !strings.Contains(feedback, "check 1, citation 1, source 1") || !strings.Contains(feedback, "paraphrased evidence") {
-							t.Fatal("missing precise feedback")
+						if !strings.Contains(feedback, "check 1, citation 1, source 1") || !strings.Contains(feedback, "lines 1-99") || !strings.Contains(feedback, "line range is out of bounds") {
+							t.Fatalf("missing precise feedback: %s", feedback)
 						}
 						switch outcome {
 						case "mismatch":
-							a.Checks[0].Evidence[0].Quote = "still wrong"
+							a.Checks[0].Evidence[0].LineStart = 0 // still a location that does not exist
 						case "unverified":
 							a.Checks[0].Verdict = "unverified"
 						case "missing-check":
