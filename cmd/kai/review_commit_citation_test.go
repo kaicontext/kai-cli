@@ -32,7 +32,7 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := rcCDChecks()
 			a.Checks[0].Evidence[0] = rcCheckEvidence{Source: tc.source, LineStart: tc.start, LineEnd: tc.end}
-			_, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`})
+			_, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
 			var citation *rcCitationError
 			if !errors.As(err, &citation) || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "check 1, citation 1") {
 				t.Fatalf("imprecise error: %v", err)
@@ -44,7 +44,7 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 	// not implied.
 	a := rcCDChecks()
 	a.Checks[0].Evidence[0] = rcCheckEvidence{Source: 2, LineStart: 1, LineEnd: 1}
-	if _, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}); err != nil {
+	if _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources); err != nil {
 		t.Fatalf("an existing location is valid regardless of relevance: %v", err)
 	}
 	if e := (&rcCitationError{Check: 1, Citation: 1, Source: 1, SourceCount: 2, LineStart: 1, LineEnd: 99, Reason: "line range is out of bounds"}).Error(); strings.Contains(e, "\n") || len(e) > 400 {
@@ -75,11 +75,11 @@ func TestReviewCitationLiveRepairDesktop418(t *testing.T) {
 	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Check these two issues:\n" + rcFalseCDIssue + "\n" + rcEscapeIssue + "\n" + rcNumberedSource(1, sources[0]) + rcNumberedSource(2, sources[1])}}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	got, err := rcValidateOrRepairCitation(ctx, prov, model, msgs, failed, raw, "original", []string{rcFalseCDIssue, rcEscapeIssue}, sources)
+	got, err := rcValidateOrRepairCitation(ctx, prov, model, msgs, failed, raw, "original", rcCDIssues, nil, sources)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, issues, _, _, _, _ := rcParseReviewOutput(got)
+	_, issues, _, _, _, _ := rcParseReviewOutput(got.Review)
 	if len(issues) != 1 || issues[0] != rcEscapeIssue {
 		t.Fatalf("correction changed the expected findings: %v", issues)
 	}
@@ -138,7 +138,7 @@ func TestReviewCitationCorrection(t *testing.T) {
 						case "missing-check":
 							a.Checks = a.Checks[:1]
 						case "new-issue":
-							a.Review = rcTestReview("invented new defect")
+							a.Checks = append(a.Checks, rcIssueCheck{Issue: "invented new defect", Verdict: "supported", Reason: "r", Finding: "f", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}})
 						case "truncated":
 							return provider.Response{FinishReason: message.FinishReasonMaxTokens}, nil
 						case "tool":
@@ -153,13 +153,23 @@ func TestReviewCitationCorrection(t *testing.T) {
 					}
 					return provider.Response{Parts: []message.ContentPart{part}}, nil
 				}}
-				got, err := rcChallengeReview(ctx, p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{rcCDSource, `cd "$HOME"`}, nil)
-				if outcome == "corrected" {
-					if err != nil || !strings.Contains(got, rcEscapeIssue) || strings.Contains(got, rcFalseCDIssue) {
-						t.Fatalf("correction rejected: %q %v", got, err)
+				got, err := rcChallengeReview(ctx, p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+				switch outcome {
+				case "corrected":
+					if err != nil || !strings.Contains(got.Review, rcEscapeIssue) || strings.Contains(got.Review, rcFalseCDIssue) {
+						t.Fatalf("correction rejected: %+v %v", got, err)
 					}
-				} else if err == nil || got != "" {
-					t.Fatalf("unchecked result escaped: %q %v", got, err)
+				case "unverified":
+					// An unverified item is no longer a reason to withhold the
+					// review: it is published as unresolved and the review is
+					// marked incomplete, with the supported finding kept.
+					if err != nil || !got.Incomplete || !strings.Contains(got.Review, rcEscapeIssue) {
+						t.Fatalf("unresolved item not published as incomplete: %+v %v", got, err)
+					}
+				default:
+					if err == nil || got != nil {
+						t.Fatalf("unchecked result escaped: %+v %v", got, err)
+					}
 				}
 				want := 2
 				if outcome == "cancelled" {
@@ -181,8 +191,10 @@ func TestReviewCitationDoesNotRetrySemanticUncertainty(t *testing.T) {
 		a.Checks[0].Verdict = "unverified"
 		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, a)}}}, nil
 	}}
-	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{rcCDSource, `cd "$HOME"`}, nil)
-	if calls != 1 || err == nil || got != "" {
-		t.Fatalf("uncertainty retried or published: calls=%d %q %v", calls, got, err)
+	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	// Not retried — and no longer withheld: the item is unresolved, the
+	// supported finding is kept, and the review is marked incomplete.
+	if calls != 1 || err != nil || !got.Incomplete || !strings.Contains(got.Review, rcEscapeIssue) || strings.Contains(got.Review, "## Findings\n\n### "+rcFalseCDIssue) {
+		t.Fatalf("uncertainty retried, withheld, or published as a finding: calls=%d %+v %v", calls, got, err)
 	}
 }

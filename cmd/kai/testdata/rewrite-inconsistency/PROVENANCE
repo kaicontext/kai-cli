@@ -1,0 +1,22 @@
+smoke-429-fast.json — a captured rewrite inconsistency, replayed by
+TestPublicationReplaysCapturedRewriteInconsistency.
+
+Source: the pre-merge integration smoke for kai-cli#118, 2026-09-17:
+`kai review-commit --fast --format json` on the kai-desktop #429 change
+(scratch repo e2e-429 @ c478d2f), KAI_REVIEW_MODEL=z-ai/glm-5.2, all traffic
+captured through a logging proxy. Draft anthropic/claude-haiku-4.5, challenger
+z-ai/glm-5.2 (both confirmed from response metadata).
+
+Fields: draft (what was challenged), issues (as handed to the challenger),
+sources (what the challenger received, line-number prefixes stripped, including
+its one review_shell result), submitted (the raw submit_review arguments, byte
+for byte), mainError (what main did with it).
+
+Why this specimen: its one per-allegation judgment was valid (refuted, two
+resolving location citations), but its rewritten review opened with the
+REVIEW-DATA marker and carried no coda fields, so main rejected the rewrite and
+withheld the whole review. The production failure of the same class on
+kai-desktop#429 (run 89bdabb8: "revised review added an unchecked or rejected
+allegation") logged only its error line — its payload was never captured — and
+eight captured attempts with main's binary on the same change did not reproduce
+that exact error (7 self-consistent reviews, 1 malformed-JSON failure).

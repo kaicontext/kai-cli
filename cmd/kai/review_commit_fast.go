@@ -118,7 +118,7 @@ DECISIONS:
 // for speed. challengeModel is the configured review model, which the
 // publication challenge must use: the substitution meant for the one-call skim
 // must never silently apply to the gate that decides what is published.
-func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challengeModel, root, authorContext, subject, body, diff string, changedPaths []string) (string, error) {
+func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challengeModel, root, authorContext, subject, body, diff string, changedPaths []string) (string, *rcChallengeResult, error) {
 	var user strings.Builder
 	if sc := strings.TrimSpace(authorContext); sc != "" {
 		if len(sc) > rcMaxAuthorContextBytes {
@@ -188,7 +188,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}}},
 	})
 	if err != nil {
-		return "", fmt.Errorf("fast review call: %w", err)
+		return "", nil, fmt.Errorf("fast review call: %w", err)
 	}
 	var out strings.Builder
 	for _, p := range resp.Parts {
@@ -198,11 +198,11 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	}
 	draft := strings.TrimSpace(out.String())
 	fmt.Fprintf(os.Stderr, "  challenge model: requested %s (draft was requested from %s)\n", challengeModel, model)
-	checked, err := rcChallengeReview(cctx, prov, challengeModel, draft, []string{user.String()}, rcConfiguredSandbox())
+	res, err := rcChallengeReview(cctx, prov, challengeModel, draft, []string{user.String()}, rcConfiguredSandbox())
 	if err != nil {
-		return "", fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
+		return "", nil, fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
 	}
-	return checked, nil
+	return res.Review, res, nil
 }
 
 // rcCapFastReadiness enforces the ceiling the prompt states. The prompt is the
