@@ -42,7 +42,8 @@ func forensicsRun(t *testing.T, sb *rcShellSandbox, script string) string {
 }
 
 // GLM's Source 3, "Tests 2–4", replayed exactly as it wrote them. The paths
-// inside `sh -c '…'` carry BACKSLASH-ESCAPED metacharacters (`\$`, `\“), which
+// inside `sh -c '…'` carry BACKSLASH-ESCAPED metacharacters (a backslash before
+// the dollar sign and before each backtick), which
 // POSIX sh reads as literals inside double quotes. So every one succeeds —
 // EXPECTED. But JSON.stringify never emits those backslashes, so this
 // experiment tested a hand-escaped string, not the code's output. This is a

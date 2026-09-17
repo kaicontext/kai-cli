@@ -422,3 +422,32 @@ gate for now."
 `record=` line and the experiment content. A fresh collection with full output
 captured is recorded below if a false positive recurs; any such instance is a
 *new occurrence*, not the original.
+
+### Fresh #418 collection — with Node sandbox, GLM-5.2, `-count=3`, full output saved (`a3938f1`)
+
+No false positive recurred, so the false-positive forensics remain
+**unrecoverable**. I am not sampling further. The three attempts failed in
+three *different* ways, none of them a wrong verdict:
+
+| attempt | experiments | outcome |
+|---|---|---|
+| 1 | 3 | **3-minute challenge deadline expired** before any submission (`context deadline exceeded`). No verdict. |
+| 2 | 4 | `submit_review` payload unparseable (began with a letter `R` — prose inside the tool input). The single format repair **fired**; the resubmission parsed, then failed a **substantive** check ("omitted reasoning, duplicated a check, or checked an unknown issue") and was correctly **not** retried. No bundle. |
+| 3 | 4 | Submission parsed; failed the same substantive check outright. No bundle. |
+
+Across everything recorded in this file, GLM-5.2 has now exhibited eight
+distinct failure modes on these two cases: readiness contradiction; prose
+final answer; experiments run but not cited; `checks` as a string; required
+field omitted; prose inside the tool payload; a substantive check-shape
+failure; deadline expiry — plus the two wrong verdicts with valid citations and
+real experiments.
+
+**Diagnosability gaps (recorded, not changed):**
+
+- For a substantive validation failure the submitted `issue` strings are not
+  logged, so whether GLM altered the bullet text (a common cause of "unknown
+  issue" — e.g. a changed dash or a paraphrase), duplicated a check, or left a
+  reason empty **cannot be told from the record**.
+- That single error message conflates three different conditions.
+- The 40-line experiment-log bound cut the very lines GLM cited in the
+  false-negative run.
