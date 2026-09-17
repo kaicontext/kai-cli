@@ -8,7 +8,15 @@ The challenge uses a fresh model conversation containing the draft, the original
 review context, and complete successful tool results. It tries to disprove each
 issue, looks for contradictory reasoning, and checks proposed repairs against the
 supported inputs. Each issue receives a supported, refuted, or unverified
-assessment with a reason and evidence.
+assessment with a reason, an explicit runtime-evidence classification, and
+evidence.
+
+The published review is **assembled by the system from the validated results,**
+not copied from a model-authored blob. The challenger returns structured fields:
+an overall assessment, per-supported-finding prose, and the coda values
+(`INTENT_MATCH`, `MERGE_READY`, `SUMMARY`, `ISSUES`, `DECISIONS`). Only supported
+findings become defect prose, so a refuted or unverified allegation cannot
+survive as a confident description or recommended fix in the surrounding text.
 
 Evidence is cited **by location, not by copied text.** Every source is shown to
 the model with numbered lines; a citation is a source number and a line range,
@@ -24,24 +32,30 @@ one usable citation; a verdict with none is downgraded to unverified. So one
 malformed reference can, at most, drop the single finding it belonged to, while
 every independently supported finding still publishes.
 
-Some allegations can be settled by reading the source; others assert runtime
-behavior that reading cannot establish (what a shell does after a successful
-`cd`, whether a quoting scheme survives a hostile path). The condition is *does
-this allegation require runtime evidence?* — not *is a sandbox configured?* A
-runtime allegation must be backed by a successful `review_shell` experiment;
-without one it stays **unverified**, whatever the reasoning. Missing runtime
-evidence is never permission to substitute confident reasoning.
+Every check must **classify whether the allegation requires runtime evidence.**
+The classification is mandatory — an omitted flag fails the challenge closed, so
+a model cannot skip the declaration to dodge the experiment requirement. Some
+allegations are settled by reading the source; others assert runtime behavior
+that reading cannot establish (what a shell does after a successful `cd`, whether
+a quoting scheme survives a hostile path). The condition is *does this allegation
+require runtime evidence?* — not *is a sandbox configured?* A runtime allegation
+must be backed by a successful `review_shell` experiment; without one it stays
+**unverified**, whatever the reasoning. Missing runtime evidence is never
+permission to substitute confident reasoning.
 
-Unverified allegations do not withhold the review. The independently supported
-findings publish; each unverified allegation is preserved and listed with why it
-could not be settled; and the review is marked **incomplete** (with MERGE_READY
-capped so an unresolved runtime claim cannot ride out under a ready-to-merge
-score). Structural failures still fail closed and withhold the draft: malformed
-responses, an unknown or duplicated check, a missing check, a revised review that
-drops a supported finding or smuggles a refuted one back in, timeouts, and new
-unchecked issues. The original draft is never used as the fallback for a
-withheld challenge. Deep reviews emit an incomplete bundle and a nonzero exit;
-fast reviews return an error so the workflow can continue to its deep pass.
+Unverified allegations do not withhold the review, but they do make it
+**incomplete** — as a real bundle state, not only prose. The independently
+supported findings publish; each unverified allegation is preserved and listed
+with why it could not be settled; `MERGE_READY` is capped so an unresolved
+runtime claim cannot ride out under a ready-to-merge score; and the emitted
+bundle's `incomplete` flag is set and the run exits non-zero, so Atlas and CI
+never read a partial review as a completed one. Structural failures fail closed
+and withhold the draft entirely: malformed responses, an unknown or duplicated
+check, a missing check, a missing runtime classification, a supported finding
+with no description, an incoherent verdict/readiness pair, timeouts. The original
+draft is never used as the fallback for a withheld challenge. Deep reviews emit
+an incomplete bundle and a nonzero exit; fast reviews return an error so the
+workflow can continue to its deep pass.
 
 This adds a model call when a draft has issues. The challenge has a three-minute
 ceiling; a fast review keeps its existing overall `KAI_FAST_BUDGET`. Large reviews

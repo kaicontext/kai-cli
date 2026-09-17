@@ -47,16 +47,19 @@ func TestReviewCitationExtractsByLocation(t *testing.T) {
 // with any valid citation survives, and the review is not marked incomplete.
 func TestReviewChallengeToleratesOneBadCitation(t *testing.T) {
 	a := rcChallengeAnswer{
-		Review: rcTestReview(rcEscapeIssue),
+		Assessment:  "Checked the terminal command path.",
+		IntentMatch: "partial",
+		MergeReady:  3,
+		Summary:     "One escaping defect stands.",
 		Checks: []rcIssueCheck{
-			{Issue: rcFalseCDIssue, Verdict: "refuted", Reason: "cd persists", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
-			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "expansion", Evidence: []rcCheckEvidence{
+			{Issue: rcFalseCDIssue, Verdict: "refuted", RequiresRuntime: rcBool(false), Reason: "cd persists", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
+			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "expansion", Finding: "Escape the interpolated path.", Evidence: []rcCheckEvidence{
 				{Source: 2, LineStart: 1, LineEnd: 1}, // valid
 				{Source: 2, LineStart: 9, LineEnd: 9}, // unusable, dropped
 			}},
 		},
 	}
-	got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	got, unresolved, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,8 +67,8 @@ func TestReviewChallengeToleratesOneBadCitation(t *testing.T) {
 	if len(issues) != 1 || issues[0] != rcEscapeIssue {
 		t.Fatalf("a valid citation lost its finding: %v", issues)
 	}
-	if strings.Contains(got, "This review is incomplete") {
-		t.Fatalf("a resolved finding was marked incomplete: %s", got)
+	if len(unresolved) != 0 || strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("a resolved finding was marked incomplete: %v %s", unresolved, got)
 	}
 }
 
@@ -74,19 +77,25 @@ func TestReviewChallengeToleratesOneBadCitation(t *testing.T) {
 // finding still publishes. One bad citation costs one finding, never the review.
 func TestReviewChallengeDropsUnbackedFindingKeepsTheRest(t *testing.T) {
 	a := rcChallengeAnswer{
-		Review: rcTestReview(rcFalseCDIssue, rcEscapeIssue),
+		Assessment:  "Checked both allegations against the sources.",
+		IntentMatch: "partial",
+		MergeReady:  3,
+		Summary:     "One defect confirmed; one could not be settled.",
 		Checks: []rcIssueCheck{
-			{Issue: rcFalseCDIssue, Verdict: "supported", Reason: "real", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
-			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "claimed", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 5, LineEnd: 9}}},
+			{Issue: rcFalseCDIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "real", Finding: "Fix the cd handling.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
+			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "claimed", Finding: "Fix the escaping.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 5, LineEnd: 9}}},
 		},
 	}
-	got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	got, unresolved, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
 	if err != nil {
 		t.Fatalf("one bad citation withheld the whole review: %v", err)
 	}
 	_, issues, _, _, _, _ := rcParseReviewOutput(got)
 	if len(issues) != 1 || issues[0] != rcFalseCDIssue {
 		t.Fatalf("published wrong ISSUES: %v", issues)
+	}
+	if len(unresolved) != 1 || unresolved[0] != rcEscapeIssue {
+		t.Fatalf("unresolved list wrong: %v", unresolved)
 	}
 	if !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcEscapeIssue) {
 		t.Fatalf("unresolved allegation not surfaced: %s", got)
@@ -96,31 +105,37 @@ func TestReviewChallengeDropsUnbackedFindingKeepsTheRest(t *testing.T) {
 // A runtime allegation needs a review_shell experiment. Without one it is
 // unresolved even though the model claimed support; with one it publishes.
 func TestReviewChallengeRuntimeClaimNeedsExperiment(t *testing.T) {
-	runtime := rcChallengeAnswer{
-		Review: rcTestReview(rcEscapeIssue),
-		Checks: []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: true, Reason: "runtime", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}}},
+	answer := func() rcChallengeAnswer {
+		return rcChallengeAnswer{
+			Assessment:  "Assessed the escaping behavior.",
+			IntentMatch: "partial",
+			MergeReady:  3,
+			Summary:     "Escaping needs runtime confirmation.",
+			Checks:      []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "runtime", Finding: "Escape the path.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}}},
+		}
 	}
-	got, err := rcValidateChallenge(rcTestAnswer(t, runtime), []string{rcEscapeIssue}, []string{`cd "$HOME"`}, nil)
+	got, unresolved, err := rcValidateChallenge(rcTestAnswer(t, answer()), []string{rcEscapeIssue}, []string{`cd "$HOME"`}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, issues, _, _, _, _ := rcParseReviewOutput(got); len(issues) != 0 {
 		t.Fatalf("runtime claim published without an experiment: %v", issues)
 	}
-	if !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcEscapeIssue) {
-		t.Fatalf("unresolved runtime claim not surfaced: %s", got)
+	if len(unresolved) != 1 || !strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("unresolved runtime claim not surfaced: %v %s", unresolved, got)
 	}
 	// With an experiment source backing it, the same claim publishes.
-	runtime.Checks[0].Evidence[0].Source = 2 // cite the experiment result
-	got, err = rcValidateChallenge(rcTestAnswer(t, runtime), []string{rcEscapeIssue}, []string{`cd "$HOME"`, "expansion observed"}, map[int]bool{2: true})
+	backed := answer()
+	backed.Checks[0].Evidence[0].Source = 2 // cite the experiment result
+	got, unresolved, err = rcValidateChallenge(rcTestAnswer(t, backed), []string{rcEscapeIssue}, []string{`cd "$HOME"`, "expansion observed"}, map[int]bool{2: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, issues, _, _, _, _ := rcParseReviewOutput(got); len(issues) != 1 || issues[0] != rcEscapeIssue {
 		t.Fatalf("experiment-backed runtime claim not published: %v", issues)
 	}
-	if strings.Contains(got, "This review is incomplete") {
-		t.Fatalf("experiment-backed claim wrongly marked incomplete: %s", got)
+	if len(unresolved) != 0 || strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("experiment-backed claim wrongly marked incomplete: %v %s", unresolved, got)
 	}
 }
 
@@ -128,13 +143,16 @@ func TestReviewChallengeRuntimeClaimNeedsExperiment(t *testing.T) {
 // findings publish, the unresolved one is listed, and the review is incomplete.
 func TestReviewChallengeUnverifiedPublishesSupportedAndMarksIncomplete(t *testing.T) {
 	a := rcChallengeAnswer{
-		Review: rcTestReview(rcEscapeIssue),
+		Assessment:  "One allegation could not be settled without a shell.",
+		IntentMatch: "partial",
+		MergeReady:  3,
+		Summary:     "Escaping confirmed; cd behavior unresolved.",
 		Checks: []rcIssueCheck{
-			{Issue: rcFalseCDIssue, Verdict: "unverified", Reason: "could not settle without a shell"},
-			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "expansion", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
+			{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "could not settle without a shell"},
+			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "expansion", Finding: "Escape the path.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
 		},
 	}
-	got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	got, unresolved, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,26 +160,29 @@ func TestReviewChallengeUnverifiedPublishesSupportedAndMarksIncomplete(t *testin
 	if len(issues) != 1 || issues[0] != rcEscapeIssue {
 		t.Fatalf("supported finding not published alongside an unresolved one: %v", issues)
 	}
-	if !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcFalseCDIssue) {
-		t.Fatalf("unresolved allegation not surfaced: %s", got)
+	if len(unresolved) != 1 || !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcFalseCDIssue) {
+		t.Fatalf("unresolved allegation not surfaced: %v %s", unresolved, got)
 	}
 }
 
-// The whole challenge runs end-to-end through the provider path (structured
-// submission) and reaches the same incomplete-but-published outcome.
+// The whole challenge runs end-to-end through the provider path and reaches the
+// same incomplete-but-published outcome, returning the unresolved list.
 func TestReviewChallengeUnverifiedThroughProvider(t *testing.T) {
 	a := rcChallengeAnswer{
-		Review: rcTestReview(),
-		Checks: []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", Reason: "needs a shell"}},
+		Assessment:  "Could not settle the allegation without a shell.",
+		IntentMatch: "partial",
+		MergeReady:  4,
+		Summary:     "Unresolved pending runtime evidence.",
+		Checks:      []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "needs a shell"}},
 	}
 	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
 		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, a)}}}, nil
 	}}
-	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil)
+	got, unresolved, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil)
 	if err != nil {
 		t.Fatalf("unverified allegation withheld the review: %v", err)
 	}
-	if !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcFalseCDIssue) {
-		t.Fatalf("expected an incomplete review naming the unresolved claim: %s", got)
+	if len(unresolved) != 1 || !strings.Contains(got, "This review is incomplete") || !strings.Contains(got, rcFalseCDIssue) {
+		t.Fatalf("expected an incomplete review naming the unresolved claim: %v %s", unresolved, got)
 	}
 }

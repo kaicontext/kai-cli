@@ -338,12 +338,16 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// Non-nil only on the grounded path, and only describes HOW the run ended
 	// — see rcIncomplete. Used solely when the review produced nothing to parse.
 	var inc *rcIncomplete
+	// unresolved allegations the challenge published-but-could-not-settle, from
+	// whichever path ran. Non-empty means the review is incomplete even though it
+	// has a body.
+	var unresolved []string
 	if fast {
 		fastModel := rcFastModel(model, provKind)
 		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (model %s, budget %s)…\n",
 			fastModel, rcFastHardDeadline)
 		phase := time.Now()
-		raw, err = rcRunFastReview(ctx, prov, fastModel, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		raw, unresolved, err = rcRunFastReview(ctx, prov, fastModel, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
 		if err != nil {
 			return err
 		}
@@ -362,6 +366,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff, rcPathsOf(files))
 		if err != nil {
 			return err
+		}
+		if inc != nil {
+			unresolved = inc.Unresolved
 		}
 		fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
 	}
@@ -397,6 +404,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		prose = salvaged
 		incomplete = true
 		fmt.Fprintf(os.Stderr, "  review produced no conclusion — emitting an incomplete-review finding, then failing\n")
+	}
+	// A published review that could not settle every allegation is incomplete
+	// too: the body is real (it carries the supported findings), but the bundle
+	// must say so and the run must exit non-zero, or Atlas/CI read a partial
+	// review as a completed one.
+	if len(unresolved) > 0 {
+		incomplete = true
+		fmt.Fprintf(os.Stderr, "  review incomplete: %d allegation(s) unresolved (need runtime evidence): %s\n", len(unresolved), strings.Join(unresolved, "; "))
 	}
 
 	// Blast radius: walk the captured graph outward from the changed files so the
@@ -956,13 +971,14 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	}
 	if rcUsableCoda(raw) {
 		fmt.Fprintln(os.Stderr, "  challenging proposed defects before publication…")
-		checked, err := rcChallengeReview(publicationCtx, prov, model, raw, rcChallengeSources(transcript), rcConfiguredSandbox())
+		checked, unresolved, err := rcChallengeReview(publicationCtx, prov, model, raw, rcChallengeSources(transcript), rcConfiguredSandbox())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  review challenge incomplete: %v\n", err)
 			inc.ChallengeFailure = err.Error()
 			return "", inc, nil
 		}
 		raw = checked
+		inc.Unresolved = unresolved
 	}
 	return raw, inc, nil
 }
@@ -1261,6 +1277,12 @@ type rcIncomplete struct {
 	Elapsed          time.Duration
 	Turns            int
 	FilesRead        []string
+	// Unresolved is non-empty when the challenge PUBLISHED a review that is
+	// nonetheless incomplete: some allegations could not be settled (a runtime
+	// claim with no experiment). Unlike ChallengeFailure, the review body is
+	// real and kept; the caller marks the bundle incomplete and exits non-zero
+	// so Atlas/CI never read a partial review as a completed one.
+	Unresolved []string
 }
 
 // rcCoverage is the machine-written record of what a review actually did:

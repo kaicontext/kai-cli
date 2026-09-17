@@ -43,12 +43,17 @@ func rcTestAnswer(t *testing.T, answer rcChallengeAnswer) string {
 	return string(b)
 }
 
+func rcBool(b bool) *bool { return &b }
+
 func rcCDChecks() rcChallengeAnswer {
 	return rcChallengeAnswer{
-		Review: rcTestReview(rcEscapeIssue),
+		Assessment:  "Reviewed the terminal command construction.",
+		IntentMatch: "partial",
+		MergeReady:  3,
+		Summary:     "One escaping defect stands.",
 		Checks: []rcIssueCheck{
-			{Issue: rcFalseCDIssue, Verdict: "refuted", Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
-			{Issue: rcEscapeIssue, Verdict: "supported", Reason: "Double quotes still allow parameter expansion.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
+			{Issue: rcFalseCDIssue, Verdict: "refuted", RequiresRuntime: rcBool(false), Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
+			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "Double quotes still allow parameter expansion.", Finding: "Escape the path before interpolating it into the double-quoted cd.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
 		},
 	}
 }
@@ -56,15 +61,15 @@ func rcCDChecks() rcChallengeAnswer {
 // This tests publication mechanics, not the model's shell knowledge. The live
 // evaluation below separately exercises the actual model on the #418 specimen.
 func TestReviewChallengeDropsRefutedIssueAndKeepsSupportedIssue(t *testing.T) {
-	got, err := rcValidateChallenge(rcTestAnswer(t, rcCDChecks()), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	got, unresolved, err := rcValidateChallenge(rcTestAnswer(t, rcCDChecks()), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(got, rcFalseCDIssue) || !strings.Contains(got, rcEscapeIssue) {
 		t.Fatalf("wrong published allegations: %s", got)
 	}
-	if strings.Contains(got, "This review is incomplete") {
-		t.Fatalf("a fully resolved review was marked incomplete: %s", got)
+	if len(unresolved) != 0 || strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("a fully resolved review was marked incomplete: %v %s", unresolved, got)
 	}
 }
 
@@ -78,24 +83,24 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 		{"unknown issue", func(a *rcChallengeAnswer) { a.Checks[0].Issue = "phantom.go:1 — never alleged" }},
 		{"empty reason", func(a *rcChallengeAnswer) { a.Checks[0].Reason = "" }},
 		{"unknown verdict", func(a *rcChallengeAnswer) { a.Checks[0].Verdict = "maybe" }},
-		{"unchecked new issue", func(a *rcChallengeAnswer) { a.Review = rcTestReview("new.go:1 — new allegation") }},
-		{"rejected issue survives", func(a *rcChallengeAnswer) { a.Review = rcTestReview(rcFalseCDIssue, rcEscapeIssue) }},
-		{"supported issue lost", func(a *rcChallengeAnswer) { a.Review = rcTestReview() }},
-		{"contradictory readiness", func(a *rcChallengeAnswer) {
-			a.Review = strings.Replace(a.Review, "MERGE_READY: 3", "MERGE_READY: 5", 1)
-		}},
-		{"missing verdict", func(a *rcChallengeAnswer) { a.Review = "unfinished\n" + rcReviewDataMarker }},
+		{"missing runtime classification", func(a *rcChallengeAnswer) { a.Checks[0].RequiresRuntime = nil }},
+		{"supported without finding", func(a *rcChallengeAnswer) { a.Checks[1].Finding = "" }},
+		{"empty assessment", func(a *rcChallengeAnswer) { a.Assessment = "" }},
+		{"empty summary", func(a *rcChallengeAnswer) { a.Summary = "" }},
+		{"invalid intent", func(a *rcChallengeAnswer) { a.IntentMatch = "maybe" }},
+		{"invalid merge_ready", func(a *rcChallengeAnswer) { a.MergeReady = 9 }},
+		{"contradictory readiness", func(a *rcChallengeAnswer) { a.MergeReady = 5 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := rcCDChecks()
 			tc.mutate(&a)
-			got, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+			got, _, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
 			if err == nil || got != "" {
 				t.Fatalf("unchecked review escaped: %q, %v", got, err)
 			}
 		})
 	}
-	if got, err := rcValidateChallenge("not valid json", []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil); err == nil || got != "" {
+	if got, _, err := rcValidateChallenge("not valid json", []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil); err == nil || got != "" {
 		t.Fatalf("accepted malformed challenge JSON: %q %v", got, err)
 	}
 }
@@ -127,7 +132,7 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 		}
 		return provider.Response{}, errors.New("provider failed")
 	}}
-	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), sources, nil)
+	got, _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), sources, nil)
 	if err == nil || got != "" {
 		t.Fatalf("failed challenge returned draft: %q %v", got, err)
 	}
@@ -170,7 +175,7 @@ func TestReviewChallengeEvidenceLimitAndIncompleteReport(t *testing.T) {
 		t.Fatal("oversized evidence must not be silently shortened and sent")
 		return provider.Response{}, nil
 	}}
-	if _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{strings.Repeat("x", rcEvidenceLimit)}, nil); err == nil {
+	if _, _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{strings.Repeat("x", rcEvidenceLimit)}, nil); err == nil {
 		t.Fatal("accepted oversized evidence")
 	}
 	prose := rcIncompleteProse(&rcIncomplete{ChallengeFailure: "unverified allegation"})
@@ -188,9 +193,40 @@ func TestFastReviewDoesNotPublishDraftWhenChallengeFails(t *testing.T) {
 		}
 		return provider.Response{}, errors.New("challenge unavailable")
 	}}
-	got, err := rcRunFastReview(context.Background(), p, "test", "", "", "test", "", rcCDSource, nil)
+	got, _, err := rcRunFastReview(context.Background(), p, "test", "", "", "test", "", rcCDSource, nil)
 	if err == nil || got != "" || calls != 2 {
 		t.Fatalf("unchecked fast draft escaped: calls=%d result=%q err=%v", calls, got, err)
+	}
+}
+
+// The fast path must surface unresolved allegations to its caller so the bundle
+// is marked incomplete and the run exits non-zero — a published-but-partial fast
+// review must not read as a completed one.
+func TestFastReviewReportsUnresolved(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestReview(rcFalseCDIssue)}}}, nil
+		}
+		a := rcChallengeAnswer{
+			Assessment:  "Could not settle the cd behavior without a shell.",
+			IntentMatch: "partial",
+			MergeReady:  4,
+			Summary:     "Unresolved pending runtime evidence.",
+			Checks:      []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "needs a shell"}},
+		}
+		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, a)}}}, nil
+	}}
+	got, unresolved, err := rcRunFastReview(context.Background(), p, "test", "", "", "test", "", rcCDSource, nil)
+	if err != nil {
+		t.Fatalf("fast review withheld a publishable-but-incomplete result: %v", err)
+	}
+	if len(unresolved) != 1 || unresolved[0] != rcFalseCDIssue {
+		t.Fatalf("fast review did not report the unresolved allegation: %v", unresolved)
+	}
+	if !strings.Contains(got, "This review is incomplete") {
+		t.Fatalf("fast review body did not mark itself incomplete: %s", got)
 	}
 }
 
@@ -200,7 +236,7 @@ func TestReviewChallengeRejectsTruncatedAnswerAndUnexpectedTool(t *testing.T) {
 		{Parts: []message.ContentPart{message.ToolCall{ID: "bad", Name: "bash", Input: `{"command":"pwd"}`}}},
 	} {
 		p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) { return resp, nil }}
-		if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil); err == nil || got != "" {
+		if got, _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil); err == nil || got != "" {
 			t.Fatalf("accepted invalid challenge: %q %v", got, err)
 		}
 	}
@@ -216,7 +252,7 @@ func TestReviewChallengeAcceptsStructuredSubmissionWithCommentary(t *testing.T) 
 			message.ToolCall{ID: "final", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())},
 		}}, nil
 	}}
-	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{rcCDSource, `cd "$HOME"`}, nil)
+	got, _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{rcCDSource, `cd "$HOME"`}, nil)
 	if err != nil || strings.Contains(got, rcFalseCDIssue) || !strings.Contains(got, rcEscapeIssue) {
 		t.Fatalf("bad structured submission: %q %v", got, err)
 	}
@@ -227,7 +263,7 @@ func TestReviewChallengeSkipsDraftWithoutIssues(t *testing.T) {
 		t.Fatal("a draft without allegations does not need this pass")
 		return provider.Response{}, nil
 	}}
-	if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || got != rcTestReview() {
+	if got, _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || got != rcTestReview() {
 		t.Fatalf("changed issue-free draft: %q %v", got, err)
 	}
 }
@@ -258,7 +294,7 @@ const full = ws ? 'cd "' + ws + '" && ' + String(command) : String(command);
 const input = full.replace(/\r?\n/g, "\r") + "\r";
 // Sample workspace path: a literal /tmp/$HOME directory, not a variable.
 `
-	got, err := rcChallengeReview(context.Background(), prov, model, rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{source}, sandbox)
+	got, _, err := rcChallengeReview(context.Background(), prov, model, rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{source}, sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}
