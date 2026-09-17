@@ -12,11 +12,25 @@ assessment with a reason, an explicit runtime-evidence classification, and
 evidence.
 
 The published review is **assembled by the system from the validated results,**
-not copied from a model-authored blob. The challenger returns structured fields:
-an overall assessment, per-supported-finding prose, and the coda values
-(`INTENT_MATCH`, `MERGE_READY`, `SUMMARY`, `ISSUES`, `DECISIONS`). Only supported
-findings become defect prose, so a refuted or unverified allegation cannot
-survive as a confident description or recommended fix in the surrounding text.
+not copied from a model-authored blob. The challenger returns structured fields —
+a scope list, a limitations list, per-supported-finding text, decisions,
+`intent_match`, and `merge_ready` — and the system builds the body and the coda.
+There is deliberately **no free-form assessment or summary field.** The `SUMMARY`
+is derived from the final supported/refuted/unresolved counts and statuses, and
+the only review-level prose is structured scope and limitations, which describe
+coverage rather than outcomes. That leaves no free-text slot in which a refuted
+or unresolved allegation could be restated as a confident defect — verbatim *or
+paraphrased*. Consistency is achieved by construction; the gate does not rely on
+matching strings to establish it.
+
+To be precise about what is and is not verified: the system controls the
+**structure and selection** — which allegations get a section at all, and what
+the summary and coda say. The text *inside* a supported finding's section, and
+the scope, limitations, and decision items, is still model-authored. A refuted or
+unresolved allegation gets no section and no place in the summary; a supported
+finding's description is the model's, selected and placed by the system.
+Decisions (correct changes that still need a human's yes) are a genuinely
+separate list, preserved explicitly in both the prose and the `DECISIONS` coda.
 
 Evidence is cited **by location, not by copied text.** Every source is shown to
 the model with numbered lines; a citation is a source number and a line range,

@@ -47,10 +47,9 @@ func TestReviewCitationExtractsByLocation(t *testing.T) {
 // with any valid citation survives, and the review is not marked incomplete.
 func TestReviewChallengeToleratesOneBadCitation(t *testing.T) {
 	a := rcChallengeAnswer{
-		Assessment:  "Checked the terminal command path.",
+		Scope:       []string{"terminal command path"},
 		IntentMatch: "partial",
 		MergeReady:  3,
-		Summary:     "One escaping defect stands.",
 		Checks: []rcIssueCheck{
 			{Issue: rcFalseCDIssue, Verdict: "refuted", RequiresRuntime: rcBool(false), Reason: "cd persists", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
 			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "expansion", Finding: "Escape the interpolated path.", Evidence: []rcCheckEvidence{
@@ -77,10 +76,9 @@ func TestReviewChallengeToleratesOneBadCitation(t *testing.T) {
 // finding still publishes. One bad citation costs one finding, never the review.
 func TestReviewChallengeDropsUnbackedFindingKeepsTheRest(t *testing.T) {
 	a := rcChallengeAnswer{
-		Assessment:  "Checked both allegations against the sources.",
+		Scope:       []string{"both allegations against the sources"},
 		IntentMatch: "partial",
 		MergeReady:  3,
-		Summary:     "One defect confirmed; one could not be settled.",
 		Checks: []rcIssueCheck{
 			{Issue: rcFalseCDIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "real", Finding: "Fix the cd handling.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
 			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "claimed", Finding: "Fix the escaping.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 5, LineEnd: 9}}},
@@ -107,10 +105,9 @@ func TestReviewChallengeDropsUnbackedFindingKeepsTheRest(t *testing.T) {
 func TestReviewChallengeRuntimeClaimNeedsExperiment(t *testing.T) {
 	answer := func() rcChallengeAnswer {
 		return rcChallengeAnswer{
-			Assessment:  "Assessed the escaping behavior.",
+			Scope:       []string{"the escaping behavior"},
 			IntentMatch: "partial",
 			MergeReady:  3,
-			Summary:     "Escaping needs runtime confirmation.",
 			Checks:      []rcIssueCheck{{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "runtime", Finding: "Escape the path.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}}},
 		}
 	}
@@ -143,10 +140,9 @@ func TestReviewChallengeRuntimeClaimNeedsExperiment(t *testing.T) {
 // findings publish, the unresolved one is listed, and the review is incomplete.
 func TestReviewChallengeUnverifiedPublishesSupportedAndMarksIncomplete(t *testing.T) {
 	a := rcChallengeAnswer{
-		Assessment:  "One allegation could not be settled without a shell.",
+		Scope:       []string{"the terminal command path"},
 		IntentMatch: "partial",
 		MergeReady:  3,
-		Summary:     "Escaping confirmed; cd behavior unresolved.",
 		Checks: []rcIssueCheck{
 			{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "could not settle without a shell"},
 			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "expansion", Finding: "Escape the path.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
@@ -169,10 +165,9 @@ func TestReviewChallengeUnverifiedPublishesSupportedAndMarksIncomplete(t *testin
 // same incomplete-but-published outcome, returning the unresolved list.
 func TestReviewChallengeUnverifiedThroughProvider(t *testing.T) {
 	a := rcChallengeAnswer{
-		Assessment:  "Could not settle the allegation without a shell.",
+		Scope:       []string{"the diff"},
 		IntentMatch: "partial",
 		MergeReady:  4,
-		Summary:     "Unresolved pending runtime evidence.",
 		Checks:      []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "needs a shell"}},
 	}
 	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
@@ -187,34 +182,50 @@ func TestReviewChallengeUnverifiedThroughProvider(t *testing.T) {
 	}
 }
 
-// The model-authored assessment/summary/decisions must not assert an allegation
-// the challenge did not support. A summary that confidently repeats a finding
-// validation downgraded fails the challenge closed rather than publishing a
-// review that contradicts its own verdicts.
-func TestReviewChallengeRejectsFreeTextAssertingNonSupportedFinding(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		mutate func(*rcChallengeAnswer)
-	}{
-		{"summary repeats a downgraded finding", func(a *rcChallengeAnswer) {
-			a.Checks[1].Evidence = []rcCheckEvidence{{Source: 2, LineStart: 9, LineEnd: 9}} // escape downgraded
-			a.Summary = "Confirmed defect: " + rcEscapeIssue
-		}},
-		{"assessment repeats a refuted finding", func(a *rcChallengeAnswer) {
-			a.Assessment = "The change is broken because " + rcFalseCDIssue // falseCD is refuted
-		}},
-		{"decision repeats a refuted finding", func(a *rcChallengeAnswer) {
-			a.Decisions = []string{rcFalseCDIssue}
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a := rcCDChecks()
-			tc.mutate(&a)
-			got, _, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
-			if err == nil || got != "" {
-				t.Fatalf("published a review whose free text asserts a non-supported finding: %q %v", got, err)
-			}
-		})
+// The SUMMARY is derived from the validated counts, and there is no free-form
+// assessment or summary field for the model to write into. So a rejected
+// allegation has no channel to be restated — not verbatim and not paraphrased.
+//
+// The specimen is the reviewer's own: the refuted allegation "later lines run
+// outside the workspace after a successful cd", and a model that nonetheless
+// emits the paraphrase "Multiline commands execute in the wrong directory." as a
+// summary. A string guard would miss it. The contract has no such field, so the
+// paraphrase is discarded and the published SUMMARY is the derived one.
+func TestReviewChallengeSummaryIsDerivedNotModelAuthored(t *testing.T) {
+	a := rcCDChecks() // falseCD refuted, escape supported
+	raw := strings.TrimSuffix(rcTestAnswer(t, a), "}") +
+		`,"summary":"Multiline commands execute in the wrong directory.","assessment":"Later lines run outside the workspace."}`
+	got, _, err := rcValidateChallenge(raw, []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "wrong directory") || strings.Contains(got, "Later lines run outside") {
+		t.Fatalf("model-authored summary/assessment leaked into the published review: %s", got)
+	}
+	if strings.Contains(got, rcFalseCDIssue) {
+		t.Fatalf("refuted allegation surfaced in the published review: %s", got)
+	}
+	_, _, _, _, _, note := rcParseReviewOutput(got)
+	if !strings.Contains(note, "1 confirmed finding") || !strings.Contains(note, "1 refuted") {
+		t.Fatalf("SUMMARY not derived from the validated counts: %q", note)
+	}
+}
+
+// Decisions are a genuinely separate list — correct changes that need a human's
+// yes — and are preserved explicitly in both the prose and the coda.
+func TestReviewChallengePreservesSeparateDecisions(t *testing.T) {
+	a := rcCDChecks()
+	a.Decisions = []string{"Keep the new getter public — it is now part of the panel API.", "  "}
+	got, _, err := rcValidateChallenge(rcTestAnswer(t, a), []string{rcFalseCDIssue, rcEscapeIssue}, []string{rcCDSource, `cd "$HOME"`}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, decisions, _, _, _ := rcParseReviewOutput(got)
+	if len(decisions) != 1 || !strings.Contains(decisions[0], "Keep the new getter public") {
+		t.Fatalf("decision not preserved in the coda (blank dropped): %v", decisions)
+	}
+	if !strings.Contains(got, "## Decisions") {
+		t.Fatalf("decision not preserved in the prose: %s", got)
 	}
 }
 
@@ -223,10 +234,9 @@ func TestReviewChallengeRejectsFreeTextAssertingNonSupportedFinding(t *testing.T
 // sandbox, and vice versa.
 func TestReviewChallengeIncompleteBannerGivesPerClaimReason(t *testing.T) {
 	a := rcChallengeAnswer{
-		Assessment:  "Neither allegation could be settled.",
+		Scope:       []string{"both allegations"},
 		IntentMatch: "partial",
 		MergeReady:  4,
-		Summary:     "Two open questions remain.",
 		Checks: []rcIssueCheck{
 			{Issue: rcFalseCDIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "x", Finding: "fix", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 9, LineEnd: 9}}}, // bad citation
 			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(true), Reason: "y", Finding: "fix", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},   // runtime, no experiment

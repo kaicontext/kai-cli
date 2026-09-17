@@ -47,10 +47,9 @@ func rcBool(b bool) *bool { return &b }
 
 func rcCDChecks() rcChallengeAnswer {
 	return rcChallengeAnswer{
-		Assessment:  "Reviewed the terminal command construction.",
+		Scope:       []string{"frontend/dist/panel-terminal.js command construction"},
 		IntentMatch: "partial",
 		MergeReady:  3,
-		Summary:     "One escaping defect stands.",
 		Checks: []rcIssueCheck{
 			{Issue: rcFalseCDIssue, Verdict: "refuted", RequiresRuntime: rcBool(false), Reason: "A successful cd changes shell state for both lines.", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 2}}},
 			{Issue: rcEscapeIssue, Verdict: "supported", RequiresRuntime: rcBool(false), Reason: "Double quotes still allow parameter expansion.", Finding: "Escape the path before interpolating it into the double-quoted cd.", Evidence: []rcCheckEvidence{{Source: 2, LineStart: 1, LineEnd: 1}}},
@@ -85,8 +84,8 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 		{"unknown verdict", func(a *rcChallengeAnswer) { a.Checks[0].Verdict = "maybe" }},
 		{"missing runtime classification", func(a *rcChallengeAnswer) { a.Checks[0].RequiresRuntime = nil }},
 		{"supported without finding", func(a *rcChallengeAnswer) { a.Checks[1].Finding = "" }},
-		{"empty assessment", func(a *rcChallengeAnswer) { a.Assessment = "" }},
-		{"empty summary", func(a *rcChallengeAnswer) { a.Summary = "" }},
+		{"empty scope", func(a *rcChallengeAnswer) { a.Scope = nil }},
+		{"blank-only scope", func(a *rcChallengeAnswer) { a.Scope = []string{"  "} }},
 		{"invalid intent", func(a *rcChallengeAnswer) { a.IntentMatch = "maybe" }},
 		{"invalid merge_ready", func(a *rcChallengeAnswer) { a.MergeReady = 9 }},
 		{"contradictory readiness", func(a *rcChallengeAnswer) { a.MergeReady = 5 }},
@@ -210,10 +209,9 @@ func TestFastReviewReportsUnresolved(t *testing.T) {
 			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestReview(rcFalseCDIssue)}}}, nil
 		}
 		a := rcChallengeAnswer{
-			Assessment:  "Could not settle the cd behavior without a shell.",
+			Scope:       []string{"the diff"},
 			IntentMatch: "partial",
 			MergeReady:  4,
-			Summary:     "Unresolved pending runtime evidence.",
 			Checks:      []rcIssueCheck{{Issue: rcFalseCDIssue, Verdict: "unverified", RequiresRuntime: rcBool(true), Reason: "needs a shell"}},
 		}
 		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, a)}}}, nil

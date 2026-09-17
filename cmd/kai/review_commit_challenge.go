@@ -38,16 +38,18 @@ Every check must classify whether the allegation requires runtime evidence. Set 
 For shell or language-runtime claims, prefer a minimal reproduction using review_shell when available. You may call it at most FOUR times in total; combine related assertions into one script. It runs only synthetic snippets in an isolated container: no repository, credentials, host mounts, or network. Its environment is POSIX /bin/sh, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
 
 Finish by calling submit_review (plain JSON is accepted if tool submission is unavailable) with:
-{"assessment":"overall review prose: scope reviewed and the overall read. Do NOT assert as a defect anything that is not a supported finding below.",
+{"scope":["what was reviewed: files, paths, behaviors actually examined"],
+ "limitations":["what was NOT covered, and any caveat on the coverage"],
  "intent_match":"verified|partial|diverges",
  "merge_ready":1-5,
- "summary":"one line",
- "decisions":["a correct change that still needs a human's yes", "..."],
+ "decisions":["a correct change that still needs a human's yes — a genuinely separate call, not a restatement of any allegation"],
  "checks":[{"issue":"exact original ISSUES bullet, without its list marker","verdict":"supported|refuted|unverified","requires_runtime":true,"reason":"concrete reasoning, including the counterexample considered","finding":"for a SUPPORTED verdict only: the published defect description and recommended fix","evidence":[{"source":1,"line_start":3,"line_end":5}]}]}
+
+There is no free-form assessment or summary field, and none is wanted: the system derives the SUMMARY from the final supported/refuted/unresolved counts, and the only review-level prose is your structured scope and limitations. Scope and limitations describe COVERAGE — what you did and did not examine. They are not a place to state, hint at, or paraphrase any allegation's outcome; every allegation's outcome is expressed only through its check.
 
 There must be exactly one check per supplied issue. A "supported" or "refuted" verdict needs at least one citation into the supplied sources (or a successful review_shell result); "supported" additionally needs a non-empty "finding". An "unverified" check means the allegation could not be settled with the evidence available; do not turn missing evidence into an all-clear.
 
-The system builds the published review from your results: your "assessment" prose, one section per SUPPORTED finding (its "issue" and "finding"), and the coda (INTENT_MATCH, MERGE_READY, SUMMARY, ISSUES, DECISIONS). Refuted and unverified allegations are never published as defects. Recompute intent_match, merge_ready, and summary from the supported findings only. When no proposed defect is supported, say so in the assessment; do not invent broader coverage. A fast draft remains a fast, limited review, with merge_ready at most 4.`
+The system builds the published review from your results: a Scope section, one section per SUPPORTED finding (its "issue" and "finding"), the unresolved allegations with their reasons, a Limitations section, your decisions, and the coda (INTENT_MATCH, MERGE_READY, a derived SUMMARY, ISSUES, DECISIONS). Refuted and unverified allegations are never published as defects. Set intent_match and merge_ready from the supported findings only. A fast draft remains a fast, limited review, with merge_ready at most 4.`
 
 const rcEvidenceLimit = 1024 * 1024
 
@@ -66,12 +68,19 @@ type rcIssueCheck struct {
 	Evidence        []rcCheckEvidence `json:"evidence"`
 }
 
+// rcChallengeAnswer is the challenger's structured result. There is deliberately
+// no free-form assessment or summary field: the SUMMARY is derived by the system
+// from the final supported/refuted/unresolved counts, and the only review-level
+// prose is structured scope and limitations. That leaves no free-text slot in
+// which a refuted or unresolved allegation could be restated — verbatim or
+// paraphrased — as a confident defect. Consistency is achieved by construction,
+// not by matching strings.
 type rcChallengeAnswer struct {
-	Assessment  string         `json:"assessment"`
+	Scope       []string       `json:"scope"`       // what was reviewed
+	Limitations []string       `json:"limitations"` // what was not covered, and caveats
 	IntentMatch string         `json:"intent_match"`
 	MergeReady  int            `json:"merge_ready"`
-	Summary     string         `json:"summary"`
-	Decisions   []string       `json:"decisions"`
+	Decisions   []string       `json:"decisions"` // correct changes that still need a human's yes
 	Checks      []rcIssueCheck `json:"checks"`
 }
 
@@ -89,16 +98,16 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 		"finding":          str(),
 		"evidence":         map[string]any{"type": "array", "items": evidence},
 	}, "required": []string{"issue", "verdict", "requires_runtime", "reason", "evidence"}}
-	return tools.ToolInfo{Name: "submit_review", Description: "Submit the checked review as structured results. The published review is assembled from these fields. This ends the challenge.",
+	return tools.ToolInfo{Name: "submit_review", Description: "Submit the checked review as structured results. The published review and its summary are assembled by the system from these fields. This ends the challenge.",
 		Parameters: map[string]any{
-			"assessment":   str(),
+			"scope":        map[string]any{"type": "array", "items": str()},
+			"limitations":  map[string]any{"type": "array", "items": str()},
 			"intent_match": map[string]any{"type": "string", "enum": []string{"verified", "partial", "diverges"}},
 			"merge_ready":  intg(),
-			"summary":      str(),
 			"decisions":    map[string]any{"type": "array", "items": str()},
 			"checks":       map[string]any{"type": "array", "items": check},
 		},
-		Required: []string{"assessment", "intent_match", "merge_ready", "summary", "checks"}}
+		Required: []string{"scope", "intent_match", "merge_ready", "checks"}}
 }
 
 // Keep complete tool results, including evidence past the old 2,000-character
@@ -284,9 +293,12 @@ func rcValidateChallenge(raw string, issues, sources []string, experiment map[in
 	if err := json.Unmarshal([]byte(raw), &answer); err != nil {
 		return "", nil, fmt.Errorf("invalid challenge JSON: %w", err)
 	}
-	if strings.TrimSpace(answer.Assessment) == "" || strings.TrimSpace(answer.Summary) == "" {
-		return "", nil, fmt.Errorf("challenge produced no assessment or summary")
+	scope := rcNonEmpty(answer.Scope)
+	if len(scope) == 0 {
+		return "", nil, fmt.Errorf("challenge did not state what it reviewed (empty scope)")
 	}
+	limitations := rcNonEmpty(answer.Limitations)
+	decisions := rcNonEmpty(answer.Decisions)
 	match, ok := rcIntentVerdicts[strings.ToLower(strings.TrimSpace(answer.IntentMatch))]
 	if !ok || match == finding.MatchUnknown {
 		return "", nil, fmt.Errorf("challenge produced an unknown intent verdict %q", answer.IntentMatch)
@@ -359,28 +371,13 @@ func rcValidateChallenge(raw string, issues, sources []string, experiment map[in
 	if len(seen) != len(wanted) {
 		return "", nil, fmt.Errorf("challenge did not check every allegation")
 	}
-	// The model-authored review-level text (assessment, summary, decisions) must
-	// not assert an allegation the challenge did not support. Per-finding defect
-	// prose comes only from supported checks, but a non-supported allegation
-	// repeated verbatim here would still read as a confident defect, so it fails
-	// closed.
-	freeText := append([]string{answer.Assessment, answer.Summary}, answer.Decisions...)
-	for _, issue := range issues {
-		if _, ok := keptFinding[issue]; ok {
-			continue
-		}
-		for _, field := range freeText {
-			if strings.Contains(field, issue) {
-				return "", nil, fmt.Errorf("challenge asserted the non-supported allegation %q in its assessment, summary, or decisions", issue)
-			}
-		}
-	}
 	kept := rcIssueOrder(issues, func(i string) bool { _, ok := keptFinding[i]; return ok })
 	unresolved := rcIssueOrder(issues, func(i string) bool { _, ok := unresolvedReason[i]; return ok })
+	refuted := len(issues) - len(kept) - len(unresolved)
 	// Readiness must be coherent with what actually publishes.
 	if (len(kept) > 0 && readiness > finding.ReadinessSmallFixes) ||
 		(len(kept) == 0 && len(unresolved) == 0 && readiness < finding.ReadinessDecideThenMerge) ||
-		(len(answer.Decisions) > 0 && readiness == finding.ReadinessMerge) {
+		(len(decisions) > 0 && readiness == finding.ReadinessMerge) {
 		return "", nil, fmt.Errorf("challenge readiness contradicts the surviving findings")
 	}
 	// An unresolved allegation caps readiness so it cannot ride out clean.
@@ -390,8 +387,46 @@ func rcValidateChallenge(raw string, issues, sources []string, experiment map[in
 	for _, check := range answer.Checks {
 		fmt.Fprintf(os.Stderr, "  challenge: %s — %s\n    %s\n", check.Verdict, check.Issue, check.Reason)
 	}
-	review := rcAssembleReview(answer.Assessment, kept, keptFinding, unresolved, unresolvedReason, match, readiness, answer.Summary, answer.Decisions)
+	summary := rcDeriveSummary(len(kept), refuted, len(unresolved), match, readiness)
+	review := rcAssembleReview(scope, limitations, kept, keptFinding, unresolved, unresolvedReason, match, readiness, summary, decisions)
 	return review, unresolved, nil
+}
+
+// rcNonEmpty trims a list of model-supplied strings and drops the blanks.
+func rcNonEmpty(items []string) []string {
+	var out []string
+	for _, s := range items {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// rcDeriveSummary builds the coda SUMMARY from the final counts and statuses. It
+// is a function of what was validated, so it cannot restate — verbatim or in
+// paraphrase — an allegation the challenge refuted or could not settle.
+func rcDeriveSummary(kept, refuted, unresolved int, match finding.Match, readiness finding.Readiness) string {
+	plural := func(n int) string {
+		if n == 1 {
+			return ""
+		}
+		return "s"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d confirmed finding%s", kept, plural(kept))
+	if refuted > 0 {
+		fmt.Fprintf(&b, ", %d refuted", refuted)
+	}
+	if unresolved > 0 {
+		fmt.Fprintf(&b, ", %d unresolved", unresolved)
+	}
+	b.WriteString(".")
+	if unresolved > 0 {
+		b.WriteString(" Review incomplete; see the unresolved allegations.")
+	}
+	fmt.Fprintf(&b, " Intent %s; readiness: %s.", string(match), readiness.Label())
+	return b.String()
 }
 
 // rcIssueOrder returns the members matched by keep, in the order they appear in
@@ -411,14 +446,19 @@ func rcIssueOrder(issues []string, keep func(string) bool) []string {
 // incomplete banner listing any unresolved allegation, and a single machine
 // coda. Nothing the model wrote about a refuted or unresolved allegation is
 // copied through.
-func rcAssembleReview(assessment string, kept []string, findingText map[string]string, unresolved []string, unresolvedReason map[string]string, match finding.Match, readiness finding.Readiness, summary string, decisions []string) string {
+func rcAssembleReview(scope, limitations, kept []string, findingText map[string]string, unresolved []string, unresolvedReason map[string]string, match finding.Match, readiness finding.Readiness, summary string, decisions []string) string {
 	var b strings.Builder
-	b.WriteString(strings.TrimSpace(assessment))
+	b.WriteString("## Scope\n")
+	for _, s := range scope {
+		fmt.Fprintf(&b, "- %s\n", s)
+	}
 	if len(kept) > 0 {
-		b.WriteString("\n\n## Findings\n")
+		b.WriteString("\n## Findings\n")
 		for _, issue := range kept {
 			fmt.Fprintf(&b, "\n### %s\n%s\n", issue, findingText[issue])
 		}
+	} else {
+		b.WriteString("\nNo proposed defect survived this check within the reviewed scope.\n")
 	}
 	if len(unresolved) > 0 {
 		b.WriteString("\n**This review is incomplete.** ")
@@ -426,7 +466,19 @@ func rcAssembleReview(assessment string, kept []string, findingText map[string]s
 		for _, issue := range unresolved {
 			fmt.Fprintf(&b, "- %s — %s\n", issue, unresolvedReason[issue])
 		}
-		b.WriteString("Re-run the review with the evidence needed to settle them (an isolated experiment for runtime claims).")
+		b.WriteString("Re-run the review with the evidence needed to settle them (an isolated experiment for runtime claims).\n")
+	}
+	if len(limitations) > 0 {
+		b.WriteString("\n## Limitations\n")
+		for _, l := range limitations {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+	}
+	if len(decisions) > 0 {
+		b.WriteString("\n## Decisions\n")
+		for _, d := range decisions {
+			fmt.Fprintf(&b, "- %s\n", d)
+		}
 	}
 	fmt.Fprintf(&b, "\n\n%s\nINTENT_MATCH: %s\nMERGE_READY: %d\nSUMMARY: %s\n", rcReviewDataMarker, string(match), int(readiness), strings.TrimSpace(summary))
 	if len(decisions) > 0 {
