@@ -1,0 +1,166 @@
+{
+ "provenance": "kai-cli review-commit --deep, revision 9a4a1ff (binary sha256 eac35eb4a6d3b0da…), deep attempt 3 of 2026-09-17, scratch repo e2e-429 at c478d2f (the actual #429 change), snapshot b8f5add6821e. Challenger and drafter z-ai/glm-5.2 (confirmed from response metadata). Sources are exactly what the challenger received in its final request (014), line-number prefixes stripped; experiments are the recorded rcExperimentRecord values from the emitted bundle; submitted is the raw submit_review arguments from response 014, accepted by the validator as-is.",
+ "requirement": {
+  "stated": "play button: cd into the workspace before running the command",
+  "authorComment": [
+   "// Prefix a cd into the workspace so the command always runs in the",
+   "// correct directory. JSON.stringify quotes the path \"safely\"."
+  ],
+  "reconstructedIntentMatch": "verified"
+ },
+ "issues": [
+  "frontend/dist/app.js:9 — `cd <path> && <command>` silently aborts the command when the workspace directory is missing or stale, where the old code ran it unconditionally; depends on `workspace()` never returning a non-existent path, which I could not read.",
+  "frontend/dist/app.js:8 — `JSON.stringify` double-quoting is not fully POSIX-safe for paths containing `$`, backticks, or `\\`; the \"safely\" comment overstates it.",
+  "frontend/dist/app.js:12 — the change assumes the terminal panel writes `command` verbatim to a POSIX sh; if the panel re-parses or re-quotes the value, the embedded `cd &&` may not behave as intended (panel implementation not in this repo)."
+ ],
+ "decisions": [],
+ "sources": [
+  "AUTHOR CONTEXT (the change author's own description):\nplay button: cd into the workspace before running the command\n\nWHERE THESE LIVE (resolved from the repository before this review started — treat as already-run searches; do not re-run them):\n- POSIX: frontend/dist/app.js:11\n- select: frontend/dist/app.js:12\n- stringify: frontend/dist/app.js:7, frontend/dist/app.js:9\n- workspace: frontend/dist/app.js:6, frontend/dist/app.js:8\n- wsPath: frontend/dist/app.js:8, frontend/dist/app.js:9\n- Panels: frontend/dist/app.js:8, frontend/dist/app.js:10, frontend/dist/app.js:12\n\nINTENT:\nWhen the play button runs a command, it should first change into the workspace directory so the command executes in the correct working directory. The workspace path is obtained from `window.Panels.workspace()` and safely quoted using `JSON.stringify` before being prefixed as a `cd` command joined with `&&`. If no workspace path is available, the original command should be run unmodified.\n\nDIFF:\ndiff --git a/frontend/dist/app.js b/frontend/dist/app.js\nindex 7a80799..c50612d 100644\n--- a/frontend/dist/app.js\n+++ b/frontend/dist/app.js\n@@ -3,6 +3,11 @@ document.addEventListener(\"click\", (ev) => {\n   const code = ev.target.closest(\"[data-run-command]\");\n   if (!code) return;\n   const command = commandFromFence(code.textContent);\n+  // Prefix a cd into the workspace so the command always runs in the\n+  // correct directory. JSON.stringify quotes the path \"safely\".\n+  const wsPath = (window.Panels && typeof window.Panels.workspace === \"function\") ? window.Panels.workspace() : \"\";\n+  const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\n   Panels.setOpen(true);\n-  Panels.select(\"terminal\", { command });\n+  // The terminal panel writes the string verbatim to its persistent POSIX sh.\n+  Panels.select(\"terminal\", { command: full });\n });\n",
+  "kai_context_lookup {}\nPre-resolved entry points (from code-shaped tokens in your message):\n\nThese entry points were resolved against the project's call graph. They're a starting hint, not a constraint — if they don't seem related to the actual issue, search normally. Tracing forward from the entry point is usually more productive than brainstorming hypotheses.\n\nEntry: frontend/dist/app.js (via file index)\n  file: frontend/dist/app.js\n\nEntry: wsPath (via symbol index)\n  → wsPath (frontend/dist/app.js)",
+  "kai_view {\"file_path\": \"frontend/dist/app.js\"}\n[git: clean · last commit c478d2f 3 hours ago]\n1: // play-button (data-run-command) click handler\n2: document.addEventListener(\"click\", (ev) => {\n3:   const code = ev.target.closest(\"[data-run-command]\");\n4:   if (!code) return;\n5:   const command = commandFromFence(code.textContent);\n6:   // Prefix a cd into the workspace so the command always runs in the\n7:   // correct directory. JSON.stringify quotes the path \"safely\".\n8:   const wsPath = (window.Panels && typeof window.Panels.workspace === \"function\") ? window.Panels.workspace() : \"\";\n9:   const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\n10:   Panels.setOpen(true);\n11:   // The terminal panel writes the string verbatim to its persistent POSIX sh.\n12:   Panels.select(\"terminal\", { command: full });\n13: });\n14: \n\n\n[turn 1/22 · edits: 0 · reads: 1 · context: 4%]",
+  "kai_grep {\"path\": \"frontend\", \"query\": \"commandFromFence\"}\nkai_grep: 1 hit(s) across 1 file(s)\n  frontend/dist/app.js [1]\n    L5: const command = commandFromFence(code.textContent);\n\n[turn 2/22 · edits: 0 · reads: 4 · context: 4%]",
+  "kai_grep {\"path\": \"frontend\", \"query\": \"Panels.select\"}\nkai_grep: 1 hit(s) across 1 file(s)\n  frontend/dist/app.js [1]\n    L12: Panels.select(\"terminal\", { command: full });\n\n[turn 2/22 · edits: 0 · reads: 4 · context: 4%]",
+  "kai_grep {\"path\": \"frontend\", \"query\": \"workspace\"}\nkai_grep: 2 hit(s) across 1 file(s)\n  frontend/dist/app.js [2]\n    L6: // Prefix a cd into the workspace so the command always runs in the\n    L8: const wsPath = (window.Panels && typeof window.Panels.workspace === \"function\") ? window.Panels.workspace() : \"\";\n\n[turn 2/22 · edits: 0 · reads: 4 · context: 4%]",
+  "kai_tree {\"depth\": 3, \"path\": \"frontend\"}\nkai_tree: frontend (depth 3)\ndist/\n  app.js\n\n[turn 3/22 · edits: 0 · reads: 5 · context: 4%]",
+  "kai_tree {\"depth\": 2, \"path\": \"\"}\nkai_tree: . (depth 2)\nfrontend/\n  dist/  [1]\n\n[turn 4/22 · edits: 0 · reads: 6 · context: 4%]",
+  "kai_grep {\"query\": \"Panels\"}\nkai_grep: 3 hit(s) across 1 file(s)\n  frontend/dist/app.js [3]\n    L8: const wsPath = (window.Panels && typeof window.Panels.workspace === \"function\") ? window.Panels.workspace() : \"\";\n    L10: Panels.setOpen(true);\n    L12: Panels.select(\"terminal\", { command: full });\n\n[turn 5/22 · edits: 0 · reads: 9 · context: 4%]",
+  "kai_grep {\"query\": \"setOpen\"}\nkai_grep: 1 hit(s) across 1 file(s)\n  frontend/dist/app.js [1]\n    L10: Panels.setOpen(true);\n\n[turn 5/22 · edits: 0 · reads: 9 · context: 4%]",
+  "kai_grep {\"query\": \"commandFromFence\"}\nkai_grep: 1 hit(s) across 1 file(s)\n  frontend/dist/app.js [1]\n    L5: const command = commandFromFence(code.textContent);\n\n[turn 5/22 · edits: 0 · reads: 9 · context: 4%]",
+  "kai_files {\"pattern\": \"**/*.{js,ts,html}\"}\nkai_files: no matches for \"**/*.{js,ts,html}\" under \"\"\n\n(zero matches. Next: open the likely file with kai_view)\n\n[turn 6/22 · edits: 0 · reads: 11 · context: 4%]",
+  "kai_grep {\"query\": \"terminal\"}\nkai_grep: 2 hit(s) across 1 file(s)\n  frontend/dist/app.js [2]\n    L11: // The terminal panel writes the string verbatim to its persistent POSIX sh.\n    L12: Panels.select(\"terminal\", { command: full });\n\n[turn 6/22 · edits: 0 · reads: 11 · context: 4%]",
+  "kai_view {\"file_path\": \"frontend/dist/app.js\"}\n[git: clean · last commit c478d2f 3 hours ago]\n1: // play-button (data-run-command) click handler\n2: document.addEventListener(\"click\", (ev) => {\n3:   const code = ev.target.closest(\"[data-run-command]\");\n4:   if (!code) return;\n5:   const command = commandFromFence(code.textContent);\n6:   // Prefix a cd into the workspace so the command always runs in the\n7:   // correct directory. JSON.stringify quotes the path \"safely\".\n8:   const wsPath = (window.Panels && typeof window.Panels.workspace === \"function\") ? window.Panels.workspace() : \"\";\n9:   const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\n10:   Panels.setOpen(true);\n11:   // The terminal panel writes the string verbatim to its persistent POSIX sh.\n12:   Panels.select(\"terminal\", { command: full });\n13: });\n14: \n\n\n[deduped: identical kai_view was called earlier this run; result is unchanged. If you need fresh data, change your arguments.]\n\n[turn 7/22 · edits: 0 · reads: 12 · context: 5%]",
+  "Runtime: node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 /bin/sh (non-interactive, isolated)\nOutcome: completed\nMode: construct\nSetup:\nmkdir -p '/tmp/ws$dir' '/tmp/ws`back`' '/tmp/ws back' '/tmp/ws\"q\"'\nConstruct (Node, prints the command):\n// Reproduce how app.js builds the command string, then exercise the exact\n// inputs the allegation names: paths containing $, backtick, space, and quote.\nconst command = 'echo ran';\nconst cases = [\n  '/tmp/ws$dir',\n  '/tmp/ws`back`',\n  '/tmp/ws back',\n  '/tmp/ws\"q\"',\n];\nfor (const wsPath of cases) {\n  const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\n  process.stdout.write(full + '\\n');\n  process.stdout.write('---\\n');\n}\n\nGenerated command (executed verbatim by sh):\ncd \"/tmp/ws$dir\" && echo ran\n---\ncd \"/tmp/ws`back`\" && echo ran\n---\ncd \"/tmp/ws back\" && echo ran\n---\ncd \"/tmp/ws\\\"q\\\"\" && echo ran\n---\nExit code: 127\nObserved working directory after the command: /tmp/ws\"q\"\nstdout:\nran\nran\n\nstderr:\n/tmp/__kai_run.sh: cd: line 1: can't cd to /tmp/ws: No such file or directory\n/tmp/__kai_run.sh: line 2: ---: not found\n/tmp/__kai_run.sh: line 2: back: not found\n/tmp/__kai_run.sh: cd: line 3: can't cd to /tmp/ws: No such file or directory\n/tmp/__kai_run.sh: line 4: ---: not found\n/tmp/__kai_run.sh: line 6: ---: not found\n/tmp/__kai_run.sh: line 8: ---: not found\n\nAssertions (numbered; each is an observation — expected vs observed. When you cite this experiment, list the NUMBER(S) of the assertion(s) that are evidence for the allegation):\n  1. FAIL exit \"0\" (observed \"127\")\n  2. PASS stdout_contains \"ran\" (observed \"ran\\nran\\n\")\nAll assertions passed: false",
+  "Runtime: node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 /bin/sh (non-interactive, isolated)\nOutcome: completed\nMode: construct\nSetup:\nmkdir -p '/tmp/ws$dir'\nConstruct (Node, prints the command):\n// Fidelity: exactly reproduce app.js line 9 for a path containing a literal $.\n// app.js: const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nconst wsPath = '/tmp/ws$dir';\nconst command = 'pwd';\nconst full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nprocess.stdout.write(full);\n\nGenerated command (executed verbatim by sh):\ncd \"/tmp/ws$dir\" && pwd\nExit code: 2\nObserved working directory after the command: /tmp\nstdout:\n\nstderr:\n/tmp/__kai_run.sh: cd: line 1: can't cd to /tmp/ws: No such file or directory\n\nAssertions (numbered; each is an observation — expected vs observed. When you cite this experiment, list the NUMBER(S) of the assertion(s) that are evidence for the allegation):\n  1. FAIL exit \"0\" (observed \"2\")\n  2. FAIL stdout_contains \"/tmp/ws$dir\" (observed \"\")\n  3. FAIL pwd \"/tmp/ws$dir\" (observed \"/tmp\")\nAll assertions passed: false",
+  "Runtime: node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 /bin/sh (non-interactive, isolated)\nOutcome: completed\nMode: construct\nSetup:\nmkdir -p '/tmp/ws`back`'\nConstruct (Node, prints the command):\n// Fidelity: exactly reproduce app.js line 9 for a path containing a literal backtick.\n// app.js: const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nconst wsPath = '/tmp/ws`back`';\nconst command = 'pwd';\nconst full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nprocess.stdout.write(full);\n\nGenerated command (executed verbatim by sh):\ncd \"/tmp/ws`back`\" && pwd\nExit code: 2\nObserved working directory after the command: /tmp\nstdout:\n\nstderr:\n/tmp/__kai_run.sh: line 0: back: not found\n/tmp/__kai_run.sh: cd: line 1: can't cd to /tmp/ws: No such file or directory\n\nAssertions (numbered; each is an observation — expected vs observed. When you cite this experiment, list the NUMBER(S) of the assertion(s) that are evidence for the allegation):\n  1. FAIL exit \"0\" (observed \"2\")\n  2. FAIL stdout_contains \"/tmp/ws`back`\" (observed \"\")\n  3. FAIL pwd \"/tmp/ws`back`\" (observed \"/tmp\")\nAll assertions passed: false",
+  "Runtime: node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 /bin/sh (non-interactive, isolated)\nOutcome: completed\nMode: construct\nSetup:\nmkdir -p '/tmp/ws back'\nConstruct (Node, prints the command):\n// Fidelity: exactly reproduce app.js line 9 for a missing workspace path.\n// The allegation: cd fails, && short-circuits, command never runs, user sees nothing.\nconst wsPath = '/bad/missing/path';\nconst command = 'echo COMMAND_RAN';\nconst full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nprocess.stdout.write(full);\n\nGenerated command (executed verbatim by sh):\ncd \"/bad/missing/path\" && echo COMMAND_RAN\nExit code: 2\nObserved working directory after the command: /tmp\nstdout:\n\nstderr:\n/tmp/__kai_run.sh: cd: line 1: can't cd to /bad/missing/path: No such file or directory\n\nAssertions (numbered; each is an observation — expected vs observed. When you cite this experiment, list the NUMBER(S) of the assertion(s) that are evidence for the allegation):\n  1. FAIL exit \"0\" (observed \"2\")\n  2. FAIL stdout_contains \"COMMAND_RAN\" (observed \"\")\nAll assertions passed: false"
+ ],
+ "experimentImage": "node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32",
+ "experiments": {
+  "15": {
+   "outcome": "completed",
+   "mode": "construct",
+   "setup": "mkdir -p '/tmp/ws$dir' '/tmp/ws`back`' '/tmp/ws back' '/tmp/ws\"q\"'",
+   "construct": "// Reproduce how app.js builds the command string, then exercise the exact\n// inputs the allegation names: paths containing $, backtick, space, and quote.\nconst command = 'echo ran';\nconst cases = [\n  '/tmp/ws$dir',\n  '/tmp/ws`back`',\n  '/tmp/ws back',\n  '/tmp/ws\"q\"',\n];\nfor (const wsPath of cases) {\n  const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\n  process.stdout.write(full + '\\n');\n  process.stdout.write('---\\n');\n}\n",
+   "generatedCommand": "cd \"/tmp/ws$dir\" && echo ran\n---\ncd \"/tmp/ws`back`\" && echo ran\n---\ncd \"/tmp/ws back\" && echo ran\n---\ncd \"/tmp/ws\\\"q\\\"\" && echo ran\n---",
+   "exitCode": 127,
+   "observedPwd": "/tmp/ws\"q\"",
+   "stdout": "ran\nran\n",
+   "stderr": "/tmp/__kai_run.sh: cd: line 1: can't cd to /tmp/ws: No such file or directory\n/tmp/__kai_run.sh: line 2: ---: not found\n/tmp/__kai_run.sh: line 2: back: not found\n/tmp/__kai_run.sh: cd: line 3: can't cd to /tmp/ws: No such file or directory\n/tmp/__kai_run.sh: line 4: ---: not found\n/tmp/__kai_run.sh: line 6: ---: not found\n/tmp/__kai_run.sh: line 8: ---: not found\n",
+   "assertions": [
+    {
+     "kind": "exit",
+     "value": "0",
+     "passed": false,
+     "observed": "127"
+    },
+    {
+     "kind": "stdout_contains",
+     "value": "ran",
+     "passed": true,
+     "observed": "ran\nran\n"
+    }
+   ],
+   "hasAssertions": true,
+   "allPassed": false
+  },
+  "16": {
+   "outcome": "completed",
+   "mode": "construct",
+   "setup": "mkdir -p '/tmp/ws$dir'",
+   "construct": "// Fidelity: exactly reproduce app.js line 9 for a path containing a literal $.\n// app.js: const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nconst wsPath = '/tmp/ws$dir';\nconst command = 'pwd';\nconst full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nprocess.stdout.write(full);\n",
+   "generatedCommand": "cd \"/tmp/ws$dir\" && pwd",
+   "exitCode": 2,
+   "observedPwd": "/tmp",
+   "stdout": "",
+   "stderr": "/tmp/__kai_run.sh: cd: line 1: can't cd to /tmp/ws: No such file or directory\n",
+   "assertions": [
+    {
+     "kind": "exit",
+     "value": "0",
+     "passed": false,
+     "observed": "2"
+    },
+    {
+     "kind": "stdout_contains",
+     "value": "/tmp/ws$dir",
+     "passed": false,
+     "observed": ""
+    },
+    {
+     "kind": "pwd",
+     "value": "/tmp/ws$dir",
+     "passed": false,
+     "observed": "/tmp"
+    }
+   ],
+   "hasAssertions": true,
+   "allPassed": false
+  },
+  "17": {
+   "outcome": "completed",
+   "mode": "construct",
+   "setup": "mkdir -p '/tmp/ws`back`'",
+   "construct": "// Fidelity: exactly reproduce app.js line 9 for a path containing a literal backtick.\n// app.js: const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nconst wsPath = '/tmp/ws`back`';\nconst command = 'pwd';\nconst full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nprocess.stdout.write(full);\n",
+   "generatedCommand": "cd \"/tmp/ws`back`\" && pwd",
+   "exitCode": 2,
+   "observedPwd": "/tmp",
+   "stdout": "",
+   "stderr": "/tmp/__kai_run.sh: line 0: back: not found\n/tmp/__kai_run.sh: cd: line 1: can't cd to /tmp/ws: No such file or directory\n",
+   "assertions": [
+    {
+     "kind": "exit",
+     "value": "0",
+     "passed": false,
+     "observed": "2"
+    },
+    {
+     "kind": "stdout_contains",
+     "value": "/tmp/ws`back`",
+     "passed": false,
+     "observed": ""
+    },
+    {
+     "kind": "pwd",
+     "value": "/tmp/ws`back`",
+     "passed": false,
+     "observed": "/tmp"
+    }
+   ],
+   "hasAssertions": true,
+   "allPassed": false
+  },
+  "18": {
+   "outcome": "completed",
+   "mode": "construct",
+   "setup": "mkdir -p '/tmp/ws back'",
+   "construct": "// Fidelity: exactly reproduce app.js line 9 for a missing workspace path.\n// The allegation: cd fails, && short-circuits, command never runs, user sees nothing.\nconst wsPath = '/bad/missing/path';\nconst command = 'echo COMMAND_RAN';\nconst full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;\nprocess.stdout.write(full);\n",
+   "generatedCommand": "cd \"/bad/missing/path\" && echo COMMAND_RAN",
+   "exitCode": 2,
+   "observedPwd": "/tmp",
+   "stdout": "",
+   "stderr": "/tmp/__kai_run.sh: cd: line 1: can't cd to /bad/missing/path: No such file or directory\n",
+   "assertions": [
+    {
+     "kind": "exit",
+     "value": "0",
+     "passed": false,
+     "observed": "2"
+    },
+    {
+     "kind": "stdout_contains",
+     "value": "COMMAND_RAN",
+     "passed": false,
+     "observed": ""
+    }
+   ],
+   "hasAssertions": true,
+   "allPassed": false
+  }
+ },
+ "submitted": "{\"scope\": [\"frontend/dist/app.js — the 13-line click handler at commit c478d2f, specifically lines 8-12 (wsPath construction, full command assembly, Panels.select call)\", \"POSIX /bin/sh behavior of JSON.stringify-quoted paths containing shell metacharacters ($, backticks) and of cd-failure short-circuit via &&\", \"NOT reviewed: window.Panels.workspace() implementation, commandFromFence implementation, the terminal panel that receives { command: full } — all outside this repo\"], \"limitations\": [\"commandFromFence, window.Panels (workspace(), select(), setOpen()), and the terminal panel implementation are all outside this repo and could not be examined\", \"Whether workspace() can actually return a non-existent or metacharacter-containing path in practice is unknown — the experiments prove shell behavior, not that the code path is reachable\", \"The terminal panel's actual handling of the command string (verbatim vs re-parse/re-quote) could not be confirmed from any source in this repo\"], \"intent_match\": \"verified\", \"merge_ready\": 2, \"checks\": [{\"issue\": \"frontend/dist/app.js:9 — `cd <path> && <command>` silently aborts the command when the workspace directory is missing or stale, where the old code ran it unconditionally; depends on `workspace()` never returning a non-existent path, which I could not read.\", \"verdict\": \"supported\", \"requires_runtime\": true, \"reason\": \"The source code at line 9 unconditionally prefixes `cd <path> && ` when wsPath is truthy, with no path-existence check. The review_shell experiment (Source 18) confirmed that when the path does not exist, `cd` fails and `&&` short-circuits so the command never runs and produces no stdout — exactly the alleged silent abort. The pre-change code at Source 1 line 29 passed the bare command directly to Panels.select with no cd prefix, so the old behavior ran the command unconditionally. Whether this regression is reachable depends on whether workspace() can return a non-existent path, which is outside this repo, but the shell-level behavior is confirmed.\", \"finding\": \"When workspace() returns a path to a non-existent directory, `cd \\\"<path>\\\" && <command>` causes cd to fail, && short-circuits, and the command never runs — a regression from the pre-change behavior which ran the command unconditionally without a cd prefix.\", \"remedy\": \"Validate the path before prefixing (e.g. check existence), or switch to `cd ... ; <command>` to preserve unconditional execution (dropping the working-directory guarantee when cd fails), or confirm workspace() never returns a non-existent path and document the assumption.\", \"evidence\": [{\"source\": 1, \"line_start\": 24, \"line_end\": 31}, {\"source\": 3, \"line_start\": 8, \"line_end\": 14}, {\"source\": 18, \"line_start\": 14, \"line_end\": 25, \"addresses_allegation\": true, \"covers_alleged_inputs\": true, \"expectation\": \"intended\", \"tested\": \"cd into a non-existent path (/bad/missing/path) via the exact app.js construction; asserted command would run (echo COMMAND_RAN) and exit 0\", \"assertions\": [1, 2]}]}, {\"issue\": \"frontend/dist/app.js:8 — `JSON.stringify` double-quoting is not fully POSIX-safe for paths containing `$`, backticks, or `\\\\`; the \\\"safely\\\" comment overstates it.\", \"verdict\": \"supported\", \"requires_runtime\": true, \"reason\": \"The source code at line 8 uses JSON.stringify(wsPath) which wraps the path in double quotes. Two review_shell experiments confirm the alleged defect: Source 16 shows that a path containing `$` (`/tmp/ws$dir`) has its `$dir` expanded to empty inside double quotes, changing the path and causing cd to fail. Source 17 shows that a path containing a backtick (`/tmp/ws`back``) triggers command substitution (`back: not found`) inside double quotes. In POSIX sh, `$`, backticks, and `\\\\` remain special inside double quotes. The comment at line 7 ('safely') overstates the protection. Single-quote wrapping with `\\\\'` escaping would be POSIX-safe.\", \"finding\": \"JSON.stringify wraps the path in double quotes, but `$` and backticks remain special inside POSIX sh double quotes. A path like `/tmp/ws$dir` expands `$dir` to empty; a path like `/tmp/ws`back`` triggers command substitution. The 'safely' comment is incorrect for these metacharacters.\", \"remedy\": \"Replace JSON.stringify with single-quote POSIX escaping: wrap the path in single quotes and replace each embedded single quote with `'\\\\''`. For example: `\\\"'\\\" + wsPath.replace(/'/g, \\\"'\\\\\\\\''\\\") + \\\"'\\\"`.\", \"evidence\": [{\"source\": 3, \"line_start\": 8, \"line_end\": 11}, {\"source\": 16, \"line_start\": 14, \"line_end\": 26, \"addresses_allegation\": true, \"covers_alleged_inputs\": true, \"expectation\": \"intended\", \"tested\": \"cd into a path containing literal $ (/tmp/ws$dir) via the exact app.js JSON.stringify construction; asserted exit 0, stdout contains the literal path, and pwd is the literal path\", \"assertions\": [1, 2, 3]}, {\"source\": 17, \"line_start\": 14, \"line_end\": 27, \"addresses_allegation\": true, \"covers_alleged_inputs\": true, \"expectation\": \"intended\", \"tested\": \"cd into a path containing literal backticks (/tmp/ws`back`) via the exact app.js JSON.stringify construction; asserted exit 0, stdout contains the literal path, and pwd is the literal path\", \"assertions\": [1, 2, 3]}]}, {\"issue\": \"frontend/dist/app.js:12 — the change assumes the terminal panel writes `command` verbatim to a POSIX sh; if the panel re-parses or re-quotes the value, the embedded `cd &&` may not behave as intended (panel implementation not in this repo).\", \"verdict\": \"unverified\", \"requires_runtime\": true, \"reason\": \"The source at line 11 contains a comment asserting the terminal panel writes the string verbatim to POSIX sh, and line 12 passes { command: full } to Panels.select. However, the terminal panel implementation, Panels.select, and the Panels object are all outside this repo (confirmed by grep results showing no other source files). The review_shell experiments tested the shell behavior of the constructed string but cannot verify what the panel does with it — whether it writes verbatim, re-parses, splits on &&, or re-quotes. This allegation cannot be settled from the evidence available in this repo.\", \"evidence\": [{\"source\": 3, \"line_start\": 11, \"line_end\": 14}, {\"source\": 12, \"line_start\": 1, \"line_end\": 5}]}], \"decisions\": []}",
+ "publishedAllegation1": {
+  "status": "supported",
+  "reason": "The source code at line 9 unconditionally prefixes `cd <path> && ` when wsPath is truthy, with no path-existence check. The review_shell experiment (Source 18) confirmed that when the path does not exist, `cd` fails and `&&` short-circuits so the command never runs and produces no stdout — exactly the alleged silent abort. The pre-change code at Source 1 line 29 passed the bare command directly to Panels.select with no cd prefix, so the old behavior ran the command unconditionally. Whether this regression is reachable depends on whether workspace() can return a non-existent path, which is outside this repo, but the shell-level behavior is confirmed.",
+  "remedy": "Validate the path before prefixing (e.g. check existence), or switch to `cd ... ; <command>` to preserve unconditional execution (dropping the working-directory guarantee when cd fails), or confirm workspace() never returns a non-existent path and document the assumption."
+ }
+}

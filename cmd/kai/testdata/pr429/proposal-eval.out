@@ -1,0 +1,14 @@
+## missing-directory allegation, input /bad/missing/path, command 'echo COMMAND_RAN'
+  new     cmd=cd "/bad/missing/path" && echo COMMAND_RAN     -> __EXIT__=2|__PWD__=/tmp stderr=/tmp/__run.sh: cd: line 1: can't cd to /bad/missing/path: No such file or directory|
+  old     cmd=echo COMMAND_RAN                               -> COMMAND_RAN|__EXIT__=0|__PWD__=/tmp stderr=
+  semi    cmd=cd "/bad/missing/path" ; echo COMMAND_RAN      -> COMMAND_RAN|__EXIT__=0|__PWD__=/tmp stderr=/tmp/__run.sh: cd: line 1: can't cd to /bad/missing/path: No such file or directory|
+## quoting allegation, input '/tmp/ws$dir', command pwd
+  new     cmd=cd "/tmp/ws$dir" && pwd                        -> __EXIT__=2|__PWD__=/tmp stderr=/tmp/__run.sh: cd: line 1: can't cd to /tmp/ws: No such file or directory|
+  old     cmd=pwd                                            -> /tmp|__EXIT__=0|__PWD__=/tmp stderr=
+  squote  cmd=cd '/tmp/ws$dir' && pwd                        -> /tmp/ws$dir|__EXIT__=0|__PWD__=/tmp/ws$dir stderr=
+## quoting allegation, input '/tmp/ws`back`', command pwd
+  new     cmd=cd "/tmp/ws`back`" && pwd                      -> __EXIT__=2|__PWD__=/tmp stderr=/tmp/__run.sh: line 0: back: not found|/tmp/__run.sh: cd: line 1: can't cd to /tmp/ws: No such file or directory|
+  old     cmd=pwd                                            -> /tmp|__EXIT__=0|__PWD__=/tmp stderr=
+  squote  cmd=cd '/tmp/ws`back`' && pwd                      -> /tmp/ws`back`|__EXIT__=0|__PWD__=/tmp/ws`back` stderr=
+## missing-directory: does the single-quote remedy change the stop-on-failure behavior? (it should not)
+  squote  cmd=cd '/bad/missing/path' && echo COMMAND_RAN     -> __EXIT__=2|__PWD__=/tmp stderr=/tmp/__run.sh: cd: line 1: can't cd to /bad/missing/path: No such file or directory|

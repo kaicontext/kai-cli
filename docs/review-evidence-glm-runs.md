@@ -1304,3 +1304,206 @@ made on n=1 evidence of the misreading. All three are recorded here, not
 made.
 
 **Not implemented.** This is the choice; the code is unchanged at `233e874`.
+
+**Decision (after review): not adopted.** Automatic limitations-to-complete
+is not to be implemented. The missing-directory case is preserved instead as
+a regression, and the question becomes how the review assesses behavior and
+remedies against the requirement — below.
+
+## The missing-directory regression (preserved; red by design)
+
+`cmd/kai/testdata/pr429/deep-attempt3-missing-dir.json` holds the
+challenger's exact inputs from deep attempt 3 — the requirement (commit
+subject "play button: cd into the workspace before running the command" and
+the author's comment "so the command always runs in the correct directory"),
+the three ISSUES as handed over, all 18 sources it received, the four
+recorded experiments (source 18: `cd "/bad/missing/path" && echo
+COMMAND_RAN` → exit 2, empty stdout, stderr `cd: can't cd to
+/bad/missing/path: No such file or directory`), and the raw `submit_review`
+payload GLM submitted (verdict `supported`, `expectation=intended` with
+offered assertions `exit 0` and `stdout_contains COMMAND_RAN`, remedy
+"…switch to `cd ... ; <command>` to preserve unconditional execution").
+`review_commit_missingdir_test.go`:
+
+| test | asserts | state at `58d8658`+ |
+|---|---|---|
+| `TestMissingDirCaseFixtureIsTheOneWeThink` | the fixture is that run: requirement, allegation text, record 18's exit/pwd/stdout/stderr, the four experiment sources are byte-for-byte `render()` of the records (after the prompt's trailing-newline trim), the submission supported the allegation with the `cd … ;` remedy and declared "runs anyway" intended | **green** |
+| `TestStoppingAfterFailedCdIsNotPublishedAsADefect` | replaying the exact submission over the exact inputs: the allegation is not `supported`; no remedy is published for it; the assembled review does not carry `cd ... ; <command>` | **red** — all three assertions fail today: published as a confirmed defect, remedy published, review carries it |
+| `TestMissingDirCaseKeepsTheQuotingVerdict` | the same replay keeps allegation 2 (the quoting defect) `supported` with its remedy | **green** |
+
+The red test is the acceptance condition. It is not skipped and not
+inverted; it fails until the review assesses behavior against the
+requirement. The green guard says any change that turns it green must not
+lose the correct verdict in the same payload.
+
+## Proposal: assessing behavior and remedies against the requirement
+
+**Principle.** The gate today proves that an alleged *behavior* was observed.
+A *defect* is a behavior contrary to the requirement. Today "intended" is
+whatever the challenger writes in the `expectation` label, anchored to
+nothing; in the preserved case it anchored "intended" to the pre-change code
+(its reason cites "Source 1 line 29", the diff's `-` line) and inverted the
+requirement. The proposal makes three things explicit and checks
+mechanically what can be checked. Each part says what is mechanical and what
+remains model judgment; nothing here is implemented.
+
+### Part 1 — the requirement is a distinct source; a supported runtime defect cites the clause it violates
+
+- **Sources are classed by the system.** SOURCE 1 today is one blob the
+  system composes: AUTHOR CONTEXT (the commit subject/body), the resolved
+  symbol locations, INTENT (the `rcInferIntent` reconstruction), then the
+  DIFF. The system knows which lines are which, so it can publish them as
+  separate sources with a class: **requirement** (author context), **intent
+  reconstruction** (a model's paraphrase — see the caveat below),
+  **author's claim** (comments inside the diff), **code** (the diff and
+  files), **exploration** (tool results), **experiment**. No new submission
+  field: classes are properties of the sources the system already numbers.
+- **Rule.** A `supported` verdict on a runtime allegation must include a
+  citation into a *requirement*-class source; the citation is the clause the
+  observed violation contradicts. Citations into code, the diff's `-` lines,
+  the author's comments, or the intent reconstruction do not satisfy it.
+- **Mechanical:** the citation resolves; its source is requirement-class.
+  **Judgment:** whether the observed behavior actually contradicts the cited
+  clause. **Published:** the clause, verbatim, under the finding.
+- **Caveat found while evaluating:** the reconstructed INTENT the challenger
+  received (SOURCE 1 line 13) says the path is "safely quoted using
+  `JSON.stringify`" — the intent step laundered the author's comment into
+  the requirement. If the reconstruction counted as requirement-class, a
+  challenger could cite it to *refute* the quoting defect. So the
+  reconstruction must not be requirement-class, and `rcInferIntent` should
+  be told to state goals, not mechanisms. That is a finding about the intent
+  step independent of this proposal.
+
+### Part 2 — a regression-shaped claim is a behavior change, not a confirmed defect
+
+- **Shape detection, executed.** When a citation's `intended` assertions can
+  be run against the *pre-change* construction — the challenger supplies
+  `construct_old` from the diff's `-` side, cited, in the same fidelity call
+  — and they **pass on the old construction and fail on the new one**, the
+  citation is a regression claim: its "intended" is the old behavior.
+- **Rule.** A regression-shaped claim is published as a **behavior change**
+  under DECISIONS ("the change now does Y where the pre-change code did X, on
+  inputs I — observed: old …, new …"), not as a confirmed defect, and it
+  carries no remedy. It becomes a defect only when Part 1's requirement
+  citation is present *and* the requirement clause is one the old behavior
+  satisfied — and that second condition is judgment, so in this iteration a
+  regression-shaped claim is a decision, full stop. Trade-off stated: a
+  genuine regression (old behavior right per the requirement, new behavior
+  wrong) is published as a decision with both observed outcomes, not as a
+  confirmed finding, and does not lower readiness by itself.
+- **Mechanical:** the shape (pass-on-old, fail-on-new), the published
+  outcomes, the reclassification. **Judgment:** that `construct_old` is a
+  faithful rendering of the `-` lines (checkable by citation into the diff,
+  not semantically).
+
+### Part 3 — a remedy is executed before it is published as a correction
+
+- **Rule.** For a supported runtime allegation, a remedy is published as a
+  correction only if it is given as an alternative construction
+  (`construct_remedy`), a fidelity experiment ran it on the alleged inputs,
+  the assertions offered as `intended` for the supported violation **pass**
+  under it, and its observable outcome (exit, pwd, stdout) on those inputs
+  is **not identical to the pre-change construction's** — a "remedy" that
+  reproduces the old outcome reverts the change for those inputs and is
+  published as a question, not a correction. Remedies not expressible as a
+  construction (prose such as "validate the path before prefixing") are
+  published as *suggestions, unverified*, never as corrections. Source-only
+  allegations (`requires_runtime=false`) are unchanged.
+- **Mechanical:** the remedy ran; the offered assertions' outcomes; the
+  equality with the old outcome. **Judgment:** that the offered assertions
+  encode the requirement (the same judgment Part 1 leaves open), and the
+  fidelity of `construct_remedy` to the prose remedy.
+
+### Part 4 — "silently" can be asserted
+
+The record already carries stderr, but no assertion kind reads it, so an
+allegation of *silence* cannot be tested even when the record refutes it.
+Adding `stderr_contains` / `stderr_empty` assertion kinds is a tool-contract
+change (not a submission field). **Mechanical:** the outcome. **Judgment:**
+offering it. Publishing the record's stderr beside a finding is mechanical
+and costs nothing.
+
+### Evaluation on the preserved case — executed, not predicted
+
+The mechanical checks of Parts 2 and 3 were run in the pinned sandbox image
+on the case's inputs (`cmd/kai/testdata/pr429/proposal-eval.sh`, output in `proposal-eval.out`, run with `docker run --rm -v $PWD/proposal-eval.sh:/eval.sh:ro node@sha256:c610fcdf… sh /eval.sh`; constructions from the
+diff and the two remedies as written):
+
+| construction | input | outcome (stdout / exit / pwd) | stderr |
+|---|---|---|---|
+| **new** `cd "/bad/missing/path" && echo COMMAND_RAN` | missing dir | — / 2 / `/tmp` | `can't cd to /bad/missing/path` |
+| **old** `echo COMMAND_RAN` | missing dir | `COMMAND_RAN` / 0 / `/tmp` | — |
+| **remedy** `cd "/bad/missing/path" ; echo COMMAND_RAN` | missing dir | `COMMAND_RAN` / 0 / `/tmp` | `can't cd to /bad/missing/path` |
+| **new** `cd "/tmp/ws$dir" && pwd` | literal `/tmp/ws$dir` | — / 2 / `/tmp` | `can't cd to /tmp/ws` |
+| **old** `pwd` | same | `/tmp` / 0 / `/tmp` | — |
+| **remedy** `cd '/tmp/ws$dir' && pwd` (single-quote escaper) | same | `/tmp/ws$dir` / 0 / `/tmp/ws$dir` | — |
+| **new** `` cd "/tmp/ws`back`" && pwd `` | literal `` /tmp/ws`back` `` | — / 2 / `/tmp` | `back: not found`; `can't cd to /tmp/ws` |
+| **remedy** `` cd '/tmp/ws`back`' && pwd `` | same | `` /tmp/ws`back` `` / 0 / `` /tmp/ws`back` `` | — |
+| single-quote remedy on the missing dir | missing dir | — / 2 / `/tmp` | `can't cd to /bad/missing/path` |
+
+Against the acceptance condition:
+
+- **Allegation 1 (missing directory), as submitted.** Part 1: the only
+  requirement anchor in the submission is the `-` line (code class) → the
+  `supported` verdict lacks a requirement citation → not published as a
+  defect. **Mechanical.** Part 2: the offered `intended` assertions (`exit
+  0`, `COMMAND_RAN`) pass on the old construction and fail on the new →
+  regression-shaped → published as a behavior change under DECISIONS with
+  both outcomes and the stderr, no remedy. **Mechanical**, and it holds even
+  if a challenger re-anchors on the subject line and argues contradiction —
+  the shape, not the argument, decides. **Acceptance condition 1 met
+  mechanically.** Part 4 would additionally let "silently" be tested
+  (`stderr_empty` fails), but is not needed for the condition.
+- **Its remedy.** `cd … ;` executed on the missing directory produces
+  `COMMAND_RAN` / 0 / `/tmp` — **identical to the pre-change outcome** →
+  Part 3 refuses it as a correction (published as "restores the pre-change
+  behavior for a missing workspace: the command runs in the shell's current
+  directory"). "Validate the path before prefixing" is not a construction →
+  suggestion, unverified. **Acceptance condition 2 met mechanically.**
+- **Allegation 2 (quoting) must survive.** Its `intended` assertions (pwd
+  equals the literal path) **fail on the old construction** (old never
+  changes directory: pwd `/tmp`) → not regression-shaped → defect path.
+  Part 1: SOURCE 1 lines 1–2 (author context) and the author's "always runs
+  in the correct directory" are available; the requirement-class clause is
+  the subject line — a faithful challenger cites it; whether "misdirected
+  for `$`" contradicts "cd into the workspace" is judgment, but it is the
+  easy direction. Part 3: the single-quote remedy, executed, enters the
+  literal `/tmp/ws$dir` and `` /tmp/ws`back` `` directories (offered
+  assertions pass) and differs from the old outcome → published as a
+  correction; it also preserves stop-on-failure for a missing directory.
+  **The correct verdict and its correction survive** — `TestMissingDirCase
+  KeepsTheQuotingVerdict` is the guard.
+- **What remains judgment after the proposal, on this case:** whether a
+  cited requirement clause is contradicted (Part 1); fidelity of
+  `construct_old` and `construct_remedy` to the diff and to the prose remedy
+  (both cite-checkable, not semantically); which assertions encode the
+  requirement. None of these decided the acceptance condition here — the
+  shape and the outcome equality did.
+- **Costs.** Up to two more fidelity runs per supported runtime allegation
+  (old construction, remedy) inside the existing four-call cap and
+  three-minute deadline: in attempt 3 that is 4 + 2 (allegation 2's old
+  construct and remedy; allegation 1's old construct shares a call) = 6 >
+  4. Either the cap rises for these system-required runs or the challenger
+  must plan calls; a run that cannot complete the requirement checks stays
+  unresolved. Timeouts remain completion failures. The reconstructed intent
+  must be excluded from requirement-class sources (caveat above) or Part 1
+  can be turned against a true defect.
+
+### Protocol changes this implies — listed, not made
+
+1. Source classing (system-side; no submission field).
+2. `review_shell` fidelity mode gains `construct_old` and `construct_remedy`
+   (tool-contract inputs), and `stderr_contains` / `stderr_empty` assertion
+   kinds.
+3. The submission's existing evidence citations carry the requirement
+   citation — a citation into a requirement-class source, distinguished by
+   its source class, not by a new field. If a marker proves necessary to
+   tell "this citation is the clause violated" from "this citation is
+   context", that is the one new field, and the evaluation above is the
+   justification to weigh it against.
+4. A regression-shaped citation reclassifies its allegation to a decision;
+   a remedy without a passing `construct_remedy` run is a suggestion.
+
+The preserved regression is the acceptance test for whichever of these is
+built. Nothing above changes the four evidence rules, the deadline, the
+one-shot format repair, or the never-flip principle.

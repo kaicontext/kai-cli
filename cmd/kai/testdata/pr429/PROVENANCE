@@ -7,3 +7,17 @@ copied: verbatim via `sed -n '447,453p'` from the file fetched with
         gh api -H 'Accept: application/vnd.github.raw' repos/kaicontext/kai-desktop/contents/frontend/dist/app.js?ref=8a0662e5…
         Not retyped. The test locates the construction statement inside this
         excerpt by its text and fails if it is not found, so drift is visible.
+
+deep-attempt3-missing-dir.json — the missing-directory case preserved from the
+deep-path capture (attempt 3 at revision 9a4a1ff, 2026-09-17). Fields: the
+requirement (commit subject + the author's comment in the diff), the three
+ISSUES exactly as handed to the challenger, the 18 sources it received (its
+final request, line-number prefixes stripped), the four rcExperimentRecords
+from the emitted bundle, and the raw submit_review payload GLM-5.2 submitted —
+which the validator accepted, publishing "stopping after a failed cd" as a
+confirmed defect with a `cd … ;` remedy. See review_commit_missingdir_test.go.
+
+proposal-eval.sh / proposal-eval.out — the proposal's mechanical checks (old
+construction, remedy construction, outcome equality) executed in the pinned
+sandbox image on the missing-directory case's inputs, 2026-09-17. Not a test;
+the evaluation the record cites.
