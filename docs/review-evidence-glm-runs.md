@@ -772,3 +772,107 @@ published in 3 attempts; the one time the real defect was reproduced with the
 model's own relevance fields, a misdeclared `expectation` turned it into
 *unresolved*. None of this is GLM-5.2 evidence on the e2e path (see the
 correction above). Still unmerged; code frozen.
+
+## Revision `9a4a1ff` — challenger on the configured review model; three fully captured attempts
+
+**Changes since `3ed4584` (scoped, then frozen for the run):** the fast path
+passes the draft model and the challenge model separately, so the challenge
+uses the configured review model; each result records per-phase configured /
+requested / upstream provider (served model left empty — unknown to the
+process); regression `TestFastDraftDoesNotSubstituteChallenger`; the
+submission schema now requires `decisions` (matching the validator), which
+was the exact cause of the earlier attempt-3 rejection. Expectation
+interpretation unchanged; deadline unchanged; no retries.
+
+**Freeze verified:** binary sha256 `eac35eb4a6d3b0da…` identical before and
+after; tree clean at `9a4a1ff`; no change between attempts. Same capture
+method as before (proxy via scratch `HOME`; real credentials untouched).
+
+### Which model performed each phase — requested vs. effective
+
+| attempt | phase | requested (request body) | effective (response `model`) | upstream `provider` |
+|---|---|---|---|---|
+| 1 | draft | `anthropic/claude-haiku-4-5` | `anthropic/claude-haiku-4.5` | Azure |
+| 1 | challenge (2 calls) | `z-ai/glm-5.2` | **`z-ai/glm-5.2`** | DeepInfra |
+| 2 | draft | `anthropic/claude-haiku-4-5` | `anthropic/claude-haiku-4.5` | Azure |
+| 2 | challenge (3 calls) | `z-ai/glm-5.2` | **`z-ai/glm-5.2`** | DeepInfra |
+| 3 | draft | `anthropic/claude-haiku-4-5` | `anthropic/claude-haiku-4.5` | Azure |
+| 3 | challenge (1 call) | `z-ai/glm-5.2` | **`z-ai/glm-5.2`** | StreamLake |
+
+Effective is **confirmed** from response metadata for every call. The
+bundles' `models` records match (configured `z-ai/glm-5.2` for both phases;
+draft requested Haiku; challenge requested GLM; providers as above; served
+empty as designed). **GLM-5.2 performed every challenge.**
+
+### Exact challenger input (from the captured challenge request)
+
+| attempt | ISSUES TO CHECK | DECISIONS TO ASSESS |
+|---|---|---|
+| 1 | `app.js:8` — `typeof window.Panels.workspace === "function"` does not guard `window.Panels` being undefined | one: commands now run inside the workspace directory |
+| 2 | `app.js:8` — `workspace()`'s return value is trusted directly into a shell command via string concatenation; the guard checks only that it is callable | none |
+| 3 | `app.js:9` — the guard passes only if `workspace` is a function, but the code calls it as if callable | one: workspace path prefixed via JSON string quoting |
+
+### Completion
+
+| attempt | exit | bundle | status |
+|---|---|---|---|
+| 1 | 0 | emitted (8,847 B) | complete; readiness 4 |
+| 2 | 1 | emitted (9,785 B) | **incomplete**; readiness 2; one allegation unresolved |
+| 3 | 0 | emitted (6,886 B) | complete; readiness 4 |
+
+**3 of 3 emitted a bundle.** No timeouts. No validator rejections — the
+decisions-schema mismatch that rejected the earlier attempt 3 did not recur;
+attempts 1 and 3 assessed their draft decision (both `supported`).
+
+### Confirmed defects: **0 of 3**
+
+No attempt published a `supported` verdict on a real defect.
+
+### Missed defects (the known `$`/backtick JSON.stringify defect): **3 of 3**
+
+- **Attempt 1 — draft omission.** The draft never alleged the quoting defect
+  (it alleged a false guard problem). Missed defect attributed to the draft;
+  challenger handling of the defect **not exercised**. Published review:
+  "0 confirmed findings, 1 refuted… 4/5 — your call, then merge" on a change
+  with a real shell-quoting defect.
+- **Attempt 2 — challenger.** The draft alleged the defect class in a related
+  form ("return value trusted directly into a shell command via string
+  concatenation"). GLM tested a literal `` /tmp/ws`whoami` `` directory and a
+  newline path in fidelity mode — **exit 2, observed pwd `/tmp`: the defect
+  reproduced** — but supplied **none** of the relevance fields (no
+  `addresses_allegation`, `covers_alleged_inputs`, `expectation`, or offered
+  assertions) and asserted nonsense (that stdout would contain the command
+  text). Gate: "no cited experiment addresses the allegation" → **unresolved**,
+  review incomplete, remedy withheld. Challenger exercised; defect missed.
+- **Attempt 3 — draft omission.** The draft alleged a false guard problem; the
+  quoting appears only inside the draft's *decision* ("prefixed via JSON string
+  quoting"), as a design choice, not a defect. Challenger **not exercised** on
+  the defect. Published: "0 confirmed, 1 refuted… 4/5".
+
+### Incorrect verdicts: **0 of 3**
+
+Attempts 1 and 3 `refuted` the Panels-guard allegations with source
+citations (`requires_runtime=false`). Both refutations are correct: the code
+is `window.Panels && typeof window.Panels.workspace === "function"`, so
+`window.Panels` is guarded by short-circuit, and the guard and the call are
+consistent. Attempt 2 published no verdict. Both `supported` decisions are
+genuine design choices in the change.
+
+### Renders (real server path; harness deleted after)
+
+Attempts 1 and 3: "4/5 — your call, then merge", "0 confirmed findings, 1
+refuted", decision under "Decisions (need your call)". Attempt 2: "This review
+did not finish… treat the change as _not reviewed_", 2/5, the unresolved
+allegation listed with "No remedy is published". All three display their
+verdicts correctly; two of those verdicts are clean reviews of a defective
+change.
+
+### What this establishes
+
+With GLM confirmed as the challenger and the schema aligned, completion is
+3/3 and no incorrect verdict was published. Review *effectiveness* on the
+known defect is 0/3: twice the Haiku draft never alleged it, and the one time
+the defect class was alleged and reproduced, GLM did not connect the
+experiment to the allegation and the gate — correctly under the contract —
+left it unresolved. The relevance fields are a contract GLM did not follow in
+that attempt. Still unmerged.
