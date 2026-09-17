@@ -559,3 +559,71 @@ for decision rather than implemented:
 
 Implementation is paused. Still unmerged. The original #418 false positive
 remains unexplained.
+
+## Verdict contract (`942b928`): what the preserved-run validation does and does not show
+
+### The preserved-run test's inputs, field by field
+
+From the ORIGINAL run (extracted by script from its bundle; never retyped):
+the allegation text; GLM's verdict `supported`; GLM's reason ("JSON.stringify
+properly escapes…"); GLM's remedy ("No code change needed…"); GLM's evidence
+`[{source 1, lines 29-30}, {source 4, lines 13-24, experiment}]` — **with no
+relevance fields, because none existed**; the experiment record: mode
+`construct`, setup `mkdir -p '/tmp/test"dir'`, the construct code, generated
+command `cd "/tmp/test\"dir" && echo "successfully changed to: $(pwd)"`, exit
+0, observed pwd `/tmp/test"dir`, stdout, and three assertions (exit 0, stdout
+contains, pwd equals) all passed.
+
+SUPPLIED BY THE TEST (not produced by the model in that run):
+- `outcome=completed` on the record — the field postdates the run;
+- `addresses_allegation`, `covers_alleged_inputs`, `expectation="intended"`,
+  `tested="a path containing a double quote"` on the citation;
+- `requires_runtime=true` on the check (the run's allegation carried it);
+- the verdict under test — `supported` as GLM gave it, and `refuted` as its
+  reasoning expresses — plus scope / intent / merge_ready / finding fixtures.
+
+So the test shows what the rules do to that record **given those
+classifications**. It does not show that GLM would produce them.
+
+### Outputs, scenario by scenario (`go test -run TestWrongVerdictRun -v`)
+
+| | verdict | covers | derived observation | result | reason (abridged) |
+|---|---|---|---|---|---|
+| A | supported | **honest: false** | conformance | **unresolved**; remedy withheld | supported requires a relevant experiment that observed the violation; none did; a passing example on other inputs establishes behavior for that input only |
+| B | refuted | **honest: false** | conformance | **unresolved**; remedy withheld | refuted requires conformance on the alleged inputs themselves; tested: a double quote |
+| C | supported | **dishonest: true** | conformance | **unresolved**; remedy withheld | no violation observed — a false coverage claim cannot manufacture support |
+| D | refuted | **dishonest: true** | conformance | **refuted** | the remaining path to the wrong "safe" conclusion; the false `covers` and the `tested` text are recorded on the citation |
+
+Honest coverage (A, B): the record can neither support nor refute; the review
+is incomplete. Dishonest coverage (C, D): it still cannot support (C), but it
+CAN refute (D) — the gate cannot check the coverage claim, only record it.
+
+### Can an unrelated failed assertion support an allegation? **Yes — known gap.**
+
+`TestKnownGapUnrelatedFailedAssertionCanSupportAllegation` passes, which
+characterizes the flaw: under `expectation="intended"` the observation is
+derived from ANY failed assertion. With the directory-equality check PASSING
+(the alleged behavior intact) and an unrelated `stdout_contains` failing, the
+gate derives "violation observed" and `supported` goes through. The converse
+direction is safe by construction — `expectation="defect"` requires ALL
+assertions to pass, so an unrelated failure blocks rather than manufactures
+support. The observation is not tied to the specific assertion that encodes
+the alleged behavior. Not fixed here; recorded for decision.
+
+### Real GLM CLI → bundle → render, verdict-contract revision, 3 attempts
+
+Model supplying its own relevance fields; no retries added; full output saved
+(`e2e-429-V-a{1,2,3}-*`).
+
+| attempt | experiments | outcome |
+|---|---|---|
+| 1 | 1 script, 2 construct (`cd "/tmp/ws-test" && echo 'hello'`; an "INJECTED" echo test) | substantive check failure ("omitted reasoning, duplicated a check, or checked an unknown issue"). **No bundle.** |
+| 2 | 2 script, 2 construct (`echo hello`; `BUILT_COMMAND_START…END` labels as the command, exit 127) | 5th `review_shell` over the cap → fatal. **No bundle.** |
+| 3 | 1 script | empty `scope` → fail closed. **No bundle.** |
+
+**No attempt reached a verdict, so no relevance field was ever supplied by
+the model, the render step could not run, and there is no live evidence
+about whether GLM populates the contract sensibly.** The original failure is
+NOT shown fixed. What is shown: the rules block the preserved record under
+test-supplied classifications (A–C), one dishonest path remains (D), and the
+derivation has an exploitable gap (unrelated failed assertion).
