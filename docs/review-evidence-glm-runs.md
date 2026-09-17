@@ -253,3 +253,41 @@ EXIT=1   (stdout empty — no bundle emitted)
   top-level field should count as a "format" failure eligible for the single
   repair is a design question left open here rather than decided to make a run
   pass.
+
+## End-to-end CLI run — revision R5 (`3ffccc6`), attempts 2 and 3 (no code changes)
+
+| attempt | exit | outcome |
+|---|---|---|
+| 2 | 1 | `checks` as a string again. The R5 single repair **fired**: parse error fed back, GLM resubmitted — with the **same** malformed shape. Failed closed after the one allowed repair. **No bundle.** |
+| 3 | 0 | Bundle emitted, `depth=fast`, `readiness=4`, complete (no unresolved). **The real JSON.stringify defect was REFUTED**, with two experiments cited (`exp=[True,True]`). GLM's stated reason: "JSON.stringify will escape them" — which is false (node prints `$` and backtick through unescaped). |
+
+### Attempt 3 — the mirror of #418 attempt 3
+
+A real defect was published as **refuted**, backed by cited experiments. The
+gate verified provenance (experiments were run and cited) and status
+coherence, and it cannot verify that the cited output supports the conclusion.
+#418 attempt 3 was a false positive through a satisfied evidence requirement;
+this is a false negative through the same door. Both are model-judgment
+failures the structural gate does not catch, and are stated as such.
+
+Allegation #1 in this run was a Haiku-drafted non-issue (a ternary guard) and
+was correctly refuted.
+
+### E2E on R5: 0 of 3 correct
+
+- 1: required field omitted → no bundle
+- 2: malformed shape, repair exercised and correctly bounded → no bundle
+- 3: bundle emitted, wrong conclusion (false negative)
+
+The repair path behaved as designed in attempt 2. The revision does **not**
+make GLM-5.2 reliable on this case, and no run here is presented as if it did.
+
+### Consequence for the render check
+
+GLM produced no **partial** bundle (supported + unresolved) in three attempts,
+so a real partial review from GLM is not available to render. The render check
+below therefore uses (a) the real attempt-3 bundle (a complete review) and
+(b) a bundle in the exact shape the CLI's emission struct produces, carrying
+gate results from a **stubbed** model — rendered through the real server
+`buildReviewBody`. (b) verifies the server renders a partial review correctly;
+it does not verify that GLM produces one.
