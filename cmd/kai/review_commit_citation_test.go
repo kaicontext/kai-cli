@@ -198,6 +198,47 @@ func TestReviewChallengeAssessesDraftDecisions(t *testing.T) {
 	}
 }
 
+// Readiness is made coherent with the FINAL statuses by clamping, always toward
+// caution, instead of failing closed. Live GLM-5.2 on #418 submitted a
+// merge_ready that contradicted its own verdicts; failing closed withheld the
+// supported finding too. The finding must survive and the score must be sane.
+func TestReviewChallengeClampsIncoherentReadinessInsteadOfWithholding(t *testing.T) {
+	// A confirmed defect proposed as ready-to-merge: clamped to small-fixes.
+	a := rcCDChecks()
+	a.MergeReady = 5
+	res, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources, nil)
+	if err != nil {
+		t.Fatalf("incoherent readiness withheld the review: %v", err)
+	}
+	if _, issues, _, _, readiness, _ := rcParseReviewOutput(res.Review); len(issues) != 1 || int(readiness) != 3 {
+		t.Fatalf("supported finding lost or readiness not clamped: issues=%v readiness=%d", issues, readiness)
+	}
+	// Nothing found and nothing open, proposed as needs-work: raised to "your call".
+	b := rcCDChecks()
+	b.Checks[1].Verdict = "refuted" // now both refuted
+	b.MergeReady = 2
+	res, err = rcValidateChallenge(rcTestAnswer(t, b), rcCDIssues, nil, rcCDSources, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, readiness, _ := rcParseReviewOutput(res.Review); int(readiness) != 4 {
+		t.Fatalf("clean review's readiness not raised to decide-then-merge: %d", readiness)
+	}
+	// A supported draft decision with a proposed clean merge: held at "your call".
+	const decision = "Keep the getter public."
+	c := rcCDChecks()
+	c.Checks[1].Verdict = "refuted"
+	c.MergeReady = 5
+	c.Decisions = []rcDecisionCheck{{Decision: decision, Verdict: "supported", Reason: "exported", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}}}
+	res, err = rcValidateChallenge(rcTestAnswer(t, c), rcCDIssues, []string{decision}, rcCDSources, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, decisions, _, readiness, _ := rcParseReviewOutput(res.Review); len(decisions) != 1 || int(readiness) != 4 {
+		t.Fatalf("open decision allowed a clean-merge score: decisions=%v readiness=%d", decisions, readiness)
+	}
+}
+
 // The SUMMARY is derived from the validated counts; there is no summary or
 // assessment field, so a rejected allegation has no channel to be restated —
 // not verbatim and not paraphrased (the reviewer's own specimen).

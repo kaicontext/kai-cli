@@ -109,7 +109,6 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 		{"blank-only scope", func(a *rcChallengeAnswer) { a.Scope = []string{"  "} }},
 		{"invalid intent", func(a *rcChallengeAnswer) { a.IntentMatch = "maybe" }},
 		{"invalid merge_ready", func(a *rcChallengeAnswer) { a.MergeReady = 9 }},
-		{"contradictory readiness", func(a *rcChallengeAnswer) { a.MergeReady = 5 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := rcCDChecks()
@@ -298,6 +297,46 @@ func TestReviewChallengeUnavailableSandboxIsNotFatal(t *testing.T) {
 	}
 }
 
+// Live GLM-5.2 on #418: after its fourth experiment the model narrated in
+// prose instead of submitting, and the gate failed closed on the whole review.
+// A submission wrapped in a sentence is still a submission; pure prose gets
+// exactly one nudge to call submit_review; prose twice is a broken answer.
+func TestReviewChallengeProseFinalAnswerIsNudgedOnce(t *testing.T) {
+	valid := rcTestAnswer(t, rcCDChecks())
+	// Embedded JSON is accepted without a nudge.
+	if got := rcExtractJSONObject("Here is my result: " + valid + " — done."); got != valid {
+		t.Fatalf("embedded submission not extracted: %q", got)
+	}
+	if rcExtractJSONObject("I checked both allegations and found {nothing conclusive") != "" {
+		t.Fatal("non-JSON prose with a stray brace was treated as a submission")
+	}
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: "I have reviewed the allegations carefully and here is my thinking."}}}, nil
+		}
+		last := req.Messages[len(req.Messages)-1].Parts[0].(message.TextContent).Text
+		if !strings.Contains(last, "Call submit_review now") || len(req.Tools) != 1 {
+			t.Fatalf("second turn was not the single protocol nudge: %q tools=%d", last, len(req.Tools))
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "final", Name: "submit_review", Input: valid}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || calls != 2 || res == nil || res.Allegations[1].Status != "supported" {
+		t.Fatalf("prose answer was not recovered by one nudge: calls=%d err=%v res=%+v", calls, err, res)
+	}
+	// Prose twice is genuinely broken and fails closed — no unbounded retry.
+	calls = 0
+	p2 := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		calls++
+		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: "I still think it is fine."}}}, nil
+	}}
+	if res, err := rcChallengeReview(context.Background(), p2, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil); err == nil || res != nil || calls != 2 {
+		t.Fatalf("repeated prose was not failed closed after one nudge: calls=%d %+v %v", calls, res, err)
+	}
+}
+
 func TestReviewChallengeRejectsTruncatedAnswerAndUnexpectedTool(t *testing.T) {
 	for _, resp := range []provider.Response{
 		{FinishReason: message.FinishReasonMaxTokens, Parts: []message.ContentPart{message.TextContent{Text: `{}`}}},
@@ -421,6 +460,9 @@ func TestReviewChallengeLiveDesktop418(t *testing.T) {
 	}
 }
 
+// The specimen states only what the code does and where the string goes. It
+// does NOT tell the model what JSON.stringify emits: establishing that is the
+// experiment's job, so a Node-capable sandbox must run JSON.stringify itself.
 const rcLive429Source = `// frontend/dist/app.js: play-button (data-run-command) click handler.
 const command = commandFromFence(code.textContent);
 // Prefix a cd into the workspace so the command always runs in the
@@ -429,8 +471,7 @@ const wsPath = (window.Panels && typeof window.Panels.workspace === "function") 
 const full = wsPath ? 'cd ' + JSON.stringify(wsPath) + ' && ' + command : command;
 Panels.setOpen(true);
 Panels.select("terminal", { command: full });
-// The terminal sends the string to a POSIX sh. JSON.stringify emits a
-// double-quoted JS string literal; it escapes \ and " but not $ or backtick.
+// The terminal panel writes the string verbatim to its persistent POSIX sh.
 `
 
 const rcStringifyIssue = `frontend/dist/app.js:6 — JSON.stringify does not shell-escape $ or backticks, so a workspace path containing them is expanded by the shell and the cd targets the wrong directory`
@@ -453,6 +494,15 @@ func TestReviewChallengeLiveDesktop429(t *testing.T) {
 			if withSandbox {
 				if a.Status != "supported" {
 					t.Fatalf("real JSON.stringify defect not supported with an experiment available: %+v", a)
+				}
+				// The verdict must rest on an experiment this challenge ran, not on
+				// reasoning about what JSON.stringify emits.
+				backed := false
+				for _, ev := range a.Evidence {
+					backed = backed || ev.Experiment
+				}
+				if !backed {
+					t.Fatalf("supported verdict cites no experiment from this challenge: %+v", a.Evidence)
 				}
 				return
 			}

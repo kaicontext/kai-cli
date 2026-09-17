@@ -38,7 +38,7 @@ Cite evidence BY LOCATION. Each source is shown to you with numbered lines. To c
 
 Every check must classify whether the allegation requires runtime evidence. Set "requires_runtime": true when resolving it means observing behavior that reading the source cannot establish (for example: what a shell does after a successful cd, whether a quoting scheme survives a hostile path, whether a code path actually executes); set it false when the source settles it. This field is mandatory. A "requires_runtime" verdict of "supported" or "refuted" must be backed by a successful review_shell experiment; without one, mark it "unverified". Missing runtime evidence is never permission to substitute confident reasoning. Never cite an experiment you did not run: only a review_shell result present in this conversation counts.
 
-For shell or language-runtime claims, prefer a minimal reproduction using review_shell when available. You may call it at most FOUR times in total; combine related assertions into one script. It runs only synthetic snippets in an isolated container: no repository, credentials, host mounts, or network. Its environment is POSIX /bin/sh, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
+For shell or language-runtime claims, prefer a minimal reproduction using review_shell when available. You may call it at most FOUR times in total; combine related assertions into one script. Each review_shell result is returned to you as a new numbered SOURCE. An experiment only counts if you CITE that source number (and the line range of the output) in the check's "evidence" — a runtime verdict whose evidence cites only the code, not the experiment's source number, is treated as having no experiment and is downgraded to "unverified". It runs only synthetic snippets in an isolated container: no repository, credentials, host mounts, or network. Its environment is POSIX /bin/sh, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present.
 
 Finish by calling submit_review (plain JSON is accepted if tool submission is unavailable) with:
 {"scope":["what was reviewed: files, paths, behaviors actually examined"],
@@ -300,10 +300,14 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	if sandbox != nil {
 		available = append(available, rcShellToolInfo())
 	}
-	// At most four synthetic experiments and one final answer. Tool calls are
+	// At most four synthetic experiments and one final answer, plus one bounded
+	// protocol nudge if the final answer is not a submission at all (live
+	// GLM-5.2 on #418 narrated in prose after its fourth experiment). The nudge
+	// is a format retry — it never grants evidence or a verdict. Tool calls are
 	// sequential so the source numbering remains stable and reproducible.
 	toolCalls := 0
-	for turn := 0; turn < 5; turn++ {
+	nudged := false
+	for turn := 0; turn < 6; turn++ {
 		resp, err := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: msgs, Tools: available, MaxTokens: 6000})
 		if err != nil {
 			return nil, fmt.Errorf("challenge call: %w", err)
@@ -350,11 +354,29 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 				sources = append(sources, result)
 				experiment[len(sources)] = true
 				tr.Content = rcNumberedSource(len(sources), result)
+				// Show what the experiment actually produced, so an operator can
+				// see the evidence a runtime verdict rests on rather than trust
+				// the model's account of it. Bounded: long output is cut.
+				fmt.Fprintf(os.Stderr, "  challenge: experiment %d output (source %d):\n%s\n", toolCalls, len(sources), rcIndentBounded(result, 40))
 			}
 			results = append(results, tr)
 		}
 		if len(results) == 0 {
-			return rcValidateChallenge(rcResponseText(resp), issues, decisions, sources, experiment)
+			text := rcResponseText(resp)
+			if answer := rcExtractJSONObject(text); answer != "" {
+				return rcValidateChallenge(answer, issues, decisions, sources, experiment)
+			}
+			// Not a submission at all. Once, tell the model to submit; a second
+			// non-submission is a genuinely broken answer and fails closed.
+			if nudged {
+				return nil, fmt.Errorf("invalid challenge JSON: final answer was not a submission")
+			}
+			nudged = true
+			fmt.Fprintf(os.Stderr, "  challenge: final answer was prose, not a submission — nudging once to call submit_review\n%s\n", rcIndentBounded(text, 12))
+			msgs = append(msgs, message.Message{Role: message.RoleAssistant, Parts: resp.Parts}, message.Message{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{
+				Text: "That was prose, not a submission. Call submit_review now with the complete structured result (or emit the JSON object alone). No further experiments are available; use the evidence already in this conversation and leave anything unsettled \"unverified\"."}}})
+			available = []tools.ToolInfo{rcSubmitReviewToolInfo()}
+			continue
 		}
 		msgs = append(msgs, message.Message{Role: message.RoleAssistant, Parts: resp.Parts}, message.Message{Role: message.RoleUser, Parts: results})
 		if toolCalls == 4 {
@@ -524,13 +546,26 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 			keptDecisions = append(keptDecisions, d.Decision)
 		}
 	}
-	if (len(kept) > 0 && readiness > finding.ReadinessSmallFixes) ||
-		(len(kept) == 0 && len(unresolved) == 0 && readiness < finding.ReadinessDecideThenMerge) ||
-		(len(keptDecisions) > 0 && readiness == finding.ReadinessMerge) {
-		return nil, fmt.Errorf("challenge readiness contradicts the surviving findings")
+	// Readiness is coherent with the FINAL statuses by construction. The model
+	// proposes a score; the system clamps it into the band the validated
+	// results allow, always toward caution, and logs the clamp. Failing closed
+	// here withheld every finding — supported ones included — for what is a
+	// summary-score slip, not an evidence problem (live GLM-5.2 on #418).
+	proposed := readiness
+	switch {
+	case len(kept) > 0 && readiness > finding.ReadinessSmallFixes:
+		readiness = finding.ReadinessSmallFixes // a confirmed defect is never near-merge
+	case len(kept) == 0 && len(unresolved) == 0 && readiness < finding.ReadinessDecideThenMerge:
+		readiness = finding.ReadinessDecideThenMerge // nothing found, nothing open: at least "your call"
+	}
+	if len(keptDecisions) > 0 && readiness == finding.ReadinessMerge {
+		readiness = finding.ReadinessDecideThenMerge // an open decision is not a clean merge
 	}
 	if len(unresolved) > 0 && readiness > finding.ReadinessDecideThenMerge {
-		readiness = finding.ReadinessDecideThenMerge
+		readiness = finding.ReadinessDecideThenMerge // an unresolved claim cannot ride out clean
+	}
+	if readiness != proposed {
+		fmt.Fprintf(os.Stderr, "  challenge: merge_ready %d contradicts the final results — clamped to %d\n", int(proposed), int(readiness))
 	}
 
 	// Log the FINAL validated verdicts — including any downgrade — not what the
@@ -546,6 +581,43 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string, e
 	res := &rcChallengeResult{Allegations: results, Decisions: dresults, Unresolved: unresolved, Incomplete: len(unresolved) > 0}
 	res.Review = rcAssembleReview(scope, limitations, results, findingText, match, readiness, summary, keptDecisions)
 	return res, nil
+}
+
+// rcIndentBounded indents text for a diagnostic, keeping at most maxLines lines
+// and noting how many were cut, so a large experiment output stays readable
+// without hiding that it was truncated.
+func rcIndentBounded(text string, maxLines int) string {
+	lines := rcSourceLines(text)
+	cut := 0
+	if len(lines) > maxLines {
+		cut = len(lines) - maxLines
+		lines = lines[:maxLines]
+	}
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString("    | " + l + "\n")
+	}
+	if cut > 0 {
+		fmt.Fprintf(&b, "    | … %d more line(s)\n", cut)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// rcExtractJSONObject returns the JSON object embedded in a text answer — from
+// its first '{' to its last '}' — when that span is syntactically a JSON
+// value, and "" otherwise. A model that wraps its submission in a sentence
+// ("Here is the result: {...}") still submitted; a model that only narrated did
+// not. Validation of the CONTENT is unchanged and happens afterwards.
+func rcExtractJSONObject(text string) string {
+	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	if start < 0 || end <= start {
+		return ""
+	}
+	candidate := text[start : end+1]
+	if !json.Valid([]byte(candidate)) {
+		return ""
+	}
+	return candidate
 }
 
 // rcNonEmpty trims a list of model-supplied strings and drops the blanks.
