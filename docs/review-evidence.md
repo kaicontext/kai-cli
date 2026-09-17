@@ -11,26 +11,48 @@ supported inputs. Each issue receives a supported, refuted, or unverified
 assessment with a reason, an explicit runtime-evidence classification, and
 evidence.
 
-The published review is **assembled by the system from the validated results,**
-not copied from a model-authored blob. The challenger returns structured fields —
-a scope list, a limitations list, per-supported-finding text, decisions,
-`intent_match`, and `merge_ready` — and the system builds the body and the coda.
-There is deliberately **no free-form assessment or summary field.** The `SUMMARY`
-is derived from the final supported/refuted/unresolved counts and statuses, and
-the only review-level prose is structured scope and limitations, which describe
-coverage rather than outcomes. That leaves no free-text slot in which a refuted
-or unresolved allegation could be restated as a confident defect — verbatim *or
-paraphrased*. Consistency is achieved by construction; the gate does not rely on
-matching strings to establish it.
+**Every allegation's final result is structured data** (`rcAllegationResult`):
+its id, status (`supported` / `refuted` / `unresolved`), the validated evidence
+references (each marked whether it is an experiment from this challenge), the
+reason it is unresolved, and any proposed remedy. **A remedy is attached to its
+allegation id and published as actionable only when that allegation is
+supported.** A fix the model proposed for an allegation that is not supported is
+recorded as `withheldRemedy` and never published as advice. The log records the
+*final* validated verdict — including a downgrade the model did not ask for —
+not the verdict the model submitted.
+
+The published review is **assembled by the system from those results,** not
+copied from a model-authored blob. The challenger returns a scope list, a
+limitations list, per-supported-finding text and remedy, per-decision
+assessments, `intent_match`, and `merge_ready`; the system builds the body and
+the coda. There is deliberately **no free-form assessment or summary field.**
+The `SUMMARY` and the incomplete status are derived from the final counts and
+statuses, and the only review-level prose is structured scope and limitations,
+which describe coverage rather than outcomes. That leaves no free-text slot in
+which a refuted or unresolved allegation could be restated as a confident defect
+— verbatim *or paraphrased*. Consistency is by construction; the gate does not
+rely on matching strings.
+
+**Decisions are assessed, not asserted.** The unrestricted "Decisions" path is
+gone: the challenger cannot introduce a decision of its own — it can only assess
+the decisions the *draft* made, each with a verdict and a citation into the
+sources, exactly like an allegation. A decision the draft never made is dropped
+(and logged); a draft decision left unassessed fails the challenge closed. A
+different heading therefore cannot carry repair advice around the evidence
+requirement. Genuine design decisions the draft made are preserved when
+supported, in both the prose and the `DECISIONS` coda.
+
+The status travels with the review. The emitted bundle carries the `incomplete`
+flag and the full structured `challenge` record (allegations, decisions,
+unresolved list); the CLI's text output prints an explicit `Status: INCOMPLETE`
+line; and the run exits non-zero. Atlas and CI therefore read the same verdict
+the gate decided.
 
 To be precise about what is and is not verified: the system controls the
-**structure and selection** — which allegations get a section at all, and what
-the summary and coda say. The text *inside* a supported finding's section, and
-the scope, limitations, and decision items, is still model-authored. A refuted or
-unresolved allegation gets no section and no place in the summary; a supported
-finding's description is the model's, selected and placed by the system.
-Decisions (correct changes that still need a human's yes) are a genuinely
-separate list, preserved explicitly in both the prose and the `DECISIONS` coda.
+**structure and selection** — which allegations get a section at all, which
+remedies are actionable, and what the summary and coda say. The text *inside* a
+supported finding's description and remedy, and the scope, limitation, and
+decision items, is still model-authored; the system selects and places it.
 
 Evidence is cited **by location, not by copied text.** Every source is shown to
 the model with numbered lines; a citation is a source number and a line range,

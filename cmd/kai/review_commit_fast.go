@@ -113,7 +113,7 @@ DECISIONS:
 // prompt, and the fast reviewer can read the commit message itself. The
 // finding's Intent.Stated still comes from the commit subject, exactly as
 // before, so the bundle shape is unchanged.
-func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, authorContext, subject, body, diff string, changedPaths []string) (string, []string, error) {
+func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, authorContext, subject, body, diff string, changedPaths []string) (string, *rcChallengeResult, error) {
 	var user strings.Builder
 	if sc := strings.TrimSpace(authorContext); sc != "" {
 		if len(sc) > rcMaxAuthorContextBytes {
@@ -192,11 +192,11 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, a
 		}
 	}
 	draft := strings.TrimSpace(out.String())
-	checked, unresolved, err := rcChallengeReview(cctx, prov, model, draft, []string{user.String()}, rcConfiguredSandbox())
+	res, err := rcChallengeReview(cctx, prov, model, draft, []string{user.String()}, rcConfiguredSandbox())
 	if err != nil {
 		return "", nil, fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
 	}
-	return checked, unresolved, nil
+	return res.Review, res, nil
 }
 
 // rcCapFastReadiness enforces the ceiling the prompt states. The prompt is the
