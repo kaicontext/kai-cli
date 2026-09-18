@@ -120,9 +120,10 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 	for _, src := range sources {
 		joined.WriteString(src.Text)
 	}
-	// This kai_view result carries no "N: " file rows, so it has no file
-	// coordinates and is a row-addressed source like any other.
-	if len(sources) != 2 || !strings.Contains(sources[1].Text, file) || sources[1].Coord != rcCoordRows || strings.Contains(joined.String(), "unsupported model assertion") {
+	// This kai_view result carries no "N: " file rows, so its file mapping
+	// cannot be established: it is UNMAPPED — shown in full for context, not
+	// citable — never silently re-addressed by rows.
+	if len(sources) != 2 || !strings.Contains(sources[1].Text, file) || sources[1].Coord != rcCoordNone || strings.Contains(joined.String(), "unsupported model assertion") {
 		t.Fatalf("sources lost evidence or included speculation: %v", sources)
 	}
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
@@ -135,7 +136,7 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 			text = req.Messages[0].Parts[0].(message.TextContent).Text
 		}
 		// Source 2 = the tool-call header line + 500 preamble lines + the last line.
-		if !strings.Contains(text, "SOURCE 2 (502 rows; cite the ROW numbers printed at the left):") || !strings.Contains(text, "  502| critical source at the end") {
+		if !strings.Contains(text, "SOURCE 2 (kai_view result whose file line mapping could not be established") || !strings.Contains(text, "\ncritical source at the end") {
 			t.Fatal("challenge did not get full evidence in a fresh conversation")
 		}
 		return provider.Response{}, errors.New("provider failed")

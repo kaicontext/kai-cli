@@ -60,8 +60,14 @@ source's header says which numbers to cite:
   experiment results — is shown with **row numbers** at the left and cited by
   those.
 
-Validation uses only the declared system; it never guesses the other one, and
-a citation that does not resolve there is invalid. This replaced a rendering
+The call's `offset` is interpreted exactly as the file tool interprets it
+(integer, `null`, `"0.0"`, `" 3 "`, a float — truncated; a negative clamped
+to 0). A `kai_view` result whose file mapping cannot be established — no file
+rows, rows that do not start where the offset says, an offset the tool would
+refuse — is **unmapped**: shown for context, citable by nothing; it is never
+silently re-addressed by rows, which would let "file line 1" resolve to the
+tool-call header. Validation uses only the declared system; it never guesses
+another one, and a citation that does not resolve there is invalid. This replaced a rendering
 that stacked the system's row numbers in front of the tool's file line
 numbers; the model cited file lines, and on large files viewed in slices they
 fell outside the row range, which withheld whole reviews (kai-cli#119's own
