@@ -21,7 +21,7 @@ const rcTestDecision = `The play button now changes the terminal's working direc
 
 func rcMustValidate(t *testing.T, a rcChallengeAnswer, decisions []string) *rcChallengeResult {
 	t.Helper()
-	res, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, decisions, rcCDSources)
+	res, _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, decisions, rcCDSources)
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -361,7 +361,11 @@ func TestPublicationReplaysCapturedRewriteInconsistency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := rcValidateChallenge(string(replay), fx.Issues, draftDecisions, fx.Sources)
+	var srcs []rcSource
+	for _, s := range fx.Sources {
+		srcs = append(srcs, rcRowSource(s))
+	}
+	res, _, err := rcValidateChallenge(string(replay), fx.Issues, draftDecisions, srcs)
 	if err != nil {
 		t.Fatalf("the captured judgments no longer publish: %v", err)
 	}

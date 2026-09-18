@@ -46,22 +46,41 @@ This makes what is published follow the challenger's per-item verdicts. It does
 not make those verdicts right: a wrongly supported allegation is published, with
 its remedy, exactly as faithfully as a correct one.
 
-Citations are by location. Every source is shown to the model with one-based
-numbered lines; a citation names the source number and a line range, and the
-system copies those lines itself. This removes the requirement that the model
-reproduce an excerpt byte-for-byte — the failure that withheld whole reviews
-over a mis-copied quotation. It does not check that the cited lines support the
-claim: a location that exists is valid whatever it says, and a location that
-does not exist (unknown source, range before line 1, reversed, or past the last
-line) still fails validation.
+Citations are by location, in ONE declared coordinate system per source. Each
+source's header says which numbers to cite:
 
-A bad citation location gets one correction attempt before the challenge fails.
-The diagnostic identifies the check, citation, source number, line range, and
-reason. The model receives that diagnostic alongside its original answer and the
-unchanged numbered evidence. It can only resubmit the complete answer; no
-additional experiments are available. Every original validation is applied
-again, and a second failure withholds the review. Semantic uncertainty
-(`unverified`) is not a citation error and does not trigger this retry.
+- a `kai_view` result is shown verbatim — the tool's own `N: text` file line
+  numbers, its git header, its truncation trailer — and is cited by **file line
+  numbers**, and only within the lines the tool actually **returned**. The
+  call's `offset`/`limit` say what was requested; the returned rows say what
+  came back (a short file, an empty result or a truncation return less), and
+  only those lines are valid targets. The header, the trailer and the harness
+  footer are outside the mapping and cannot be cited;
+- every other source — the prompt and diff, grep and other tool output,
+  experiment results — is shown with **row numbers** at the left and cited by
+  those.
+
+Validation uses only the declared system; it never guesses the other one, and
+a citation that does not resolve there is invalid. This replaced a rendering
+that stacked the system's row numbers in front of the tool's file line
+numbers; the model cited file lines, and on large files viewed in slices they
+fell outside the row range, which withheld whole reviews (kai-cli#119's own
+review, 2026-09-17). The cited lines are copied by the system — the model
+never reproduces an excerpt — and a citation still establishes only location,
+never that the lines support the claim. Each recorded citation says which
+coordinate resolved it.
+
+An invalid citation location no longer withholds the review. The submission
+gets ONE correction round under the original deadline, with tools restricted
+to `submit_review`, that reports **every** invalid location at once (check,
+citation, source, range, reason). The corrected answer is validated in full.
+Whatever is still unresolvable afterwards makes its allegation or decision
+**unresolved** — a verdict cannot rest on evidence that points nowhere — with
+the exact reason, while every other item is published as validated and the
+review is marked incomplete. A correction that cannot be obtained (deadline,
+provider error, malformed resubmission) publishes the first answer in that
+degraded form. Semantic uncertainty (`unverified`) is not a citation error and
+does not trigger the correction.
 
 The fast pass may draft with a substituted non-reasoning model; the challenge
 that decides publication is always sent to the configured review model, and the

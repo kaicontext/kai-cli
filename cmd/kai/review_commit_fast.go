@@ -198,7 +198,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	}
 	draft := strings.TrimSpace(out.String())
 	fmt.Fprintf(os.Stderr, "  challenge model: requested %s (draft was requested from %s)\n", challengeModel, model)
-	res, err := rcChallengeReview(cctx, prov, challengeModel, draft, []string{user.String()}, rcConfiguredSandbox())
+	res, err := rcChallengeReview(cctx, prov, challengeModel, draft, []rcSource{rcPromptSource(user.String())}, rcConfiguredSandbox())
 	if err != nil {
 		return "", nil, fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
 	}

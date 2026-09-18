@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,11 +13,12 @@ import (
 	"github.com/kaicontext/kai-engine/provider"
 )
 
-// Invalid citation handling. A location that does not exist — an unknown
-// source number, a line range starting before 1, reversed, or past the last
-// line — is a precise, retryable citation error that names the check, the
-// citation and the reason. Validation still fails on it; cite-by-location
-// removed the exact-quote requirement, not the location check.
+// Invalid citation handling. A location that does not exist in its source's
+// declared coordinates — an unknown source number, a range starting before the
+// first line, reversed, or past the last line — is reported precisely (item,
+// citation, source, range, reason) so ONE correction can be requested, and it
+// makes the item it belongs to unresolved. It no longer withholds the review:
+// the other item stays published and the review is marked incomplete.
 func TestReviewCitationDiagnostics(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -25,29 +27,37 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 		want       string
 	}{
 		{"source", 99, 1, 1, "source number is out of range"},
-		{"start before 1", 1, 0, 1, "line range is out of bounds (source has 2 line(s))"},
-		{"reversed", 1, 2, 1, "line range is out of bounds"},
-		{"past the end", 1, 1, 3, "line range is out of bounds (source has 2 line(s))"},
+		{"start before 1", 1, 0, 1, "row range is out of bounds (source has 2 row(s))"},
+		{"reversed", 1, 2, 1, "row range is out of bounds"},
+		{"past the end", 1, 1, 3, "row range is out of bounds (source has 2 row(s))"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := rcCDChecks()
 			a.Checks[0].Evidence[0] = rcCheckEvidence{Source: tc.source, LineStart: tc.start, LineEnd: tc.end}
-			_, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
-			var citation *rcCitationError
-			if !errors.As(err, &citation) || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "check 1, citation 1") {
-				t.Fatalf("imprecise error: %v", err)
+			res, problems, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
+			if err != nil {
+				t.Fatalf("an invalid location withheld the review: %v", err)
+			}
+			if len(problems) != 1 || !strings.Contains(problems[0].String(), tc.want) || !strings.HasPrefix(problems[0].String(), "check 1, citation 1, source "+strconv.Itoa(tc.source)) {
+				t.Fatalf("imprecise problem report: %+v", problems)
+			}
+			if got := res.Allegations[0]; got.Status != rcStatusUnresolved || !strings.Contains(got.Reason, "citation 1 could not be resolved") || got.Remedy != "" || got.WithheldRemedy != rcFalseCDRemedy {
+				t.Fatalf("item with an unresolvable citation not degraded: %+v", got)
+			}
+			if !res.Incomplete || res.Allegations[1].Status != rcStatusSupported || !strings.Contains(res.Review, rcEscapeIssue) {
+				t.Fatalf("the other finding was lost or the review not marked incomplete: %+v", res)
 			}
 		})
 	}
-	// A valid location that exists but is the WRONG evidence passes validation:
-	// the system does not judge relevance. Stated here so the limit is tested,
-	// not implied.
+	// A valid location that exists but is the WRONG evidence passes: the
+	// system does not judge relevance. Stated here so the limit is tested, not
+	// implied.
 	a := rcCDChecks()
 	a.Checks[0].Evidence[0] = rcCheckEvidence{Source: 2, LineStart: 1, LineEnd: 1}
-	if _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources); err != nil {
-		t.Fatalf("an existing location is valid regardless of relevance: %v", err)
+	if _, problems, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources); err != nil || len(problems) != 0 {
+		t.Fatalf("an existing location is valid regardless of relevance: %v %+v", err, problems)
 	}
-	if e := (&rcCitationError{Check: 1, Citation: 1, Source: 1, SourceCount: 2, LineStart: 1, LineEnd: 99, Reason: "line range is out of bounds"}).Error(); strings.Contains(e, "\n") || len(e) > 400 {
+	if e := (rcCitationProblem{Item: 1, Citation: 1, Source: 1, SourceCount: 2, LineStart: 1, LineEnd: 99, Reason: "row range is out of bounds"}).String(); strings.Contains(e, "\n") || len(e) > 400 {
 		t.Fatalf("diagnostic is not a single bounded line: %q", e)
 	}
 }
@@ -67,12 +77,12 @@ func TestReviewCitationLiveRepairDesktop418(t *testing.T) {
 	if prov == nil {
 		t.Fatal("no configured provider")
 	}
-	sources := []string{rcCDSource, `cd "$HOME"`}
+	sources := rcCDSources
 	a := rcCDChecks()
 	a.Checks[0].Evidence[0].LineEnd = 99 // a location that does not exist
 	raw := rcTestAnswer(t, a)
 	failed := provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "original", Name: "submit_review", Input: raw}}}
-	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Check these two issues:\n" + rcFalseCDIssue + "\n" + rcEscapeIssue + "\n" + rcNumberedSource(1, sources[0]) + rcNumberedSource(2, sources[1])}}}}
+	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Check these two issues:\n" + rcFalseCDIssue + "\n" + rcEscapeIssue + "\n" + rcRenderSource(1, sources[0]) + rcRenderSource(2, sources[1])}}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	got, err := rcValidateOrRepairCitation(ctx, prov, model, msgs, failed, raw, "original", rcCDIssues, nil, sources)
@@ -86,9 +96,16 @@ func TestReviewCitationLiveRepairDesktop418(t *testing.T) {
 	t.Logf("model=%s: corrected seeded citation mismatch; retained only escaping defect", model)
 }
 
+// One bounded correction, then degradation — never withholding. The first
+// answer cites a location that does not exist; the correction round reports
+// it and asks for a complete resubmission under the original deadline, with
+// tools restricted to submit_review. Whatever the correction cannot fix leaves
+// the affected allegation unresolved and the review incomplete; a correction
+// that cannot be obtained at all publishes the first answer in that degraded
+// form.
 func TestReviewCitationCorrection(t *testing.T) {
 	for _, structured := range []bool{false, true} {
-		for _, outcome := range []string{"corrected", "mismatch", "unverified", "missing-check", "new-issue", "truncated", "tool", "provider-error", "cancelled"} {
+		for _, outcome := range []string{"corrected", "still-invalid", "unverified", "missing-check", "new-issue", "truncated", "tool", "provider-error", "cancelled"} {
 			t.Run(outcome+map[bool]string{false: "-text", true: "-tool"}[structured], func(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
@@ -127,11 +144,11 @@ func TestReviewCitationCorrection(t *testing.T) {
 						} else {
 							feedback = last.(message.TextContent).Text
 						}
-						if !strings.Contains(feedback, "check 1, citation 1, source 1") || !strings.Contains(feedback, "lines 1-99") || !strings.Contains(feedback, "line range is out of bounds") {
+						if !strings.Contains(feedback, "check 1, citation 1, source 1") || !strings.Contains(feedback, "lines 1-99") || !strings.Contains(feedback, "row range is out of bounds") {
 							t.Fatalf("missing precise feedback: %s", feedback)
 						}
 						switch outcome {
-						case "mismatch":
+						case "still-invalid":
 							a.Checks[0].Evidence[0].LineStart = 0 // still a location that does not exist
 						case "unverified":
 							a.Checks[0].Verdict = "unverified"
@@ -154,21 +171,32 @@ func TestReviewCitationCorrection(t *testing.T) {
 					return provider.Response{Parts: []message.ContentPart{part}}, nil
 				}}
 				got, err := rcChallengeReview(ctx, p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+				if err != nil || got == nil {
+					t.Fatalf("a citation slip withheld the review: %+v %v", got, err)
+				}
+				// The supported finding is published in every outcome.
+				if !strings.Contains(got.Review, rcEscapeIssue) {
+					t.Fatalf("supported finding lost: %s", got.Review)
+				}
 				switch outcome {
 				case "corrected":
-					if err != nil || !strings.Contains(got.Review, rcEscapeIssue) || strings.Contains(got.Review, rcFalseCDIssue) {
-						t.Fatalf("correction rejected: %+v %v", got, err)
+					// Refuted with a valid citation: clean, complete review.
+					if got.Incomplete || got.Allegations[0].Status != rcStatusRefuted {
+						t.Fatalf("correction not applied: %+v", got.Allegations[0])
 					}
 				case "unverified":
-					// An unverified item is no longer a reason to withhold the
-					// review: it is published as unresolved and the review is
-					// marked incomplete, with the supported finding kept.
-					if err != nil || !got.Incomplete || !strings.Contains(got.Review, rcEscapeIssue) {
-						t.Fatalf("unresolved item not published as incomplete: %+v %v", got, err)
+					if !got.Incomplete || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "shell state") {
+						t.Fatalf("unverified resubmission not published as unresolved: %+v", got.Allegations[0])
 					}
 				default:
-					if err == nil || got != nil {
-						t.Fatalf("unchecked result escaped: %+v %v", got, err)
+					// Still invalid, or no usable correction at all: the first
+					// answer's validated verdicts stand and the affected item is
+					// unresolved with the citation reason.
+					if !got.Incomplete || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "could not be resolved") {
+						t.Fatalf("item with an unresolvable citation not degraded: %+v", got.Allegations[0])
+					}
+					if strings.Contains(got.Review, rcFalseCDRemedy) {
+						t.Fatalf("withheld remedy published:\n%s", got.Review)
 					}
 				}
 				want := 2
