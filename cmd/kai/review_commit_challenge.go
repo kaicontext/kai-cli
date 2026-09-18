@@ -222,6 +222,12 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 const (
 	rcCoordRows = "rows"
 	rcCoordFile = "file"
+	// rcCoordNone: a kai_view result whose file line mapping could not be
+	// established — no "N: text" rows, rows that do not start where the call's
+	// offset says, an offset the engine would have rejected. It is shown for
+	// context but CANNOT be cited: falling back to row numbers would let a
+	// citation of "file line 1" resolve to the tool-call header, silently.
+	rcCoordNone = "unmapped"
 )
 
 type rcSource struct {
@@ -236,6 +242,8 @@ type rcSource struct {
 	Path  string
 	First int
 	Rows  []string
+	// Why is set when Coord is rcCoordNone: the reason no mapping exists.
+	Why string
 }
 
 // rcPromptSource wraps the review prompt (the fast pass's only source).
@@ -278,33 +286,71 @@ func rcFileViewRows(content string, offset int) (first int, rows []string) {
 	return offset + 1, rows
 }
 
-// rcToolSource classifies one retained tool result. The kai_view call's own
-// arguments — not the rendered text — say where the slice starts; the rows the
-// tool returned say how far it goes. Structured, but tolerant of the model
-// writing "offset": "100" (the engine accepts that too).
+// rcViewOffset interprets a kai_view "offset" argument exactly as the engine's
+// file tool does (tools/file.go flexInt at kai-engine v0.6.73): a JSON integer
+// as is; null → 0; a string, trimmed — "" → 0, otherwise a %g float truncated
+// ("0.0", " 0 ", "1e1"); a JSON float truncated; anything else is an error
+// the tool itself would have refused. The view then clamps a negative start
+// to 0, so this does too. A parser that interprets offset differently from
+// the tool maps citations onto the wrong lines.
+func rcViewOffset(raw json.RawMessage) (int, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, nil
+	}
+	var n int
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return max(n, 0), nil
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		str = strings.TrimSpace(str)
+		if str == "" {
+			return 0, nil
+		}
+		var f float64
+		if _, err := fmt.Sscanf(str, "%g", &f); err == nil {
+			return max(int(f), 0), nil
+		}
+		return 0, fmt.Errorf("cannot interpret %q as int", str)
+	}
+	var f float64
+	if err := json.Unmarshal(raw, &f); err == nil {
+		return max(int(f), 0), nil
+	}
+	return 0, fmt.Errorf("cannot unmarshal %s into int", string(raw))
+}
+
+// rcToolSource classifies one retained tool result. For kai_view the call's
+// own arguments — not the rendered text — say where the slice starts, and the
+// "N: text" rows the tool returned say how far it goes. When that mapping
+// cannot be established the source is UNMAPPED and cannot be cited; it is
+// never silently re-addressed by rows.
 func rcToolSource(name, input, content string) rcSource {
 	src := rcSource{Text: name + " " + input + "\n" + content, Tool: name, Coord: rcCoordRows}
 	if name != "kai_view" {
+		return src
+	}
+	unmapped := func(why string) rcSource {
+		src.Coord, src.Why = rcCoordNone, why
 		return src
 	}
 	var args struct {
 		FilePath string          `json:"file_path"`
 		Offset   json.RawMessage `json:"offset"`
 	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil || args.FilePath == "" {
-		return src
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return unmapped("the kai_view call's arguments could not be read")
 	}
-	offset := 0
-	if len(args.Offset) > 0 {
-		if n, err := strconv.Atoi(strings.Trim(string(args.Offset), `"`)); err == nil && n >= 0 {
-			offset = n
-		} else {
-			return src
-		}
+	if args.FilePath == "" {
+		return unmapped("the kai_view call names no file")
+	}
+	offset, err := rcViewOffset(args.Offset)
+	if err != nil {
+		return unmapped("the kai_view call's offset could not be interpreted: " + err.Error())
 	}
 	first, rows := rcFileViewRows(content, offset)
 	if rows == nil {
-		return src
+		return unmapped(fmt.Sprintf("the result carries no file lines starting at line %d (offset %d)", offset+1, offset))
 	}
 	src.Coord, src.Path, src.First, src.Rows = rcCoordFile, args.FilePath, first, rows
 	return src
@@ -350,6 +396,13 @@ func rcSourceLines(body string) []string {
 // file lines it actually contains.
 func rcRenderSource(n int, src rcSource) string {
 	var b strings.Builder
+	if src.Coord == rcCoordNone {
+		fmt.Fprintf(&b, "SOURCE %d (kai_view result whose file line mapping could not be established — %s; shown for context only, it CANNOT be cited):\n%s", n, src.Why, src.Text)
+		if !strings.HasSuffix(src.Text, "\n") {
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
 	if src.Coord == rcCoordFile {
 		last := src.First + len(src.Rows) - 1
 		fmt.Fprintf(&b, "SOURCE %d (kai_view %s — file lines %d-%d returned; cite FILE line numbers exactly as printed below):\n%s", n, src.Path, src.First, last, src.Text)
@@ -378,6 +431,9 @@ func rcExtractCitation(sources []rcSource, ev rcCheckEvidence) (text, reason str
 		return "", "source number is out of range", false
 	}
 	src := sources[ev.Source-1]
+	if src.Coord == rcCoordNone {
+		return "", "this source cannot be cited: " + src.Why, false
+	}
 	if src.Coord == rcCoordFile {
 		last := src.First + len(src.Rows) - 1
 		if ev.LineStart < src.First || ev.LineEnd < ev.LineStart || ev.LineEnd > last {

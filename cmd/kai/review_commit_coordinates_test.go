@@ -91,16 +91,26 @@ func TestKaiViewSliceAndTruncationBounds(t *testing.T) {
 	if short.First != 1 || len(short.Rows) != 3 {
 		t.Fatalf("short file: %+v", short)
 	}
-	// Results with no file rows have no file coordinates.
+	// A kai_view result with no file rows has NO coordinates: it is unmapped
+	// and cannot be cited. Falling back to rows would let "file line 1"
+	// resolve to the tool-call header.
 	for _, c := range []string{"(empty: offset 900 past end of 300-line file)", "(binary file: a.bin — 12 bytes, not displayed; first NUL byte at offset 0)", ""} {
-		if s := rcToolSource("kai_view", `{"file_path":"a","offset":900}`, c); s.Coord != rcCoordRows {
-			t.Fatalf("rows expected for %q, got %s", c, s.Coord)
+		s := rcToolSource("kai_view", `{"file_path":"a","offset":900}`, c)
+		if s.Coord != rcCoordNone || s.Why == "" {
+			t.Fatalf("unmapped expected for %q, got %s", c, s.Coord)
+		}
+		if _, reason, ok := rcExtractCitation([]rcSource{s}, rcCheckEvidence{Source: 1, LineStart: 1, LineEnd: 1}); ok || !strings.Contains(reason, "cannot be cited") {
+			t.Fatalf("unmapped source was citable: %q %v", reason, ok)
 		}
 	}
 	// Rows must start at offset+1: a result whose numbering does not match the
-	// call's offset is not trusted as file coordinates.
-	if s := rcToolSource("kai_view", `{"file_path":"a","offset":10}`, "1: x\n2: y\n"); s.Coord != rcCoordRows {
-		t.Fatalf("mismatched offset accepted as file coordinates: %+v", s)
+	// call's offset is unmapped, not re-addressed.
+	if s := rcToolSource("kai_view", `{"file_path":"a","offset":10}`, "1: x\n2: y\n"); s.Coord != rcCoordNone {
+		t.Fatalf("mismatched offset accepted: %+v", s)
+	}
+	// Unmapped sources are still shown, with a header saying they cannot be cited.
+	if r := rcRenderSource(3, rcToolSource("kai_view", `{"file_path":"a","offset":"x"}`, "1: x\n")); !strings.Contains(r, "CANNOT be cited") || !strings.Contains(r, "offset could not be interpreted") {
+		t.Fatalf("unmapped rendering: %s", r)
 	}
 }
 
