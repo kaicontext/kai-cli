@@ -338,6 +338,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// Non-nil only on the grounded path, and only describes HOW the run ended
 	// — see rcIncomplete. Used solely when the review produced nothing to parse.
 	var inc *rcIncomplete
+	// challenge is the publication gate's structured record from whichever path
+	// ran: each allegation's and decision's final status. Its Incomplete flag
+	// means the review is incomplete even though it has a body.
+	var challenge *rcChallengeResult
 	if fast {
 		// The fast pass may substitute a non-reasoning model for the DRAFT. The
 		// CHALLENGE — the publication gate — uses the configured review model;
@@ -346,7 +350,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (draft model %s, challenge model %s, budget %s)…\n",
 			fastModel, model, rcFastHardDeadline)
 		phase := time.Now()
-		raw, err = rcRunFastReview(ctx, prov, fastModel, model, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, model, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
 		if err != nil {
 			return err
 		}
@@ -365,6 +369,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff, rcPathsOf(files))
 		if err != nil {
 			return err
+		}
+		if inc != nil {
+			challenge = inc.Challenge
 		}
 		fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
 	}
@@ -400,6 +407,20 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		prose = salvaged
 		incomplete = true
 		fmt.Fprintf(os.Stderr, "  review produced no conclusion — emitting an incomplete-review finding, then failing\n")
+	}
+	// A published review that could not settle every allegation or decision is
+	// incomplete too. Its body is real — it carries the supported findings —
+	// but the bundle must say so and the run must exit non-zero, or Atlas and
+	// CI would read a partial review as a completed one.
+	if challenge != nil && challenge.Incomplete {
+		incomplete = true
+		open := challenge.unresolved()
+		fmt.Fprintf(os.Stderr, "  review incomplete: %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
+	}
+	// An empty record (the draft had nothing to challenge) is omitted from the
+	// bundle rather than published as a hollow block.
+	if challenge.rcEmpty() {
+		challenge = nil
 	}
 
 	// Blast radius: walk the captured graph outward from the changed files so the
@@ -526,7 +547,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			Depth      string      `json:"depth,omitempty"`
 			Incomplete bool        `json:"incomplete,omitempty"`
 			Coverage   *rcCoverage `json:"coverage,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc)}, "", "  ")
+			// Challenge is the publication gate's structured record: each
+			// allegation's and decision's final status, reason and citations.
+			// Additive and optional; readers that do not know it ignore it.
+			Challenge *rcChallengeResult `json:"challenge,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -546,6 +571,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Println(prose)
 		if note != "" {
 			fmt.Printf("\nBottom line: %s\n", note)
+		}
+		// The status is part of the text a human reads, not only the exit code.
+		if challenge != nil && challenge.Incomplete {
+			open := challenge.unresolved()
+			fmt.Printf("\nStatus: INCOMPLETE — %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
 		}
 		if incomplete {
 			return rcErrIncompleteReview
@@ -959,13 +989,14 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	}
 	if rcUsableCoda(raw) {
 		fmt.Fprintln(os.Stderr, "  challenging proposed defects before publication…")
-		checked, err := rcChallengeReview(publicationCtx, prov, model, raw, rcChallengeSources(transcript), rcConfiguredSandbox())
+		res, err := rcChallengeReview(publicationCtx, prov, model, raw, rcChallengeSources(transcript), rcConfiguredSandbox())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  review challenge incomplete: %v\n", err)
 			inc.ChallengeFailure = err.Error()
 			return "", inc, nil
 		}
-		raw = checked
+		raw = res.Review
+		inc.Challenge = res
 	}
 	return raw, inc, nil
 }
@@ -1264,6 +1295,11 @@ type rcIncomplete struct {
 	Elapsed          time.Duration
 	Turns            int
 	FilesRead        []string
+	// Challenge is the gate's structured record when it PUBLISHED a review.
+	// Unlike ChallengeFailure, the review body is real and kept; when
+	// Challenge.Incomplete is set the caller marks the bundle incomplete and
+	// exits non-zero so a partial review is never read as a completed one.
+	Challenge *rcChallengeResult
 }
 
 // rcCoverage is the machine-written record of what a review actually did:
