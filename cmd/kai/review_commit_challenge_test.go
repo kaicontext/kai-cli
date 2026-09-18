@@ -20,7 +20,7 @@ const rcEscapeFinding = "A workspace path containing $ is expanded by the shell 
 const rcEscapeRemedy = "single-quote the workspace path"
 
 var rcCDIssues = []string{rcFalseCDIssue, rcEscapeIssue}
-var rcCDSources = []string{rcCDSource, `cd "$HOME"`}
+var rcCDSources = []rcSource{rcRowSource(rcCDSource), rcRowSource(`cd "$HOME"`)}
 
 func rcTestReview(issues ...string) string {
 	readiness := "5"
@@ -64,7 +64,7 @@ func rcCDChecks() rcChallengeAnswer {
 // This tests publication mechanics, not the model's shell knowledge. The live
 // evaluation below separately exercises the actual model on the #418 specimen.
 func TestReviewChallengeDropsRefutedIssueAndKeepsSupportedIssue(t *testing.T) {
-	res, err := rcValidateChallenge(rcTestAnswer(t, rcCDChecks()), rcCDIssues, nil, rcCDSources)
+	res, _, err := rcValidateChallenge(rcTestAnswer(t, rcCDChecks()), rcCDIssues, nil, rcCDSources)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,12 +80,6 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 	}{
 		{"missing check", func(a *rcChallengeAnswer) { a.Checks = a.Checks[:1] }},
 		{"duplicate check", func(a *rcChallengeAnswer) { a.Checks[1] = a.Checks[0] }},
-		{"line range past the end", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].LineEnd = 99 }},
-		{"line range starting at zero", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].LineStart = 0 }},
-		{"reversed line range", func(a *rcChallengeAnswer) {
-			a.Checks[0].Evidence[0] = rcCheckEvidence{Source: 1, LineStart: 2, LineEnd: 1}
-		}},
-		{"invented source", func(a *rcChallengeAnswer) { a.Checks[0].Evidence[0].Source = 99 }},
 		{"no evidence", func(a *rcChallengeAnswer) { a.Checks[0].Evidence = nil }},
 		{"check for an issue the draft never raised", func(a *rcChallengeAnswer) {
 			a.Checks = append(a.Checks, rcIssueCheck{Issue: "new.go:1 — new allegation", Verdict: "supported", Reason: "r", Finding: "f", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}})
@@ -98,7 +92,7 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := rcCDChecks()
 			tc.mutate(&a)
-			got, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
+			got, _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
 			if err == nil || got != nil {
 				t.Fatalf("unchecked review escaped: %+v, %v", got, err)
 			}
@@ -122,7 +116,13 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 		{Role: message.RoleUser, Parts: []message.ContentPart{message.ToolResult{ToolCallID: "read", Content: file}}},
 	}
 	sources := rcChallengeSources(tr)
-	if len(sources) != 2 || !strings.Contains(sources[1], file) || strings.Contains(strings.Join(sources, ""), "unsupported model assertion") {
+	var joined strings.Builder
+	for _, src := range sources {
+		joined.WriteString(src.Text)
+	}
+	// This kai_view result carries no "N: " file rows, so it has no file
+	// coordinates and is a row-addressed source like any other.
+	if len(sources) != 2 || !strings.Contains(sources[1].Text, file) || sources[1].Coord != rcCoordRows || strings.Contains(joined.String(), "unsupported model assertion") {
 		t.Fatalf("sources lost evidence or included speculation: %v", sources)
 	}
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
@@ -135,7 +135,7 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 			text = req.Messages[0].Parts[0].(message.TextContent).Text
 		}
 		// Source 2 = the tool-call header line + 500 preamble lines + the last line.
-		if !strings.Contains(text, "SOURCE 2 (502 lines):") || !strings.Contains(text, "  502| critical source at the end") {
+		if !strings.Contains(text, "SOURCE 2 (502 rows; cite the ROW numbers printed at the left):") || !strings.Contains(text, "  502| critical source at the end") {
 			t.Fatal("challenge did not get full evidence in a fresh conversation")
 		}
 		return provider.Response{}, errors.New("provider failed")
@@ -183,7 +183,7 @@ func TestReviewChallengeEvidenceLimitAndIncompleteReport(t *testing.T) {
 		t.Fatal("oversized evidence must not be silently shortened and sent")
 		return provider.Response{}, nil
 	}}
-	if _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{strings.Repeat("x", rcEvidenceLimit)}, nil); err == nil {
+	if _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []rcSource{rcRowSource(strings.Repeat("x", rcEvidenceLimit))}, nil); err == nil {
 		t.Fatal("accepted oversized evidence")
 	}
 	prose := rcIncompleteProse(&rcIncomplete{ChallengeFailure: "unverified allegation"})
@@ -240,16 +240,15 @@ func TestFastDraftDoesNotSubstituteChallenger(t *testing.T) {
 	}
 }
 
-// System-extracted citations. The model names a source and a line range; the
-// prompt shows every source with one-based numbered lines; the system copies
-// exactly those lines. No quotation is requested, sent, or compared. This
-// removes the requirement that the model reproduce an excerpt byte-for-byte;
-// it does not check that the extracted lines support the claim.
+// System-extracted citations. The model names a source and a range; the system
+// copies exactly those lines. No quotation is requested, sent, or compared.
+// Each source is shown in ONE coordinate system, declared in its header: rows
+// for the prompt, diffs, grep output and experiments; the file's own line
+// numbers for a kai_view result, which is shown verbatim.
 func TestReviewCitationIsExtractedBySystem(t *testing.T) {
-	sources := []string{rcCDSource, `cd "$HOME"`}
-	// Rendering and extraction share one coordinate system.
-	if got := rcNumberedSource(1, rcCDSource); got != "SOURCE 1 (2 lines):\n    1| cd /tmp && pwd\n    2| pwd\n" {
-		t.Fatalf("numbered source: %q", got)
+	sources := rcCDSources
+	if got := rcRenderSource(1, sources[0]); got != "SOURCE 1 (2 rows; cite the ROW numbers printed at the left):\n    1| cd /tmp && pwd\n    2| pwd\n" {
+		t.Fatalf("row source: %q", got)
 	}
 	if got, _, ok := rcExtractCitation(sources, rcCheckEvidence{Source: 1, LineStart: 2, LineEnd: 2}); !ok || got != "pwd" {
 		t.Fatalf("extract: %q %v", got, ok)
@@ -257,8 +256,6 @@ func TestReviewCitationIsExtractedBySystem(t *testing.T) {
 	if got, _, ok := rcExtractCitation(sources, rcCheckEvidence{Source: 1, LineStart: 1, LineEnd: 2}); !ok || got != "cd /tmp && pwd\npwd" {
 		t.Fatalf("extract range: %q %v", got, ok)
 	}
-	// The prompt the challenger receives carries the numbered sources, and the
-	// submission schema asks for locations, not quotes.
 	var prompt string
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
 		prompt = req.Messages[0].Parts[0].(message.TextContent).Text
@@ -271,9 +268,14 @@ func TestReviewCitationIsExtractedBySystem(t *testing.T) {
 	if err != nil || !strings.Contains(res.Review, rcEscapeIssue) {
 		t.Fatalf("location citations rejected: %+v %v", res, err)
 	}
-	for _, want := range []string{"SOURCE 1 (2 lines):\n    1| cd /tmp && pwd\n    2| pwd\n", "SOURCE 2 (1 line):\n    1| cd \"$HOME\"\n"} {
+	for _, want := range []string{"SOURCE 1 (2 rows; cite the ROW numbers printed at the left):\n    1| cd /tmp && pwd\n    2| pwd\n", "SOURCE 2 (1 row; cite the ROW numbers printed at the left):\n    1| cd \"$HOME\"\n"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks numbered source %q:\n%s", want, prompt)
+		}
+	}
+	for _, ref := range res.Allegations[1].Evidence {
+		if ref.Coord != rcCoordRows {
+			t.Fatalf("row citation recorded as %q", ref.Coord)
 		}
 	}
 	schema := rcSubmitReviewToolInfo()
@@ -291,7 +293,7 @@ func TestReviewChallengeRejectsTruncatedAnswerAndUnexpectedTool(t *testing.T) {
 		{Parts: []message.ContentPart{message.ToolCall{ID: "bad", Name: "bash", Input: `{"command":"pwd"}`}}},
 	} {
 		p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) { return resp, nil }}
-		if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []string{rcCDSource}, nil); err == nil || got != nil {
+		if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []rcSource{rcRowSource(rcCDSource)}, nil); err == nil || got != nil {
 			t.Fatalf("accepted invalid challenge: %+v %v", got, err)
 		}
 	}
@@ -349,7 +351,7 @@ const full = ws ? 'cd "' + ws + '" && ' + String(command) : String(command);
 const input = full.replace(/\r?\n/g, "\r") + "\r";
 // Sample workspace path: a literal /tmp/$HOME directory, not a variable.
 `
-	res, err := rcChallengeReview(context.Background(), prov, model, rcTestReview(rcFalseCDIssue, rcEscapeIssue), []string{source}, sandbox)
+	res, err := rcChallengeReview(context.Background(), prov, model, rcTestReview(rcFalseCDIssue, rcEscapeIssue), []rcSource{rcRowSource(source)}, sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}

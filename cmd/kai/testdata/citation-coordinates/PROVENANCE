@@ -1,0 +1,13 @@
+real-kai-view-result.json — a real kai_view ToolResult as stored in a review
+transcript (kai-engine v0.6.73 rendering; kai-cli #117 branch binary; deep
+review of the kai-desktop #429 change; 2026-09-17). Used to test the row
+parser against actual tool output: git header, "N: text" rows (13-line file →
+14 rows, the last empty), and the harness footer.
+
+pr119-review-f4a52f23.json — SYNTHETIC RECONSTRUCTION of the two sources whose
+citations failed in kai-cli#119's own Kai Review (run f4a52f23). The run's
+transcript was not persisted. Exact: the calls and their arguments (job log)
+and the file rows (generated from the files at 881565f with the v0.6.73
+rendering). Inferred: the source numbering (chosen because the lengths match
+the log exactly: 206 and 31). Approximated: header/footer text. The file
+documents each of these. It is not the run.

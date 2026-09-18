@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +34,7 @@ Trace the actual state and control flow through a concrete example. Distinguish 
 
 For shell or language-runtime claims, prefer a minimal reproduction using review_shell when available. You may call it at most FOUR times in total; combine related assertions into one script. It runs only synthetic snippets in an isolated container: no repository, credentials, host mounts, or network. Its environment is POSIX /bin/sh, not the user's interactive PTY, Windows shell, or application backend. Name that boundary. Do not claim to have run anything unless the tool result is present. If the needed runtime is unavailable and the supplied evidence does not establish the behavior, mark the allegation unverified.
 
-Cite evidence BY LOCATION. Each source is shown to you with numbered lines. To cite, give the source number and the one-based line range; the system copies those exact lines itself. Never retype an excerpt. A citation whose source number or line range does not exist is invalid.
+Cite evidence BY LOCATION: a source number and a line range. Each source header says which numbers to use. A kai_view source is shown exactly as the tool printed it, with the FILE's own line numbers ("12: code"); cite those file line numbers, and only lines the source actually contains — a slice returns a range, and its header names it. Every other source (the diff, grep results, experiment output) is shown with ROW numbers at the left; cite those rows. The system copies the cited lines itself. Never retype an excerpt. A citation outside the lines a source contains is invalid and leaves that allegation unresolved.
 
 Finish by calling submit_review with this shape (plain JSON is accepted if tool submission is unavailable):
 {"scope":["what was actually examined: files, paths, behaviors"],
@@ -100,6 +102,10 @@ type rcCitationRef struct {
 	Source    int `json:"source"`
 	LineStart int `json:"lineStart"`
 	LineEnd   int `json:"lineEnd"`
+	// Coord says how the location was interpreted: "rows" of the source as
+	// shown, or "file" line numbers of Path as printed by kai_view.
+	Coord string `json:"coord"`
+	Path  string `json:"path,omitempty"`
 }
 
 // Final statuses. "unverified" from the model becomes "unresolved" here: the
@@ -198,23 +204,132 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 		Required: []string{"intent_match", "merge_ready", "checks", "decisions"}}
 }
 
+// A challenge SOURCE is one piece of evidence the challenger may cite, with ONE
+// declared coordinate system:
+//
+//   - rcCoordRows: cite the row numbers the system prints in front of every
+//     line (the prompt, the diff, grep results, experiments, tool output with
+//     no file line numbers of its own);
+//   - rcCoordFile: a kai_view result. It is shown VERBATIM — no system row
+//     numbers — and cited by the file line numbers the tool itself printed.
+//
+// Two numberings in one source was the defect this replaces: kai_view prints
+// "N: text" file lines, the system added row numbers in front, and the model
+// cited file lines that fell outside the row range of a slice (kai-cli#119's
+// own review, run f4a52f23: file lines 411-419 cited into a 206-row source
+// whose rows were file lines 396-595). Every source now declares which
+// coordinate applies, validation uses only that one, and nothing guesses.
+const (
+	rcCoordRows = "rows"
+	rcCoordFile = "file"
+)
+
+type rcSource struct {
+	Text  string // what the challenger sees for this source (before any row numbering)
+	Tool  string // the tool that produced it; "" for the prompt
+	Coord string // rcCoordRows | rcCoordFile
+	// File coordinates, when Coord == rcCoordFile: the file, the first file
+	// line the tool actually RETURNED, and the returned rows in order (text
+	// without the "N: " prefix). offset/limit in the call describe what was
+	// asked for; only rows that came back are citable. The tool's git header,
+	// its truncation trailer and the harness footer are outside this mapping.
+	Path  string
+	First int
+	Rows  []string
+}
+
+// rcPromptSource wraps the review prompt (the fast pass's only source).
+func rcPromptSource(text string) rcSource { return rcSource{Text: text, Coord: rcCoordRows} }
+
+// rcRowSource wraps any other text as a row-addressed source.
+func rcRowSource(text string) rcSource { return rcSource{Text: text, Coord: rcCoordRows} }
+
+// rcFileViewRows finds the file rows in a kai_view result: the maximal run of
+// lines "N: text" whose numbers run consecutively from offset+1. Lines before
+// (the git state header, the brace-escape notice) and after (the "(truncated;
+// …)" trailer, the harness's blank lines and "[turn …]" footer) are not rows.
+// A result with no such run (an empty or binary file, an error text) has no
+// file coordinates and is addressed by rows like any other source.
+var rcViewRowPattern = regexp.MustCompile(`^(\d+): (.*)$`)
+
+func rcFileViewRows(content string, offset int) (first int, rows []string) {
+	want := offset + 1
+	for _, line := range strings.Split(content, "\n") {
+		m := rcViewRowPattern.FindStringSubmatch(line)
+		if m == nil {
+			if rows != nil {
+				break
+			}
+			continue
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil || n != want {
+			if rows != nil {
+				break
+			}
+			continue
+		}
+		rows = append(rows, m[2])
+		want++
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	return offset + 1, rows
+}
+
+// rcToolSource classifies one retained tool result. The kai_view call's own
+// arguments — not the rendered text — say where the slice starts; the rows the
+// tool returned say how far it goes. Structured, but tolerant of the model
+// writing "offset": "100" (the engine accepts that too).
+func rcToolSource(name, input, content string) rcSource {
+	src := rcSource{Text: name + " " + input + "\n" + content, Tool: name, Coord: rcCoordRows}
+	if name != "kai_view" {
+		return src
+	}
+	var args struct {
+		FilePath string          `json:"file_path"`
+		Offset   json.RawMessage `json:"offset"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil || args.FilePath == "" {
+		return src
+	}
+	offset := 0
+	if len(args.Offset) > 0 {
+		if n, err := strconv.Atoi(strings.Trim(string(args.Offset), `"`)); err == nil && n >= 0 {
+			offset = n
+		} else {
+			return src
+		}
+	}
+	first, rows := rcFileViewRows(content, offset)
+	if rows == nil {
+		return src
+	}
+	src.Coord, src.Path, src.First, src.Rows = rcCoordFile, args.FilePath, first, rows
+	return src
+}
+
 // Keep complete tool results, including evidence past the old 2,000-character
 // cut. Omit assistant speculation: it is the claim under review, not a source.
-func rcChallengeSources(transcript []message.Message) []string {
-	var sources []string
-	calls := map[string]string{}
+// A result that errored, or came back empty, leaves no source.
+func rcChallengeSources(transcript []message.Message) []rcSource {
+	var sources []rcSource
+	type call struct{ name, input string }
+	calls := map[string]call{}
 	for _, m := range transcript {
 		for _, p := range m.Parts {
 			switch p := p.(type) {
 			case message.ToolCall:
-				calls[p.ID] = p.Name + " " + p.Input
+				calls[p.ID] = call{p.Name, p.Input}
 			case message.ToolResult:
 				if !p.IsError && p.Content != "" {
-					sources = append(sources, calls[p.ToolCallID]+"\n"+p.Content)
+					c := calls[p.ToolCallID]
+					sources = append(sources, rcToolSource(c.name, c.input, p.Content))
 				}
 			case message.TextContent:
 				if m.Role == message.RoleUser && len(sources) == 0 {
-					sources = append(sources, p.Text)
+					sources = append(sources, rcPromptSource(p.Text))
 				}
 			}
 		}
@@ -222,39 +337,57 @@ func rcChallengeSources(transcript []message.Message) []string {
 	return sources
 }
 
-// rcSourceLines splits a source into the lines the model cites against. A
+// rcSourceLines splits a row-addressed source into the rows the model cites. A
 // single trailing newline is dropped so a source ending in "\n" does not
-// report a phantom empty last line.
+// report a phantom empty last row.
 func rcSourceLines(body string) []string {
 	return strings.Split(strings.TrimSuffix(body, "\n"), "\n")
 }
 
-// rcNumberedSource renders one source with one-based line numbers — the
-// coordinate system the model cites in. rcExtractCitation splits the same way,
-// so a cited range maps back to exactly the lines the model saw.
-func rcNumberedSource(n int, body string) string {
-	lines := rcSourceLines(body)
+// rcRenderSource renders one source the way the model must cite it. A
+// row-addressed source gets the system's row numbers; a file-addressed source
+// is shown verbatim with its own file line numbers, and its header says which
+// file lines it actually contains.
+func rcRenderSource(n int, src rcSource) string {
+	var b strings.Builder
+	if src.Coord == rcCoordFile {
+		last := src.First + len(src.Rows) - 1
+		fmt.Fprintf(&b, "SOURCE %d (kai_view %s — file lines %d-%d returned; cite FILE line numbers exactly as printed below):\n%s", n, src.Path, src.First, last, src.Text)
+		if !strings.HasSuffix(src.Text, "\n") {
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
+	lines := rcSourceLines(src.Text)
 	suffix := "s"
 	if len(lines) == 1 {
 		suffix = ""
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "SOURCE %d (%d line%s):\n", n, len(lines), suffix)
+	fmt.Fprintf(&b, "SOURCE %d (%d row%s; cite the ROW numbers printed at the left):\n", n, len(lines), suffix)
 	for i, line := range lines {
 		fmt.Fprintf(&b, "%5d| %s\n", i+1, line)
 	}
 	return b.String()
 }
 
-// rcExtractCitation returns the exact source text a citation names, or ok=false
-// with the reason when the source number or line range does not exist.
-func rcExtractCitation(sources []string, ev rcCheckEvidence) (text, reason string, ok bool) {
+// rcExtractCitation returns the exact text a citation names, in the source's
+// declared coordinate system, or ok=false with the reason when the location
+// does not exist there. It never tries the other coordinate system.
+func rcExtractCitation(sources []rcSource, ev rcCheckEvidence) (text, reason string, ok bool) {
 	if ev.Source < 1 || ev.Source > len(sources) {
 		return "", "source number is out of range", false
 	}
-	lines := rcSourceLines(sources[ev.Source-1])
+	src := sources[ev.Source-1]
+	if src.Coord == rcCoordFile {
+		last := src.First + len(src.Rows) - 1
+		if ev.LineStart < src.First || ev.LineEnd < ev.LineStart || ev.LineEnd > last {
+			return "", fmt.Sprintf("file line range is outside the lines this source returned (%s lines %d-%d)", src.Path, src.First, last), false
+		}
+		return strings.Join(src.Rows[ev.LineStart-src.First:ev.LineEnd-src.First+1], "\n"), "", true
+	}
+	lines := rcSourceLines(src.Text)
 	if ev.LineStart < 1 || ev.LineEnd < ev.LineStart || ev.LineEnd > len(lines) {
-		return "", fmt.Sprintf("line range is out of bounds (source has %d line(s))", len(lines)), false
+		return "", fmt.Sprintf("row range is out of bounds (source has %d row(s))", len(lines)), false
 	}
 	return strings.Join(lines[ev.LineStart-1:ev.LineEnd], "\n"), "", true
 }
@@ -272,11 +405,13 @@ func rcResponseText(resp provider.Response) string {
 // rcChallengeReview runs the publication gate and returns everything it
 // decided. A draft with no issues and no decisions has nothing to challenge and
 // is returned as is. Structural failures (a malformed answer, a missing check,
-// an invalid citation that one correction did not fix) return an error and the
-// caller withholds the draft. An unresolved allegation or decision is NOT an
-// error: every supported finding is still published, and Incomplete tells the
-// caller to mark the bundle incomplete and exit non-zero.
-func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft string, sources []string, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
+// an invalid intent or readiness value) return an error and the caller
+// withholds the draft. An unresolved allegation or decision is NOT an error:
+// every supported finding is still published, and Incomplete tells the caller
+// to mark the bundle incomplete and exit non-zero. A citation whose location
+// does not exist gets ONE correction round; whatever is still unresolvable
+// afterwards makes its allegation unresolved — it never withholds the review.
+func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	_, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
 	if len(issues) == 0 && len(decisions) == 0 {
 		return &rcChallengeResult{Review: draft}, nil
@@ -297,7 +432,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 		}
 	}
 	for i, source := range sources {
-		fmt.Fprintf(&b, "\n%s", rcNumberedSource(i+1, source))
+		fmt.Fprintf(&b, "\n%s", rcRenderSource(i+1, source))
 	}
 	if b.Len() > rcEvidenceLimit {
 		return nil, fmt.Errorf("challenge evidence exceeds %d bytes; refusing to discard evidence", rcEvidenceLimit)
@@ -343,8 +478,8 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 				tr.Content = "Experiment unavailable: " + err.Error()
 				tr.IsError = true
 			} else {
-				sources = append(sources, result)
-				tr.Content = rcNumberedSource(len(sources), result)
+				sources = append(sources, rcRowSource(result))
+				tr.Content = rcRenderSource(len(sources), sources[len(sources)-1])
 			}
 			results = append(results, tr)
 		}
@@ -359,29 +494,47 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	return nil, fmt.Errorf("challenge ended without a complete answer")
 }
 
-// An invalid citation LOCATION is a protocol failure, not proof that the model
-// invented evidence. Identify the failed check and allow one resubmission
-// within the ORIGINAL deadline. Never retry semantic uncertainty.
-type rcCitationError struct {
-	Check, Citation, Source, SourceCount int
-	LineStart, LineEnd                   int
-	Reason                               string
+// rcCitationProblem is one citation whose location does not exist in its
+// source's declared coordinate system. It is a protocol slip, not proof that
+// the model invented evidence — but it is also not evidence, so the check it
+// belongs to cannot be published on it.
+type rcCitationProblem struct {
+	Item, Citation, Source, SourceCount int
+	LineStart, LineEnd                  int
+	Reason                              string
 }
 
-func (e *rcCitationError) Error() string {
-	return fmt.Sprintf("challenge citation invalid: check %d, citation %d, source %d (available 1..%d), lines %d-%d: %s", e.Check, e.Citation, e.Source, e.SourceCount, e.LineStart, e.LineEnd, e.Reason)
+func (e rcCitationProblem) String() string {
+	return fmt.Sprintf("check %d, citation %d, source %d (available 1..%d), lines %d-%d: %s", e.Item, e.Citation, e.Source, e.SourceCount, e.LineStart, e.LineEnd, e.Reason)
 }
 
-func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, raw, callID string, issues, decisions, sources []string) (*rcChallengeResult, error) {
-	res, err := rcValidateChallenge(raw, issues, decisions, sources)
-	if _, retryable := err.(*rcCitationError); !retryable {
+// rcValidateOrRepairCitation validates the submission and, when any citation
+// location is invalid, asks ONCE for a corrected resubmission within the
+// ORIGINAL deadline — reporting every invalid citation at once, since there is
+// only one attempt. The corrected answer is validated in full; whatever is
+// still unresolvable degrades its allegation to unresolved. If the correction
+// cannot be obtained (deadline, provider error, malformed resubmission), the
+// first answer is published in its degraded form rather than withheld: the
+// per-item verdicts that did validate are real, and the unresolved items say
+// why they are unresolved. Semantic uncertainty is never retried.
+func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, raw, callID string, issues, decisions []string, sources []rcSource) (*rcChallengeResult, error) {
+	res, problems, err := rcValidateChallenge(raw, issues, decisions, sources)
+	if err != nil || len(problems) == 0 {
 		return res, err
 	}
-	fmt.Fprintf(os.Stderr, "  %v\n  challenge: requesting one citation correction within the remaining deadline…\n", err)
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("challenge citation correction: %w", ctx.Err())
+	var lines []string
+	for _, p := range problems {
+		lines = append(lines, "challenge citation invalid: "+p.String())
 	}
-	feedback := err.Error() + "\nCorrect the citation using the numbered sources already provided, then resubmit the COMPLETE answer via submit_review. Cite the source number and a one-based line range that exists in that source; the system copies the lines, so do not retype or paraphrase anything. The original submitted answer is above. Recheck all citations. Do not treat this validation error as evidence about the allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. All original checks still apply. No additional experiments are available. This is the only correction attempt."
+	fmt.Fprintf(os.Stderr, "  %s\n  challenge: requesting one citation correction within the remaining deadline…\n", strings.Join(lines, "\n  "))
+	degraded := func(why string) (*rcChallengeResult, error) {
+		fmt.Fprintf(os.Stderr, "  challenge: citation correction not obtained (%s); publishing the validated verdicts with the affected item(s) unresolved\n", why)
+		return res, nil
+	}
+	if ctx.Err() != nil {
+		return degraded(ctx.Err().Error())
+	}
+	feedback := strings.Join(lines, "\n") + "\nCorrect ALL of these citations, then resubmit the COMPLETE answer via submit_review. Each source header says which coordinate it takes: a kai_view source is cited by the FILE line numbers printed in it and only within the file lines it returned; every other source by the ROW numbers printed at its left. The system copies the cited lines, so do not retype or paraphrase anything. The original submitted answer is above. Recheck every citation. Do not treat this validation error as evidence about any allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. All original checks still apply. No additional experiments are available. This is the only correction attempt."
 	var correction message.ContentPart = message.TextContent{Text: feedback}
 	if callID != "" {
 		correction = message.ToolResult{ToolCallID: callID, Name: "submit_review", Content: feedback, IsError: true}
@@ -389,13 +542,13 @@ func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, mod
 	retryMsgs := append(append([]message.Message(nil), msgs...), message.Message{Role: message.RoleAssistant, Parts: failed.Parts}, message.Message{Role: message.RoleUser, Parts: []message.ContentPart{correction}})
 	resp, sendErr := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: retryMsgs, Tools: []tools.ToolInfo{rcSubmitReviewToolInfo()}, MaxTokens: 6000})
 	if sendErr != nil {
-		return nil, fmt.Errorf("challenge citation correction call: %w", sendErr)
+		return degraded("correction call: " + sendErr.Error())
 	}
 	if ctx.Err() != nil {
-		return nil, fmt.Errorf("challenge citation correction: %w", ctx.Err())
+		return degraded(ctx.Err().Error())
 	}
 	if resp.FinishReason == message.FinishReasonMaxTokens {
-		return nil, fmt.Errorf("challenge citation correction was truncated")
+		return degraded("correction was truncated")
 	}
 	var calls []message.ToolCall
 	for _, part := range resp.Parts {
@@ -406,30 +559,45 @@ func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, mod
 	answer := rcResponseText(resp)
 	if len(calls) > 0 {
 		if len(calls) != 1 || calls[0].Name != "submit_review" {
-			return nil, fmt.Errorf("challenge citation correction must only submit_review")
+			return degraded("correction did not submit_review")
 		}
 		answer = calls[0].Input
 	}
-	res, err = rcValidateChallenge(answer, issues, decisions, sources)
+	corrected, remaining, err := rcValidateChallenge(answer, issues, decisions, sources)
 	if err != nil {
-		return nil, fmt.Errorf("challenge citation correction failed: %w", err)
+		return degraded("corrected answer rejected: " + err.Error())
 	}
-	return res, nil
+	if len(remaining) > 0 {
+		var still []string
+		for _, p := range remaining {
+			still = append(still, p.String())
+		}
+		fmt.Fprintf(os.Stderr, "  challenge: %d citation(s) still invalid after the correction; the affected item(s) are unresolved:\n  %s\n", len(remaining), strings.Join(still, "\n  "))
+	}
+	return corrected, nil
 }
 
-// rcResolveEvidence validates a list of citations by location. Any citation
-// whose location does not exist is a retryable citation error naming it.
-func rcResolveEvidence(item int, evidence []rcCheckEvidence, sources []string) ([]rcCitationRef, error) {
+// rcResolveEvidence validates a list of citations in their sources' declared
+// coordinates. It returns the usable references and, separately, every
+// citation whose location does not exist; the caller decides what an
+// unresolvable citation does to the item it belongs to.
+func rcResolveEvidence(item int, evidence []rcCheckEvidence, sources []rcSource) ([]rcCitationRef, []rcCitationProblem) {
 	var refs []rcCitationRef
+	var problems []rcCitationProblem
 	for citationIndex, ev := range evidence {
 		// The system extracts the cited lines; only a location that does not
 		// exist fails. Whether the lines support the claim is not checked.
 		if _, reason, ok := rcExtractCitation(sources, ev); !ok {
-			return nil, &rcCitationError{Check: item, Citation: citationIndex + 1, Source: ev.Source, SourceCount: len(sources), LineStart: ev.LineStart, LineEnd: ev.LineEnd, Reason: reason}
+			problems = append(problems, rcCitationProblem{Item: item, Citation: citationIndex + 1, Source: ev.Source, SourceCount: len(sources), LineStart: ev.LineStart, LineEnd: ev.LineEnd, Reason: reason})
+			continue
 		}
-		refs = append(refs, rcCitationRef{Source: ev.Source, LineStart: ev.LineStart, LineEnd: ev.LineEnd})
+		ref := rcCitationRef{Source: ev.Source, LineStart: ev.LineStart, LineEnd: ev.LineEnd, Coord: sources[ev.Source-1].Coord}
+		if ref.Coord == rcCoordFile {
+			ref.Path = sources[ev.Source-1].Path
+		}
+		refs = append(refs, ref)
 	}
-	return refs, nil
+	return refs, problems
 }
 
 // rcValidateChallenge turns the challenger's structured answer into the final
@@ -438,25 +606,31 @@ func rcResolveEvidence(item int, evidence []rcCheckEvidence, sources []string) (
 // Structural failures fail closed and withhold the draft, as before: malformed
 // JSON, an unknown or duplicated issue, a check without reasoning, a missing
 // check, an unknown verdict, a supported or refuted verdict with no evidence,
-// an invalid citation location, or an invalid intent/readiness value.
+// or an invalid intent/readiness value.
+//
+// A citation whose LOCATION does not exist in its source's declared
+// coordinates is reported (so one correction can be requested) and makes its
+// item unresolved: a verdict cannot rest on evidence that points nowhere, and
+// the other items are not sunk for it.
 //
 // What is NOT a failure any more: an "unverified" item. It becomes unresolved,
 // is listed with its reason and without repair advice, and marks the review
 // incomplete — while every independently supported finding is still published.
 // A supported check with no finding text, and a draft decision the challenger
 // did not assess, degrade the same way instead of sinking the whole review.
-func rcValidateChallenge(raw string, issues, draftDecisions, sources []string) (*rcChallengeResult, error) {
+func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []rcSource) (*rcChallengeResult, []rcCitationProblem, error) {
 	var answer rcChallengeAnswer
+	var problems []rcCitationProblem
 	if err := json.Unmarshal([]byte(raw), &answer); err != nil {
-		return nil, fmt.Errorf("invalid challenge JSON: %w", err)
+		return nil, nil, fmt.Errorf("invalid challenge JSON: %w", err)
 	}
 	match, ok := rcIntentVerdicts[strings.ToLower(strings.TrimSpace(answer.IntentMatch))]
 	if !ok || match == finding.MatchUnknown {
-		return nil, fmt.Errorf("challenge produced an unknown intent verdict %q", answer.IntentMatch)
+		return nil, nil, fmt.Errorf("challenge produced an unknown intent verdict %q", answer.IntentMatch)
 	}
 	proposed := finding.Readiness(answer.MergeReady)
 	if !proposed.Valid() {
-		return nil, fmt.Errorf("challenge produced an invalid merge_ready %d", answer.MergeReady)
+		return nil, nil, fmt.Errorf("challenge produced an invalid merge_ready %d", answer.MergeReady)
 	}
 
 	index := map[string]int{}
@@ -468,27 +642,30 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string) (
 	for checkIndex, check := range answer.Checks {
 		id, known := index[check.Issue]
 		if !known || seen[check.Issue] || strings.TrimSpace(check.Reason) == "" {
-			return nil, fmt.Errorf("challenge omitted reasoning, duplicated a check, or checked an unknown issue")
+			return nil, nil, fmt.Errorf("challenge omitted reasoning, duplicated a check, or checked an unknown issue")
 		}
 		seen[check.Issue] = true
 		status, reason := check.Verdict, strings.TrimSpace(check.Reason)
 		switch status {
 		case rcStatusSupported, rcStatusRefuted:
 			if len(check.Evidence) == 0 {
-				return nil, fmt.Errorf("challenge supplied no evidence")
+				return nil, nil, fmt.Errorf("challenge supplied no evidence")
 			}
 		case "unverified":
 			status = rcStatusUnresolved
 		default:
-			return nil, fmt.Errorf("challenge returned an unknown verdict %q", check.Verdict)
+			return nil, nil, fmt.Errorf("challenge returned an unknown verdict %q", check.Verdict)
 		}
-		refs, err := rcResolveEvidence(checkIndex+1, check.Evidence, sources)
-		if err != nil {
-			return nil, err
-		}
+		refs, bad := rcResolveEvidence(checkIndex+1, check.Evidence, sources)
+		problems = append(problems, bad...)
 		r := rcAllegationResult{ID: id + 1, Issue: check.Issue, Status: status, Reason: reason, Evidence: refs}
 		findingText, remedy := strings.TrimSpace(check.Finding), strings.TrimSpace(check.Remedy)
-		if status == rcStatusSupported && findingText == "" {
+		if len(bad) > 0 && status != rcStatusUnresolved {
+			// A verdict cannot rest on evidence that points nowhere. The item
+			// is unresolved with the exact reason; the others are untouched.
+			r.Status, r.Reason = rcStatusUnresolved, fmt.Sprintf("citation %d could not be resolved (%s); the verdict %q was not published on evidence that does not exist", bad[0].Citation, bad[0].Reason, status)
+		}
+		if r.Status == rcStatusSupported && findingText == "" {
 			// Nothing publishable was written for it. Do not invent a
 			// description and do not sink the other findings: leave this one
 			// unresolved, with the reason.
@@ -502,7 +679,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string) (
 		results[id] = r
 	}
 	if len(seen) != len(issues) {
-		return nil, fmt.Errorf("challenge did not check every allegation")
+		return nil, nil, fmt.Errorf("challenge did not check every allegation")
 	}
 
 	// Decisions come from the draft and are assessed like anything else. The
@@ -524,25 +701,27 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string) (
 			continue
 		}
 		if dseen[dc.Decision] || strings.TrimSpace(dc.Reason) == "" {
-			return nil, fmt.Errorf("challenge omitted reasoning for, or duplicated, a decision")
+			return nil, nil, fmt.Errorf("challenge omitted reasoning for, or duplicated, a decision")
 		}
 		dseen[dc.Decision] = true
 		status := dc.Verdict
 		switch status {
 		case rcStatusSupported, rcStatusRefuted:
 			if len(dc.Evidence) == 0 {
-				return nil, fmt.Errorf("challenge supplied no evidence")
+				return nil, nil, fmt.Errorf("challenge supplied no evidence")
 			}
 		case "unverified":
 			status = rcStatusUnresolved
 		default:
-			return nil, fmt.Errorf("challenge returned an unknown decision verdict %q", dc.Verdict)
+			return nil, nil, fmt.Errorf("challenge returned an unknown decision verdict %q", dc.Verdict)
 		}
-		refs, err := rcResolveEvidence(len(answer.Checks)+decisionIndex+1, dc.Evidence, sources)
-		if err != nil {
-			return nil, err
+		refs, bad := rcResolveEvidence(len(answer.Checks)+decisionIndex+1, dc.Evidence, sources)
+		problems = append(problems, bad...)
+		dr := rcDecisionResult{ID: id + 1, Decision: dc.Decision, Status: status, Reason: strings.TrimSpace(dc.Reason), Evidence: refs}
+		if len(bad) > 0 && status != rcStatusUnresolved {
+			dr.Status, dr.Reason = rcStatusUnresolved, fmt.Sprintf("citation %d could not be resolved (%s); the verdict %q was not published on evidence that does not exist", bad[0].Citation, bad[0].Reason, status)
 		}
-		dresults[id] = rcDecisionResult{ID: id + 1, Decision: dc.Decision, Status: status, Reason: strings.TrimSpace(dc.Reason), Evidence: refs}
+		dresults[id] = dr
 	}
 
 	res := &rcChallengeResult{Allegations: results, Decisions: dresults}
@@ -591,7 +770,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions, sources []string) (
 	}
 	summary := rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions, match, readiness)
 	res.Review = rcAssembleReview(rcNonEmpty(answer.Scope), rcNonEmpty(answer.Limitations), results, dresults, match, readiness, summary)
-	return res, nil
+	return res, problems, nil
 }
 
 // rcNonEmpty trims a list of model-supplied strings and drops the blanks.
