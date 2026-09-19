@@ -510,6 +510,19 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 		// is always a protocol failure here, and it used to be an expensive
 		// one — rcValidateChallenge would parse the prose as JSON and fail
 		// closed on the first character, discarding a complete review.
+		//
+		// A provider that REJECTED this field rather than ignoring it would
+		// turn an intermittent failure into a total one, so it was checked
+		// rather than assumed. The production path is kailab, and the review
+		// model z-ai/glm-5.2 is in KailabOpenRouterModels, so it routes
+		// through kailab's OpenAI-shaped /completions proxy; that model
+		// lists tools + tool_choice + reasoning together in its OpenRouter
+		// supported_parameters (2026-09-19). A bare OpenAI-compatible
+		// endpoint (KindOpenAI: vLLM, Ollama, LM Studio) is reachable only
+		// by an explicit KAI_PROVIDER=openai opt-in and takes tool_choice as
+		// standard chat-completions vocabulary. If one ever does 400 on it,
+		// gate this by provider.Kind the way rcFastModel gates substitution
+		// — do not drop the constraint everywhere to accommodate it.
 		resp, err := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: msgs, Tools: available, MaxTokens: 6000, RequireToolUse: true})
 		if err != nil {
 			return nil, fmt.Errorf("challenge call: %w", err)
