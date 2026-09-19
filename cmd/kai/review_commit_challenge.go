@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -502,7 +503,14 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	// sequential so the source numbering remains stable and reproducible.
 	toolCalls := 0
 	for turn := 0; turn < 5; turn++ {
-		resp, err := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: msgs, Tools: available, MaxTokens: 6000})
+		// RequireToolUse on EVERY turn, not just the first: the challenge has
+		// no legitimate text-only turn. Every step is either an experiment
+		// (review_shell) or the terminal answer (submit_review), and after
+		// four experiments only submit_review is on offer. A plain-text turn
+		// is always a protocol failure here, and it used to be an expensive
+		// one — rcValidateChallenge would parse the prose as JSON and fail
+		// closed on the first character, discarding a complete review.
+		resp, err := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: msgs, Tools: available, MaxTokens: 6000, RequireToolUse: true})
 		if err != nil {
 			return nil, fmt.Errorf("challenge call: %w", err)
 		}
@@ -521,7 +529,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 				if len(calls) != 1 {
 					return nil, fmt.Errorf("challenge submitted before its pending experiments completed")
 				}
-				return rcValidateOrRepairCitation(ctx, prov, model, msgs, resp, call.Input, call.ID, issues, decisions, sources)
+				return rcValidateOrRepair(ctx, prov, model, msgs, resp, call.Input, call.ID, issues, decisions, sources)
 			}
 			toolCalls++
 			if sandbox == nil || call.Name != "review_shell" || toolCalls > 4 {
@@ -540,7 +548,7 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 			results = append(results, tr)
 		}
 		if len(results) == 0 {
-			return rcValidateOrRepairCitation(ctx, prov, model, msgs, resp, rcResponseText(resp), "", issues, decisions, sources)
+			return rcValidateOrRepair(ctx, prov, model, msgs, resp, rcResponseText(resp), "", issues, decisions, sources)
 		}
 		msgs = append(msgs, message.Message{Role: message.RoleAssistant, Parts: resp.Parts}, message.Message{Role: message.RoleUser, Parts: results})
 		if toolCalls == 4 {
@@ -564,7 +572,7 @@ func (e rcCitationProblem) String() string {
 	return fmt.Sprintf("check %d, citation %d, source %d (available 1..%d), lines %d-%d: %s", e.Item, e.Citation, e.Source, e.SourceCount, e.LineStart, e.LineEnd, e.Reason)
 }
 
-// rcValidateOrRepairCitation validates the submission and, when any citation
+// rcValidateOrRepair validates the submission and, when any citation
 // location is invalid, asks ONCE for a corrected resubmission within the
 // ORIGINAL deadline — reporting every invalid citation at once, since there is
 // only one attempt. The corrected answer is validated in full; whatever is
@@ -573,10 +581,13 @@ func (e rcCitationProblem) String() string {
 // first answer is published in its degraded form rather than withheld: the
 // per-item verdicts that did validate are real, and the unresolved items say
 // why they are unresolved. Semantic uncertainty is never retried.
-func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, raw, callID string, issues, decisions []string, sources []rcSource) (*rcChallengeResult, error) {
+func rcValidateOrRepair(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, raw, callID string, issues, decisions []string, sources []rcSource) (*rcChallengeResult, error) {
 	res, problems, err := rcValidateChallenge(raw, issues, decisions, sources)
-	if err != nil || len(problems) == 0 {
-		return res, err
+	if err != nil {
+		return rcRepairStructure(ctx, prov, model, msgs, failed, callID, issues, decisions, sources, err)
+	}
+	if len(problems) == 0 {
+		return res, nil
 	}
 	var lines []string
 	for _, p := range problems {
@@ -587,37 +598,10 @@ func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, mod
 		fmt.Fprintf(os.Stderr, "  challenge: citation correction not obtained (%s); publishing the validated verdicts with the affected item(s) unresolved\n", why)
 		return res, nil
 	}
-	if ctx.Err() != nil {
-		return degraded(ctx.Err().Error())
-	}
 	feedback := strings.Join(lines, "\n") + "\nCorrect ALL of these citations, then resubmit the COMPLETE answer via submit_review. Each source header says which coordinate it takes: a kai_view source is cited by the FILE line numbers printed in it and only within the file lines it returned; every other source by the ROW numbers printed at its left. The system copies the cited lines, so do not retype or paraphrase anything. The original submitted answer is above. Recheck every citation. Do not treat this validation error as evidence about any allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. All original checks still apply. No additional experiments are available. This is the only correction attempt."
-	var correction message.ContentPart = message.TextContent{Text: feedback}
-	if callID != "" {
-		correction = message.ToolResult{ToolCallID: callID, Name: "submit_review", Content: feedback, IsError: true}
-	}
-	retryMsgs := append(append([]message.Message(nil), msgs...), message.Message{Role: message.RoleAssistant, Parts: failed.Parts}, message.Message{Role: message.RoleUser, Parts: []message.ContentPart{correction}})
-	resp, sendErr := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: retryMsgs, Tools: []tools.ToolInfo{rcSubmitReviewToolInfo()}, MaxTokens: 6000})
-	if sendErr != nil {
-		return degraded("correction call: " + sendErr.Error())
-	}
-	if ctx.Err() != nil {
-		return degraded(ctx.Err().Error())
-	}
-	if resp.FinishReason == message.FinishReasonMaxTokens {
-		return degraded("correction was truncated")
-	}
-	var calls []message.ToolCall
-	for _, part := range resp.Parts {
-		if call, ok := part.(message.ToolCall); ok {
-			calls = append(calls, call)
-		}
-	}
-	answer := rcResponseText(resp)
-	if len(calls) > 0 {
-		if len(calls) != 1 || calls[0].Name != "submit_review" {
-			return degraded("correction did not submit_review")
-		}
-		answer = calls[0].Input
+	answer, resubErr := rcRequestResubmission(ctx, prov, model, msgs, failed, callID, feedback)
+	if resubErr != nil {
+		return degraded(resubErr.Error())
 	}
 	corrected, remaining, err := rcValidateChallenge(answer, issues, decisions, sources)
 	if err != nil {
@@ -631,6 +615,95 @@ func rcValidateOrRepairCitation(ctx context.Context, prov provider.Provider, mod
 		fmt.Fprintf(os.Stderr, "  challenge: %d citation(s) still invalid after the correction; the affected item(s) are unresolved:\n  %s\n", len(remaining), strings.Join(still, "\n  "))
 	}
 	return corrected, nil
+}
+
+// rcRepairStructure handles a submission that did not decode at all: prose
+// where a submit_review call was required, `checks` as an array of strings
+// rather than objects, an unknown verdict, a missing reason. Measured over 44
+// live reviews on 2026-09-19, this was the single largest cause of "Review did
+// not finish" — 6 of the 13 failures whose logs were read — and every one of
+// them discarded a review the agent had already completed.
+//
+// Unlike a citation problem there is nothing to degrade TO: no verdict
+// decoded, so there are no validated results to publish. The correction is
+// therefore the only alternative to withholding, and if it does not arrive the
+// ORIGINAL decode error is what propagates — the caller's fail-closed
+// behaviour is unchanged, it just now happens one attempt later.
+//
+// The feedback deliberately restates the schema rather than echoing the Go
+// type error alone: "cannot unmarshal string into field checks of type
+// rcIssueCheck" names an internal type the model has never seen.
+func rcRepairStructure(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, callID string, issues, decisions []string, sources []rcSource, cause error) (*rcChallengeResult, error) {
+	fmt.Fprintf(os.Stderr, "  challenge submission malformed (%v); requesting one corrected resubmission within the remaining deadline…\n", cause)
+	feedback := fmt.Sprintf("Your submission could not be read: %v.\n\n"+
+		"Resubmit the COMPLETE answer as a submit_review tool call, not as prose. Every field must have the declared shape:\n"+
+		"- checks and decisions are arrays of OBJECTS, never arrays of strings;\n"+
+		"- each check object is {\"issue\": string (copied EXACTLY from ISSUES TO CHECK), \"verdict\": \"supported\"|\"refuted\"|\"unverified\", \"reason\": string, \"evidence\": [{\"source\": integer, \"line_start\": integer, \"line_end\": integer}]} and may add \"finding\" and \"remedy\";\n"+
+		"- each decision object is the same with \"decision\" (copied EXACTLY from DECISIONS TO ASSESS) in place of \"issue\";\n"+
+		"- intent_match is \"verified\", \"partial\" or \"diverges\"; merge_ready is an integer.\n\n"+
+		"Your findings do not change — re-express the SAME assessment in the required shape. Do not drop items to make it fit: one check per issue and one decision per decision. Do not treat this formatting error as evidence about any allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. No additional experiments are available. This is the only correction attempt.", cause)
+	answer, resubErr := rcRequestResubmission(ctx, prov, model, msgs, failed, callID, feedback)
+	if resubErr != nil {
+		fmt.Fprintf(os.Stderr, "  challenge: corrected resubmission not obtained (%v)\n", resubErr)
+		return nil, cause
+	}
+	corrected, problems, err := rcValidateChallenge(answer, issues, decisions, sources)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  challenge: resubmission still malformed (%v)\n", err)
+		return nil, cause
+	}
+	if len(problems) > 0 {
+		var still []string
+		for _, p := range problems {
+			still = append(still, p.String())
+		}
+		fmt.Fprintf(os.Stderr, "  challenge: resubmission decoded; %d citation(s) do not resolve and the affected item(s) are unresolved:\n  %s\n", len(problems), strings.Join(still, "\n  "))
+	}
+	fmt.Fprintf(os.Stderr, "  challenge: resubmission accepted\n")
+	return corrected, nil
+}
+
+// rcRequestResubmission asks ONCE for a corrected submit_review inside the
+// deadline the challenge already has, and returns the raw arguments. It is the
+// shared mechanism behind both repairs; what a failure MEANS is the caller's
+// decision — a citation repair degrades, a structural repair withholds — so
+// this reports why it could not get an answer and never decides for them.
+//
+// submit_review is the only tool offered: the correction turn re-expresses an
+// answer the model has already reached, and a new experiment at this point
+// would add a source the original submission could not have cited.
+func rcRequestResubmission(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, callID, feedback string) (string, error) {
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	var correction message.ContentPart = message.TextContent{Text: feedback}
+	if callID != "" {
+		correction = message.ToolResult{ToolCallID: callID, Name: "submit_review", Content: feedback, IsError: true}
+	}
+	retryMsgs := append(append([]message.Message(nil), msgs...), message.Message{Role: message.RoleAssistant, Parts: failed.Parts}, message.Message{Role: message.RoleUser, Parts: []message.ContentPart{correction}})
+	resp, sendErr := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: retryMsgs, Tools: []tools.ToolInfo{rcSubmitReviewToolInfo()}, MaxTokens: 6000, RequireToolUse: true})
+	if sendErr != nil {
+		return "", fmt.Errorf("correction call: %w", sendErr)
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if resp.FinishReason == message.FinishReasonMaxTokens {
+		return "", errors.New("correction was truncated")
+	}
+	var calls []message.ToolCall
+	for _, part := range resp.Parts {
+		if call, ok := part.(message.ToolCall); ok {
+			calls = append(calls, call)
+		}
+	}
+	if len(calls) == 0 {
+		return rcResponseText(resp), nil
+	}
+	if len(calls) != 1 || calls[0].Name != "submit_review" {
+		return "", errors.New("correction did not submit_review")
+	}
+	return calls[0].Input, nil
 }
 
 // rcResolveEvidence validates a list of citations in their sources' declared
