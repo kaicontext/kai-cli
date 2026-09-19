@@ -248,3 +248,36 @@ func TestReviewProtocolRejectionRepaired(t *testing.T) {
 		})
 	}
 }
+
+// Fail-closed covers the RETURN for both families; this pins the CAUSE for the
+// protocol one. When a protocol rejection's correction also fails, the error
+// that propagates must still be the protocol error — not a decode error and
+// not a generic "challenge rejected". The specific cause is what the job log
+// shows and what a diagnosis starts from, and a refactor that collapsed the
+// two families into one message would pass every other test in this file
+// while silently losing it.
+func TestReviewProtocolRejectionFailsClosedWithItsOwnCause(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls > 2 {
+			t.Fatal("unbounded retry")
+		}
+		a := rcCDChecks()
+		a.Checks[0].Reason = "" // a protocol break, not a decode failure
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "submission", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
+	}}
+	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err == nil || got != nil {
+		t.Fatalf("an unchecked draft was published: %+v %v", got, err)
+	}
+	if !strings.Contains(err.Error(), "omitted reasoning") {
+		t.Fatalf("the protocol cause did not survive the failed correction: %v", err)
+	}
+	if strings.Contains(err.Error(), "invalid challenge JSON") {
+		t.Fatalf("a protocol rejection was reported as a decode failure: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected exactly one correction attempt, got %d calls", calls)
+	}
+}
