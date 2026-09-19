@@ -197,3 +197,54 @@ func TestReviewMalformedRepairWithBadCitationPublishesDegraded(t *testing.T) {
 		t.Error("the supported finding is missing from the published review")
 	}
 }
+
+// The repair is keyed off rcValidateChallenge returning an error at all, not
+// off JSON decoding specifically — so a submission that decodes cleanly but
+// breaks the PROTOCOL gets the same single correction. That family is live:
+// kai-server#266 and kai-cli#122's own review both died on "challenge omitted
+// reasoning, duplicated a check, or checked an unknown issue", with a complete
+// draft in hand.
+func TestReviewProtocolRejectionRepaired(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantCause string
+		break_          func(*rcChallengeAnswer)
+	}{
+		{"no-reasoning", "omitted reasoning", func(a *rcChallengeAnswer) { a.Checks[0].Reason = "" }},
+		{"duplicated-check", "duplicated", func(a *rcChallengeAnswer) { a.Checks[1].Issue = a.Checks[0].Issue }},
+		{"unknown-issue", "unknown issue", func(a *rcChallengeAnswer) { a.Checks[0].Issue = "an issue nobody raised" }},
+		{"unknown-verdict", "unknown verdict", func(a *rcChallengeAnswer) { a.Checks[0].Verdict = "probably-fine" }},
+		{"bad-merge-ready", "merge_ready", func(a *rcChallengeAnswer) { a.MergeReady = 99 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
+				calls++
+				a := rcCDChecks()
+				if calls == 1 {
+					tc.break_(&a)
+				} else if calls > 2 {
+					t.Fatal("unbounded retry")
+				} else {
+					feedback := req.Messages[len(req.Messages)-1].Parts[0].(message.ToolResult).Content
+					if !strings.Contains(feedback, tc.wantCause) {
+						t.Errorf("feedback did not carry the rejection reason %q: %s", tc.wantCause, feedback)
+					}
+					// A protocol rejection needs the CONTENT rules, not just
+					// the shape rules — "checks are arrays of objects" does
+					// not tell a model it dropped a required reason.
+					if !strings.Contains(feedback, "EXACTLY ONE check per bullet") || !strings.Contains(feedback, "non-empty \"reason\"") {
+						t.Errorf("feedback omitted the content rules: %s", feedback)
+					}
+				}
+				return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "submission", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
+			}}
+			got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+			if err != nil || got == nil {
+				t.Fatalf("a protocol slip withheld the review: %+v %v", got, err)
+			}
+			if calls != 2 {
+				t.Fatalf("expected exactly one correction, got %d calls", calls)
+			}
+		})
+	}
+}

@@ -597,7 +597,7 @@ func (e rcCitationProblem) String() string {
 func rcValidateOrRepair(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, raw, callID string, issues, decisions []string, sources []rcSource) (*rcChallengeResult, error) {
 	res, problems, err := rcValidateChallenge(raw, issues, decisions, sources)
 	if err != nil {
-		return rcRepairStructure(ctx, prov, model, msgs, failed, callID, issues, decisions, sources, err)
+		return rcRepairSubmission(ctx, prov, model, msgs, failed, callID, issues, decisions, sources, err)
 	}
 	if len(problems) == 0 {
 		return res, nil
@@ -630,31 +630,44 @@ func rcValidateOrRepair(ctx context.Context, prov provider.Provider, model strin
 	return corrected, nil
 }
 
-// rcRepairStructure handles a submission that did not decode at all: prose
-// where a submit_review call was required, `checks` as an array of strings
-// rather than objects, an unknown verdict, a missing reason. Measured over 44
-// live reviews on 2026-09-19, this was the single largest cause of "Review did
-// not finish" — 6 of the 13 failures whose logs were read — and every one of
-// them discarded a review the agent had already completed.
+// rcRepairSubmission handles a submission rcValidateChallenge REJECTED — every
+// error it can return, not only a decode failure. Two families in practice,
+// both measured across 44 live reviews on 2026-09-19 and together the largest
+// cause of "Review did not finish" (7 of the 13 failures whose logs were read,
+// every one of them discarding a review the agent had already completed):
+//
+//   - it did not decode: prose where a submit_review call was required
+//     (kai-api#3/#4), `checks` as an array of strings (kai-tui#138/#141/#142,
+//     kai-engine#106);
+//   - it decoded but broke the protocol: a check with no reasoning, a
+//     duplicated or unknown issue, an unknown verdict, an out-of-range
+//     merge_ready (kai-server#266).
 //
 // Unlike a citation problem there is nothing to degrade TO: no verdict
-// decoded, so there are no validated results to publish. The correction is
-// therefore the only alternative to withholding, and if it does not arrive the
-// ORIGINAL decode error is what propagates — the caller's fail-closed
+// survived validation, so there are no validated results to publish. The
+// correction is therefore the only alternative to withholding, and if it does
+// not arrive the ORIGINAL error is what propagates — the caller's fail-closed
 // behaviour is unchanged, it just now happens one attempt later.
 //
-// The feedback deliberately restates the schema rather than echoing the Go
-// type error alone: "cannot unmarshal string into field checks of type
-// rcIssueCheck" names an internal type the model has never seen.
-func rcRepairStructure(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, callID string, issues, decisions []string, sources []rcSource, cause error) (*rcChallengeResult, error) {
-	fmt.Fprintf(os.Stderr, "  challenge submission malformed (%v); requesting one corrected resubmission within the remaining deadline…\n", cause)
-	feedback := fmt.Sprintf("Your submission could not be read: %v.\n\n"+
-		"Resubmit the COMPLETE answer as a submit_review tool call, not as prose. Every field must have the declared shape:\n"+
+// The feedback restates the rules rather than echoing the Go error alone:
+// "cannot unmarshal string into field checks of type rcIssueCheck" names an
+// internal type the model has never seen, and "omitted reasoning, duplicated a
+// check, or checked an unknown issue" does not say which of the three it was.
+// Stating all the rules costs nothing and covers every branch.
+func rcRepairSubmission(ctx context.Context, prov provider.Provider, model string, msgs []message.Message, failed provider.Response, callID string, issues, decisions []string, sources []rcSource, cause error) (*rcChallengeResult, error) {
+	fmt.Fprintf(os.Stderr, "  challenge submission rejected (%v); requesting one corrected resubmission within the remaining deadline…\n", cause)
+	feedback := fmt.Sprintf("Your submission was rejected: %v.\n\n"+
+		"Resubmit the COMPLETE answer as a submit_review tool call, not as prose. Required SHAPE:\n"+
 		"- checks and decisions are arrays of OBJECTS, never arrays of strings;\n"+
-		"- each check object is {\"issue\": string (copied EXACTLY from ISSUES TO CHECK), \"verdict\": \"supported\"|\"refuted\"|\"unverified\", \"reason\": string, \"evidence\": [{\"source\": integer, \"line_start\": integer, \"line_end\": integer}]} and may add \"finding\" and \"remedy\";\n"+
-		"- each decision object is the same with \"decision\" (copied EXACTLY from DECISIONS TO ASSESS) in place of \"issue\";\n"+
-		"- intent_match is \"verified\", \"partial\" or \"diverges\"; merge_ready is an integer.\n\n"+
-		"Your findings do not change — re-express the SAME assessment in the required shape. Do not drop items to make it fit: one check per issue and one decision per decision. Do not treat this formatting error as evidence about any allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. No additional experiments are available. This is the only correction attempt.", cause)
+		"- each check object is {\"issue\": string, \"verdict\": \"supported\"|\"refuted\"|\"unverified\", \"reason\": string, \"evidence\": [{\"source\": integer, \"line_start\": integer, \"line_end\": integer}]} and may add \"finding\" and \"remedy\";\n"+
+		"- each decision object is the same with \"decision\" in place of \"issue\";\n"+
+		"- intent_match is \"verified\", \"partial\" or \"diverges\"; merge_ready is an integer 1-5.\n\n"+
+		"Required CONTENT:\n"+
+		"- EXACTLY ONE check per bullet in ISSUES TO CHECK, and one decision per bullet in DECISIONS TO ASSESS — no duplicates, none invented, none dropped;\n"+
+		"- each \"issue\" and \"decision\" string copied EXACTLY from that bullet, without its list marker;\n"+
+		"- every check and decision needs a non-empty \"reason\"; a supported check also needs a non-empty \"finding\";\n"+
+		"- a supported or refuted verdict needs at least one evidence citation.\n\n"+
+		"Your findings do not change — re-express the SAME assessment under these rules. Do not drop items to make it fit. Do not treat this rejection as evidence about any allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. No additional experiments are available. This is the only correction attempt.", cause)
 	answer, resubErr := rcRequestResubmission(ctx, prov, model, msgs, failed, callID, feedback)
 	if resubErr != nil {
 		fmt.Fprintf(os.Stderr, "  challenge: corrected resubmission not obtained (%v)\n", resubErr)
@@ -662,7 +675,7 @@ func rcRepairStructure(ctx context.Context, prov provider.Provider, model string
 	}
 	corrected, problems, err := rcValidateChallenge(answer, issues, decisions, sources)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  challenge: resubmission still malformed (%v)\n", err)
+		fmt.Fprintf(os.Stderr, "  challenge: resubmission still rejected (%v)\n", err)
 		return nil, cause
 	}
 	if len(problems) > 0 {
