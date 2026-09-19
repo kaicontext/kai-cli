@@ -348,6 +348,14 @@ func TestReviewResubmissionDoesNotForceToolUse(t *testing.T) {
 
 // The repair must work when the corrected answer comes back as PLAIN JSON
 // rather than a tool call — that is what makes dropping the constraint safe.
+//
+// This is NOT a forcing guard, and review flagged the risk of reading it as
+// one: rcChallengeProvider is a pass-through that never inspects
+// RequireToolUse, so this test passes whether or not the flag is set. It pins
+// one property only — that rcRequestResubmission accepts a text reply. The
+// guards against re-introducing the constraint are the two
+// DoesNotForceToolUse tests above; if forcing ever comes back, those are what
+// must fail.
 func TestReviewRepairAcceptsPlainJSONResubmission(t *testing.T) {
 	calls := 0
 	p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
