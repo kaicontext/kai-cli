@@ -24,7 +24,7 @@ import (
 // checked is still withheld — it just no longer happens on the first slip.
 const rcMalformedProse = "Excellent — I examined both issues. The first is refuted and the second holds."
 
-// checksAsStrings is the observed wrong shape: valid JSON, right field names,
+// rcChecksAsStrings is the observed wrong shape: valid JSON, right field names,
 // array elements that are strings instead of objects.
 const rcChecksAsStrings = `{"intent_match":"partial","merge_ready":3,"checks":["the cd issue is refuted","the escaping issue is supported"],"decisions":[]}`
 
@@ -148,5 +148,52 @@ func TestReviewWellFormedSubmissionIsNotRetried(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("a clean submission cost %d calls", calls)
+	}
+}
+
+// A repair that decodes but still cites a location that does not exist is a
+// state the structural path could not reach before: the old code returned
+// (nil, err) on a decode failure and never retried, so "malformed, then
+// decoded, then bad citation" had no representation.
+//
+// It publishes, degraded. That is not a new policy invented here — it is the
+// policy rcValidateChallenge already applies to any answer that decodes: the
+// item whose citation points nowhere becomes unresolved, the items that stand
+// on their own are published, and the review is marked incomplete. What is
+// new is only that a structurally malformed first attempt can now reach it.
+// Withholding instead would discard verdicts that validated, which is the
+// behaviour this whole change exists to stop.
+func TestReviewMalformedRepairWithBadCitationPublishesDegraded(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcMalformedProse}}}, nil
+		}
+		if calls > 2 {
+			t.Fatal("unbounded retry: a structural repair must not chain into a citation repair")
+		}
+		a := rcCDChecks()
+		a.Checks[0].Evidence[0].LineEnd = 99 // decodes, but points nowhere
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "fixed", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
+	}}
+	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || got == nil {
+		t.Fatalf("a repaired answer with one bad citation withheld the review: %+v %v", got, err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected exactly one correction, got %d calls", calls)
+	}
+	if s := got.Allegations[0].Status; s != rcStatusUnresolved {
+		t.Errorf("item with the unresolvable citation not degraded: %v", s)
+	}
+	if s := got.Allegations[1].Status; s != rcStatusSupported {
+		t.Errorf("the independently supported finding was lost: %v", s)
+	}
+	if !got.Incomplete {
+		t.Error("a review with an unresolved item must be marked incomplete")
+	}
+	if !strings.Contains(got.Review, rcEscapeIssue) {
+		t.Error("the supported finding is missing from the published review")
 	}
 }
