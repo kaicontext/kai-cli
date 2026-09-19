@@ -40,9 +40,6 @@ func TestReviewMalformedSubmissionRepaired(t *testing.T) {
 			var firstCtx context.Context
 			p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
 				calls++
-				if !req.RequireToolUse {
-					t.Error("challenge must structurally require a tool call")
-				}
 				if calls == 1 {
 					firstCtx = c
 					return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: tc.first}}}, nil
@@ -279,5 +276,100 @@ func TestReviewProtocolRejectionFailsClosedWithItsOwnCause(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("expected exactly one correction attempt, got %d calls", calls)
+	}
+}
+
+// Regression guard for kai-ci f320883 (shipped and rolled back 2026-09-19).
+//
+// The challenge must NOT set RequireToolUse on this path. Forcing the tool
+// call is correct in principle and ruinous in practice on the configured
+// challenge model: measured against the real provider (z-ai/glm-5.2 over
+// kailab), 5/5 reviews finished in 4-28s without it and 5/5 failed with it,
+// four of them on the challenge deadline. Production's fast-pass median went
+// 42s to 99s against a ~100s budget.
+//
+// Prose is recovered by rcRepairSubmission instead, which is what the other
+// tests here exercise. If this assertion ever fails, the question to answer
+// first is what it costs on the model actually configured.
+func TestReviewChallengeDoesNotForceToolUse(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sandbox *rcShellSandbox
+	}{
+		{"submit_review only (CI: no sandbox configured)", nil},
+		{"with review_shell on offer", &rcShellSandbox{image: "probe"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var seen []provider.Request
+			p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
+				seen = append(seen, req)
+				return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
+			}}
+			if _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, tc.sandbox); err != nil {
+				t.Fatal(err)
+			}
+			for i, r := range seen {
+				if r.RequireToolUse {
+					t.Errorf("call %d forced a tool call; see the A/B in review_commit_challenge.go", i+1)
+				}
+			}
+		})
+	}
+}
+
+// The correction carries the least remaining budget of any call in the
+// challenge, so it must not force either — kai-tui#143 lost one to
+// "correction call: context deadline exceeded" under the constraint. The
+// repair does not need a tool call: rcRequestResubmission accepts a
+// plain-JSON reply, which the next test proves end to end.
+func TestReviewResubmissionDoesNotForceToolUse(t *testing.T) {
+	var seen []provider.Request
+	calls := 0
+	p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
+		seen = append(seen, req)
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcMalformedProse}}}, nil
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
+	}}
+	if _, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected challenge + one correction, got %d", len(seen))
+	}
+	for i, r := range seen {
+		if r.RequireToolUse {
+			t.Errorf("call %d forced a tool call", i+1)
+		}
+	}
+}
+
+// The repair must work when the corrected answer comes back as PLAIN JSON
+// rather than a tool call — that is what makes dropping the constraint safe.
+//
+// This is NOT a forcing guard, and review flagged the risk of reading it as
+// one: rcChallengeProvider is a pass-through that never inspects
+// RequireToolUse, so this test passes whether or not the flag is set. It pins
+// one property only — that rcRequestResubmission accepts a text reply. The
+// guards against re-introducing the constraint are the two
+// DoesNotForceToolUse tests above; if forcing ever comes back, those are what
+// must fail.
+func TestReviewRepairAcceptsPlainJSONResubmission(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(c context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcMalformedProse}}}, nil
+		}
+		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, rcCDChecks())}}}, nil
+	}}
+	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || got == nil {
+		t.Fatalf("a plain-JSON correction was not accepted: %+v %v", got, err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected exactly one correction, got %d calls", calls)
 	}
 }
