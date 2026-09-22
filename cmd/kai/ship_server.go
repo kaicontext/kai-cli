@@ -84,7 +84,7 @@ type shipServerStatus struct {
 
 // runShipServer is the --server arm of runShip: collect the delta,
 // enqueue it on the control plane, and poll the handle to completion.
-func runShipServer(cwd, branch, sessionID string) error {
+func runShipServer(cwd, branch, sessionID, authored string) error {
 	baseURL, token, org, repoName, err := resolveShipServerTarget()
 	if err != nil {
 		return err
@@ -175,9 +175,14 @@ func runShipServer(cwd, branch, sessionID string) error {
 		BaseSnapshot: baseSnapshot,
 		HeadSnapshot: shipSnapshotHex(cwd),
 		Title:        shipTitle,
-		Body:         shipPRBody(branch, sessionID, "", changed),
-		Ready:        shipReady,
-		Files:        files,
+		Body: shipPRBody(shipBodyInput{
+			Branch: branch, SessionID: sessionID, Title: shipTitle, Authored: authored,
+			Commits:     shipSessionCommits(cwd),
+			Files:       shipFileStats(cwd, shipStatsBase(cwd), changed, false),
+			KnownIssues: ledgerKnownIssues(),
+		}),
+		Ready: shipReady,
+		Files: files,
 	}
 
 	if shipDryRun {
@@ -551,4 +556,14 @@ func shipContentAgainst(cwd string, e *spawnpkg.Entry, base, baseline, p string,
 		return full, nil
 	}
 	return rebased, nil
+}
+
+// shipStatsBase is what a server ship's line counts are measured against:
+// the spawn baseline, whose tree is the session's starting point, or HEAD in
+// a plain checkout, where the dirty set is the delta.
+func shipStatsBase(cwd string) string {
+	if shipSpawnEntry(cwd) != nil {
+		return shipBaselineCommit(cwd)
+	}
+	return "HEAD"
 }
