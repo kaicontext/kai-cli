@@ -49,6 +49,7 @@ var (
 	shipDryRun  bool
 	shipServer  bool
 	shipLocal   bool
+	shipPromote bool
 	shipClean   bool
 )
 
@@ -94,6 +95,7 @@ func init() {
 	shipCmd.Flags().BoolVar(&shipClean, "clean", false, "after a successful --server ship, stash the shipped changes (labeled; `git stash pop` restores) so the working tree returns to pristine main")
 	shipCmd.Flags().BoolVar(&shipServer, "server", false, "publish via the kailab server (GitHub App) instead of local git — the default inside a spawned workspace; --repo means kai org/repo in this mode")
 	shipCmd.Flags().BoolVar(&shipLocal, "local", false, "force the local git path (branch, commit, push with your own token) even inside a spawned workspace")
+	shipCmd.Flags().BoolVar(&shipPromote, "promote", false, "promote the spawn's delta into the source repo as a new branch + commit + push (no PR); requires a spawned workspace")
 	rootCmd.AddCommand(shipCmd)
 }
 
@@ -101,6 +103,10 @@ func runShip(cmd *cobra.Command, args []string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
+	}
+
+	if shipPromote && shipServer {
+		return fmt.Errorf("--promote and --server are mutually exclusive")
 	}
 
 	useServer, err := shipUseServer(cwd, shipServer, shipLocal)
@@ -119,6 +125,10 @@ func runShip(cmd *cobra.Command, args []string) error {
 			shipServer = true
 		}
 		return runShipServer(cwd, branch, sessionID)
+	}
+
+	if shipPromote {
+		return runShipPromote(cwd, branch, sessionID)
 	}
 
 	current, err := gitio.CurrentBranch(cwd)
@@ -486,6 +496,169 @@ func resolveShipClient(cwd string) (*autofix.Client, error) {
 		}
 	}
 	return autofix.NewClient(shipToken, repo)
+}
+
+// ---------------------------------------------------------------------------
+// kai ship --promote — push the spawn's delta into the source repo
+
+// runShipPromote promotes a spawned workspace's delta directly into the
+// original source repo (the repo the spawn was created from): it creates
+// a branch there, applies the delta, commits, and pushes — no PR, no
+// GitHub App. It mirrors the local-ship path's branch/rollback discipline
+// (reShip coalescing, restore-on-failure defer) but the tree it mutates is
+// the SOURCE repo, not cwd, and the delta is the spawn baseline-vs-tree
+// (so committed agent work ships) — the same measurement the server path
+// uses.
+func runShipPromote(cwd, branch, sessionID string) error {
+	entry := shipSpawnEntry(cwd)
+	if entry == nil {
+		return fmt.Errorf("--promote needs a spawned workspace (no spawn registry entry for this directory)")
+	}
+	if entry.SourceRepo == "" {
+		return fmt.Errorf("--promote needs a source repo (this spawn has no recorded source repo)")
+	}
+	srcRepo := entry.SourceRepo
+
+	// Verify the source repo is a git repo we can act on, before any
+	// mutation: the promote target is foreign to cwd, so a bad path
+	// should fail loudly and early.
+	if _, err := gitio.CurrentBranch(srcRepo); err != nil {
+		return fmt.Errorf("source repo %s is not a usable git repo: %w", srcRepo, err)
+	}
+
+	// Refuse to clobber uncommitted work in the source repo. Promote
+	// writes foreign files into the source working tree; a dirty tree
+	// would mix the user's edits with the agent's delta.
+	if dirty, err := gitio.WorkingTreeDirty(srcRepo); err != nil {
+		return fmt.Errorf("checking source repo %s: %w", srcRepo, err)
+	} else if dirty {
+		return fmt.Errorf("source repo %s has uncommitted changes — promote would clobber them; commit or stash in the source repo first", srcRepo)
+	}
+
+	changed, err := shipDeltaNames(cwd)
+	if err != nil {
+		return fmt.Errorf("computing the delta: %w", err)
+	}
+	changed = autofix.FilterArtifacts(changed)
+	if len(changed) == 0 {
+		return fmt.Errorf("nothing to promote — the workspace has no changes")
+	}
+
+	baseline := shipBaselineCommit(cwd)
+	type promoteFile struct {
+		path    string
+		content []byte
+		delete  bool
+	}
+	var overlaps []string
+	files := make([]promoteFile, 0, len(changed))
+	for _, p := range changed {
+		content, rerr := shipContentFor(cwd, entry, baseline, p, &overlaps)
+		if rerr != nil && os.IsNotExist(rerr) {
+			files = append(files, promoteFile{path: p, delete: true})
+			continue
+		}
+		if rerr != nil {
+			return fmt.Errorf("reading %s: %w", p, rerr)
+		}
+		files = append(files, promoteFile{path: p, content: content})
+	}
+	if len(overlaps) > 0 {
+		fmt.Fprintf(os.Stderr, "note: %s carr%s edits from your checkout that overlap the agent's change — shipped with them included\n",
+			strings.Join(overlaps, ", "), map[bool]string{true: "y", false: "ies"}[len(overlaps) > 1])
+	}
+
+	current, err := gitio.CurrentBranch(srcRepo)
+	if err != nil {
+		return fmt.Errorf("reading source repo branch: %w", err)
+	}
+
+	if shipDryRun {
+		fmt.Printf("would promote %d file(s) from %s into %s on branch %s (currently on %s)\n", len(files), cwd, srcRepo, branch, current)
+		for _, f := range files {
+			mark := ""
+			if f.delete {
+				mark = " (delete)"
+			}
+			fmt.Printf("  %s%s\n", f.path, mark)
+		}
+		return nil
+	}
+
+	// Re-ship: the source repo is already on the promote branch (a
+	// prior promote from this spawn). Coalesce onto it — skip
+	// CreateBranch and skip the rollback defer, exactly as the local
+	// path does. A fresh promote that finds the branch already present
+	// (but not checked out) is a conflict we refuse.
+	reShip := current == branch
+	if !reShip && gitio.BranchExists(srcRepo, branch) {
+		return fmt.Errorf("branch %s already exists in %s — check it out to re-promote, or pass --branch for a fresh one", branch, srcRepo)
+	}
+	var shipped bool
+	if !reShip {
+		if err := gitio.CreateBranch(srcRepo, branch); err != nil {
+			return fmt.Errorf("creating %s in %s: %w", branch, srcRepo, err)
+		}
+		// On any failure after the branch exists, put the source repo
+		// back where it was — checkout the original branch and delete
+		// the promote branch — but only when promote did not ship.
+		// The local path restores just the ref; promote also discards
+		// the foreign files it wrote into the working tree (git
+		// checkout -- . / git clean), since the source repo started
+		// clean and the rollback must leave it that way.
+		defer func() {
+			if shipped || reShip {
+				return
+			}
+			_ = gitio.DiscardChanges(srcRepo)
+			_ = gitio.CheckoutBranch(srcRepo, current)
+			_ = gitio.DeleteBranch(srcRepo, branch)
+		}()
+	}
+
+	// Apply the delta into the source repo's working tree.
+	for _, f := range files {
+		target := filepath.Join(srcRepo, filepath.FromSlash(f.path))
+		if f.delete {
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing %s: %w", f.path, err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("creating dir for %s: %w", f.path, err)
+		}
+		if err := os.WriteFile(target, f.content, 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", f.path, err)
+		}
+	}
+
+	if _, err := gitio.StageAndDiffPaths(srcRepo, "HEAD", changed); err != nil {
+		return fmt.Errorf("staging changes in %s: %w", srcRepo, err)
+	}
+	snapHex := shipSnapshotHex(cwd)
+	if err := gitio.CommitStaged(srcRepo, shipCommitMessage(branch, sessionID, snapHex)); err != nil {
+		return fmt.Errorf("committing in %s: %w", srcRepo, err)
+	}
+	fmt.Printf("promoted %d file(s) to %s on %s\n", len(changed), srcRepo, branch)
+
+	if !shipPush {
+		shipped = true
+		fmt.Printf("promoted locally — push with: git -C %s push %s %s\n", srcRepo, shipRemote, branch)
+		return nil
+	}
+	if err := gitio.Push(srcRepo, shipRemote, branch); err != nil {
+		// The commit is real and correct; don't unwind it over a push
+		// failure. A source repo without the named remote is the
+		// common spawned-workspace case — degrade to "committed
+		// locally" rather than a hard error so the work isn't stranded
+		// behind an opaque network failure.
+		shipped = true
+		return fmt.Errorf("committed on %s in %s but push to %s failed: %w", branch, srcRepo, shipRemote, err)
+	}
+	fmt.Printf("pushed %s to %s\n", branch, shipRemote)
+	shipped = true
+	return nil
 }
 
 // ---------------------------------------------------------------------------
