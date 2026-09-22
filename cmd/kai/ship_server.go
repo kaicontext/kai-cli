@@ -173,10 +173,7 @@ func runShipServer(cwd, branch, sessionID, authored string) error {
 	// "ship: kai/<branch>" — the shape this change set exists to remove —
 	// on any server that has not taken the same fallback yet.
 	stats := shipFileStats(cwd, shipStatsBase(cwd), changed, false)
-	title := shipTitle
-	if title == "" {
-		title = shipTitleFromFiles(stats)
-	}
+	title := shipDescribedTitle(shipTitle, stats)
 
 	payload := shipServerRequest{
 		SessionID:    sessionID,

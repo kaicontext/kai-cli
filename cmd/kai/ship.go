@@ -277,20 +277,18 @@ func runShip(cmd *cobra.Command, args []string) error {
 	}
 	// No title given and no session commit to borrow one from: name the
 	// PR by what it touched rather than by its branch.
-	title := shipTitle
-	if title == "" {
-		title = shipTitleFromFiles(stats)
-	}
-	if title == "" {
-		title = "ship: " + branch
+	title := shipDescribedTitle(shipTitle, stats)
+	prTitle := title
+	if prTitle == "" {
+		prTitle = "ship: " + branch
 	}
 	pr, err := gh.CreatePR(autofix.CreatePRInput{
-		Title: title,
+		Title: prTitle,
 		Head:  branch,
 		Base:  prBase,
 		Body: shipPRBody(shipBodyInput{
 			Branch: branch, SessionID: sessionID, SnapHex: snapHex,
-			Title: shipTitle, Authored: authored, Files: stats,
+			Title: title, Authored: authored, Files: stats,
 			KnownIssues: ledgerKnownIssues(),
 		}),
 		Draft: !shipReady,

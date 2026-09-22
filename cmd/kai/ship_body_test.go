@@ -193,7 +193,7 @@ func TestShipSessionCommitsAndFileStats(t *testing.T) {
 	git("commit", "-q", "--allow-empty", "-m", "kai warm sync")
 	write("app.js", "a\nB\nc\nd\n")
 	git("commit", "-q", "-am", "Grow the composer with its text", "-m", "flex: none, so the inline height applies.", "-m", "Kai-Snapshot: abc")
-	git("commit", "-q", "--allow-empty", "-m", "Merge main into the session")
+	git("commit", "-q", "--allow-empty", "-m", "Merge origin/main into kai/s-98d60850")
 	write("new/panel.js", "one\ntwo")
 	if err := spawnpkg.Add(spawnpkg.Entry{Path: spawn, SessionID: "98d60850-dd4e", Durable: true}); err != nil {
 		t.Fatal(err)
@@ -251,5 +251,65 @@ func TestShipTitleFromFiles(t *testing.T) {
 	long := st("some/really/deeply/nested/directory/structure/that/goes/on/alpha.go", "some/really/deeply/nested/directory/structure/that/goes/on/beta.go")
 	if got := shipTitleFromFiles(long); got != "Update 2 files" {
 		t.Errorf("an over-long title falls back to a count, got %q", got)
+	}
+}
+
+// Both ship paths resolve the title the same way, so the same change
+// described locally and through the server opens with the same sentence —
+// never with the branch placeholder.
+func TestShipDescribedTitle(t *testing.T) {
+	files := []shipFileStat{{Path: "frontend/dist/app.js"}, {Path: "frontend/dist/style.css"}}
+	for in, want := range map[string]string{
+		"Fix the composer":    "Fix the composer",
+		"":                    "frontend/dist: update app and style",
+		"ship: kai/s-98d6085": "frontend/dist: update app and style",
+		"   ":                 "frontend/dist: update app and style",
+	} {
+		if got := shipDescribedTitle(in, files); got != want {
+			t.Errorf("shipDescribedTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := shipDescribedTitle("", nil); got != "" {
+		t.Errorf("nothing changed, nothing to name: %q", got)
+	}
+	// Both call sites resolve through it, so the two paths cannot drift.
+	for _, name := range []string{"ship.go", "ship_server.go"} {
+		body, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), "shipDescribedTitle(shipTitle, stats)") {
+			t.Errorf("%s does not resolve its title through shipDescribedTitle", name)
+		}
+	}
+}
+
+// A no-title, no-commit ship still opens with what it touched, not with a
+// bare scope line — the same sentence on both paths.
+func TestShipPRBody_TitlelessOpensWithTheFileTitle(t *testing.T) {
+	files := []shipFileStat{
+		{Path: "frontend/dist/app.js", Added: 3, Removed: 1, Known: true},
+		{Path: "frontend/dist/style.css", Added: 2, Known: true},
+	}
+	body := shipPRBody(shipBodyInput{Branch: "kai/s-98d60850", Title: shipDescribedTitle("", files), Files: files})
+	if !strings.Contains(body, "## What this does\n\nfrontend/dist: update app and style.\n") {
+		t.Fatalf("body does not open with the file-derived title:\n%s", body)
+	}
+	if strings.Contains(body, "Changes 2 files under") {
+		t.Fatalf("the scope line is only for a ship with nothing to name it by:\n%s", body)
+	}
+}
+
+func TestShipCommitProse_KeepsHyphenatedProse(t *testing.T) {
+	for body, want := range map[string]string{
+		"Fix it.\n\ntime-series: cleaned up the window":             "Fix it.\n\ntime-series: cleaned up the window",
+		"Fix it.\n\nwell-known: the cache now decides":              "Fix it.\n\nwell-known: the cache now decides",
+		"Fix it.\n\nKai-Session: abc\nCo-authored-by: x <x@y>":      "Fix it.",
+		"Fix it.\n\nSigned-off-by: x <x@y>\nKai-Snapshot: deadbeef": "Fix it.",
+		"Fix it.\n\nChange-Id: I1234":                               "Fix it.",
+	} {
+		if got := shipCommitProse(body); got != want {
+			t.Errorf("shipCommitProse(%q) = %q, want %q", body, got, want)
+		}
 	}
 }

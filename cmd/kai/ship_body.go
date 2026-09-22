@@ -322,8 +322,18 @@ func shipIsBookkeepingCommit(subject string) bool {
 		shipIsMergeSubject(low) || strings.HasPrefix(low, "ship: kai/")
 }
 
+// shipTrailerKeys are the trailer keys a commit body can end with — kai's
+// own (any Kai-*) and git's conventional sign-offs. Matching known keys,
+// rather than "a hyphenated word before a colon", keeps prose ("well-known:
+// the cache now decides") out of the trailer block.
+var shipTrailerKeys = map[string]bool{
+	"co-authored-by": true, "signed-off-by": true, "reviewed-by": true,
+	"acked-by": true, "tested-by": true, "reported-by": true,
+	"suggested-by": true, "helped-by": true, "cc": true, "change-id": true,
+}
+
 // shipCommitProse is a commit body without its trailer block (Kai-Session:,
-// Kai-Snapshot:, Co-authored-by: …), which is provenance, not explanation.
+// Kai-Snapshot:, Co-authored-by: ...), which is provenance, not explanation.
 func shipCommitProse(body string) string {
 	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
 	end := len(lines)
@@ -333,13 +343,28 @@ func shipCommitProse(body string) string {
 			end--
 			continue
 		}
-		if k, _, ok := strings.Cut(l, ":"); ok && k != "" && !strings.ContainsAny(k, " \t") && strings.Contains(k, "-") {
+		k, _, ok := strings.Cut(l, ":")
+		k = strings.ToLower(strings.TrimSpace(k))
+		if ok && !strings.ContainsAny(k, " \t") && (strings.HasPrefix(k, "kai-") || shipTrailerKeys[k]) {
 			end--
 			continue
 		}
 		break
 	}
 	return strings.TrimSpace(strings.Join(lines[:end], "\n"))
+}
+
+// shipDescribedTitle is the title the description leads with: the one the
+// caller gave, else what the change touched. Never the branch placeholder
+// — a body opening "ship: kai/<branch>." says nothing. Both ship paths
+// resolve their title through this, so the same change described by the
+// local path and by the server path opens the same way.
+func shipDescribedTitle(title string, files []shipFileStat) string {
+	t := strings.TrimSpace(title)
+	if t != "" && !strings.HasPrefix(strings.ToLower(t), "ship: kai/") {
+		return t
+	}
+	return shipTitleFromFiles(files)
 }
 
 // shipTitleFromFiles names a change by what it touched, for a ship with no
