@@ -42,21 +42,23 @@ import (
 )
 
 var (
-	shipSession string
-	shipSlug    string
-	shipBranch  string
-	shipBase    string
-	shipRemote  string
-	shipRepo    string
-	shipToken   string
-	shipTitle   string
-	shipReady   bool
-	shipPush    bool
-	shipPR      bool
-	shipDryRun  bool
-	shipServer  bool
-	shipLocal   bool
-	shipClean   bool
+	shipSession  string
+	shipSlug     string
+	shipBranch   string
+	shipBase     string
+	shipRemote   string
+	shipRepo     string
+	shipToken    string
+	shipTitle    string
+	shipBody     string
+	shipBodyFile string
+	shipReady    bool
+	shipPush     bool
+	shipPR       bool
+	shipDryRun   bool
+	shipServer   bool
+	shipLocal    bool
+	shipClean    bool
 )
 
 var shipCmd = &cobra.Command{
@@ -68,7 +70,12 @@ Kai-Snapshot trailers, a push, and a GitHub pull request (draft by
 default).
 
 Only the changed paths are staged — never ` + "`git add -A`" + ` — so kai's own
-artifacts stay out of the commit. Re-running on the ship branch commits
+artifacts stay out of the commit.
+
+PR description: pass --body or --body-file with what the change does and
+why, the changes by area, and how it was verified. Without one, the
+description is assembled from the title and the session's commits, and
+lists the changed files with their line counts either way. Re-running on the ship branch commits
 and pushes again; the existing PR updates via GitHub's synchronize.
 
 Branch name: --branch wins. Otherwise the branch is named for the change,
@@ -97,7 +104,9 @@ func init() {
 	shipCmd.Flags().StringVar(&shipRemote, "remote", "origin", "git remote to push to")
 	shipCmd.Flags().StringVar(&shipRepo, "repo", "", "owner/name (default $GITHUB_REPOSITORY or git remote)")
 	shipCmd.Flags().StringVar(&shipToken, "token", "", "GitHub token (default $GITHUB_TOKEN)")
-	shipCmd.Flags().StringVar(&shipTitle, "title", "", "commit subject and PR title (default: ship: <branch>)")
+	shipCmd.Flags().StringVar(&shipTitle, "title", "", "commit subject and PR title (default: the session's first commit subject, else ship: <branch>)")
+	shipCmd.Flags().StringVar(&shipBody, "body", "", "PR description, markdown: what the change does and why, the changes by area, how it was verified")
+	shipCmd.Flags().StringVar(&shipBodyFile, "body-file", "", "read the PR description from a file (- for stdin); see --body")
 	shipCmd.Flags().BoolVar(&shipReady, "ready", false, "open the PR ready-for-review (default: draft)")
 	shipCmd.Flags().BoolVar(&shipPush, "push", true, "push the branch (set false to stop after the local commit)")
 	shipCmd.Flags().BoolVar(&shipPR, "pr", true, "open a pull request after pushing")
@@ -123,13 +132,22 @@ func runShip(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	sessionID := resolveShipSession(cwd)
+	authored, err := shipAuthoredBody(shipBody, shipBodyFile, os.Stdin)
+	if err != nil {
+		return err
+	}
+	// A title the caller did not give comes from the session's first own
+	// commit — the same line the branch was just named from.
+	if shipTitle == "" {
+		shipTitle = shipFirstCommitSubject(cwd)
+	}
 
 	if useServer {
 		if !shipServer {
 			fmt.Fprintln(os.Stderr, "spawned workspace: shipping via the kailab server (pass --local to force local git)")
 			shipServer = true
 		}
-		return runShipServer(cwd, branch, sessionID)
+		return runShipServer(cwd, branch, sessionID, authored)
 	}
 
 	current, err := gitio.CurrentBranch(cwd)
@@ -225,6 +243,7 @@ func runShip(cmd *cobra.Command, args []string) error {
 	if _, err := gitio.StageAndDiffPaths(cwd, diffBase, changed); err != nil {
 		return fmt.Errorf("staging changes: %w", err)
 	}
+	stats := shipFileStats(cwd, diffBase, changed, true)
 	if err := gitio.CommitStaged(cwd, shipCommitMessage(branch, sessionID, snapHex)); err != nil {
 		return fmt.Errorf("committing: %w", err)
 	}
@@ -256,15 +275,22 @@ func runShip(cmd *cobra.Command, args []string) error {
 	if prBase == "" {
 		prBase = "main"
 	}
-	title := shipTitle
-	if title == "" {
-		title = "ship: " + branch
+	// No title given and no session commit to borrow one from: name the
+	// PR by what it touched rather than by its branch.
+	title := shipDescribedTitle(shipTitle, stats)
+	prTitle := title
+	if prTitle == "" {
+		prTitle = "ship: " + branch
 	}
 	pr, err := gh.CreatePR(autofix.CreatePRInput{
-		Title: title,
+		Title: prTitle,
 		Head:  branch,
 		Base:  prBase,
-		Body:  shipPRBody(branch, sessionID, snapHex, changed),
+		Body: shipPRBody(shipBodyInput{
+			Branch: branch, SessionID: sessionID, SnapHex: snapHex,
+			Title: title, Authored: authored, Files: stats,
+			KnownIssues: ledgerKnownIssues(),
+		}),
 		Draft: !shipReady,
 	})
 	if err != nil {
@@ -459,25 +485,8 @@ func shipSlugify(title string) string {
 // merges, earlier ship fallbacks) are not the session's intent and are
 // skipped. "" outside a spawn, or before the session has committed.
 func shipFirstCommitSubject(cwd string) string {
-	if shipSpawnEntry(cwd) == nil {
-		return ""
-	}
-	base := shipBaselineCommit(cwd)
-	if base == "" || base == "HEAD" {
-		return ""
-	}
-	out, err := gitOut(cwd, "log", "--reverse", "--format=%s", base+"..HEAD")
-	if err != nil {
-		return ""
-	}
-	for _, subject := range strings.Split(out, "\n") {
-		subject = strings.TrimSpace(subject)
-		low := strings.ToLower(subject)
-		if subject == "" || strings.HasPrefix(low, "kai spawn from") || strings.HasPrefix(low, "kai warm sync") ||
-			shipIsMergeSubject(low) || strings.HasPrefix(low, "ship: kai/") {
-			continue
-		}
-		return subject
+	if commits := shipSessionCommits(cwd); len(commits) > 0 {
+		return commits[0].Subject
 	}
 	return ""
 }
@@ -584,29 +593,6 @@ func shipCommitMessage(branch, sessionID, snapHex string) string {
 			fmt.Fprintf(&b, "Kai-Snapshot: %s\n", snapHex)
 		}
 	}
-	return b.String()
-}
-
-func shipPRBody(branch, sessionID, snapHex string, files []string) string {
-	var b strings.Builder
-	b.WriteString("Shipped from a kai session.\n\n")
-	fmt.Fprintf(&b, "| | |\n|---|---|\n| Branch | `%s` |\n", branch)
-	if sessionID != "" {
-		fmt.Fprintf(&b, "| Session | `%s` |\n", sessionID)
-	}
-	if snapHex != "" {
-		fmt.Fprintf(&b, "| Snapshot | `%s` |\n", snapHex)
-	}
-	fmt.Fprintf(&b, "| Files | %d |\n", len(files))
-	b.WriteString("\n<details><summary>Changed files</summary>\n\n")
-	for _, f := range files {
-		fmt.Fprintf(&b, "- `%s`\n", f)
-	}
-	b.WriteString("\n</details>\n")
-	if known := ledgerKnownIssues(); known != "" {
-		b.WriteString(known)
-	}
-	b.WriteString("\n<!-- kai-ship -->\n")
 	return b.String()
 }
 
