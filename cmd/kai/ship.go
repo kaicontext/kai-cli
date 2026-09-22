@@ -13,11 +13,17 @@ package main
 // to ship" — the local path only sees dirty files — and gave up
 // (2026-09-10, session de960690).
 //
-// The branch name is the session identity — kai/<workspace> — so
-// concurrent sessions can never contend for a ref, and re-shipping
-// from the same session lands on the same branch (GitHub then emits
-// `synchronize` and the server-side review supersede machinery takes
-// it from there).
+// The branch is named for what the change IS — kai/<slug>-<id>, the slug
+// from the PR title (or the session's first commit subject) and the id
+// the first six characters of the session identity — so a reviewer
+// scanning GitHub's branch list reads "kai/fix-login-redirect-98d608"
+// instead of "kai/s-98d60850", while two sessions with the same title
+// still never contend for a ref. A session with nothing to name it by
+// keeps the bare identity, kai/<workspace>. Re-shipping lands on the same
+// branch: the server redirects a session with an open PR to that PR's
+// branch, and the local path re-ships onto a checked-out branch of the
+// same session (GitHub then emits `synchronize` and the server-side
+// review supersede machinery takes it from there).
 
 import (
 	"fmt"
@@ -64,8 +70,12 @@ Only the changed paths are staged — never ` + "`git add -A`" + ` — so kai's 
 artifacts stay out of the commit. Re-running on the ship branch commits
 and pushes again; the existing PR updates via GitHub's synchronize.
 
-Identity resolution: --branch wins; else --session names the branch
-kai/s-<first 8>; else the current kai workspace name is used.
+Branch name: --branch wins. Otherwise the branch is named for the change,
+kai/<slug>-<id>: the slug from --slug, else --title, else the session's
+first commit subject; the id is the first six characters of the session
+identity (--session, else the current kai workspace), so two sessions with
+the same title never share a branch. With nothing to name it by, the branch
+is the bare identity: kai/s-<first 8> or kai/<workspace>.
 
 Credentials: --token or $GITHUB_TOKEN; --repo or $GITHUB_REPOSITORY
 (else derived from the git remote).
@@ -79,8 +89,8 @@ path anyway.`,
 }
 
 func init() {
-	shipCmd.Flags().StringVar(&shipSession, "session", "", "session UUID; names the branch kai/s-<first 8> and is recorded as a commit trailer")
-	shipCmd.Flags().StringVar(&shipSlug, "slug", "", "optional goal slug appended to the branch name (stable across re-ships of one session)")
+	shipCmd.Flags().StringVar(&shipSession, "session", "", "session UUID; its first characters make the branch unique, and it is recorded as a commit trailer")
+	shipCmd.Flags().StringVar(&shipSlug, "slug", "", "the readable part of the branch name (default: derived from --title or the session's first commit)")
 	shipCmd.Flags().StringVar(&shipBranch, "branch", "", "explicit branch name (overrides --session / workspace identity)")
 	shipCmd.Flags().StringVar(&shipBase, "base", "", "base branch for the PR (default: the branch you ship from)")
 	shipCmd.Flags().StringVar(&shipRemote, "remote", "origin", "git remote to push to")
@@ -124,6 +134,12 @@ func runShip(cmd *cobra.Command, args []string) error {
 	current, err := gitio.CurrentBranch(cwd)
 	if err != nil {
 		return fmt.Errorf("not a git repo (kai ship --local needs one; spawned workspaces ship via the server): %w", err)
+	}
+	// Already on a ship branch of this session: re-ship onto it, even when
+	// this ship's title would name a different one — a second title must
+	// not fork the session's work onto a second branch and PR.
+	if shipBranch == "" && current != branch && shipBranchOfIdentity(current, shipIdentityFor(cwd)) {
+		branch = current
 	}
 	reShip := current == branch
 	if !reShip && gitio.BranchExists(cwd, branch) {
@@ -259,33 +275,156 @@ func runShip(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// resolveShipBranch derives the branch name from, in order: --branch,
-// --session (kai/s-<sid8>), the current kai workspace name.
+// resolveShipBranch derives the branch name: --branch as given, else
+// kai/<slug>-<id> named for the change (see shipBranchName), else the bare
+// identity kai/<workspace> when there is nothing to name it by.
 func resolveShipBranch(cwd string) (string, error) {
 	if shipBranch != "" {
 		return shipBranch, nil
 	}
-	identity := ""
-	if shipSession != "" {
-		base, err := spawnpkg.WorkspaceBase(shipSession, "")
-		if err != nil {
-			return "", err
-		}
-		identity = base
-	} else if ws, err := getCurrentWorkspace(); err == nil && ws != "" {
-		identity = ws
-	}
+	identity := shipIdentityFor(cwd)
 	if identity == "" {
 		return "", fmt.Errorf("no session identity: pass --session, --branch, or check out a kai workspace")
 	}
+	slug := ""
 	if shipSlug != "" {
-		slug, err := spawnpkg.SanitizeName(shipSlug)
-		if err != nil {
-			return "", fmt.Errorf("--slug: %w", err)
+		if slug = shipSlugify(shipSlug); slug == "" {
+			return "", fmt.Errorf("--slug: no usable characters in %q", shipSlug)
 		}
-		identity += "-" + slug
+	} else if slug = shipSlugify(shipTitle); slug == "" {
+		slug = shipSlugify(shipFirstCommitSubject(cwd))
 	}
-	return "kai/" + identity, nil
+	return shipBranchName(identity, slug), nil
+}
+
+// shipIdentityFor is the session identity a branch is made unique by:
+// --session's workspace base (s-<first 8>), else the current kai
+// workspace name. "" when there is neither.
+func shipIdentityFor(cwd string) string {
+	if shipSession != "" {
+		if base, err := spawnpkg.WorkspaceBase(shipSession, ""); err == nil {
+			return base
+		}
+		return ""
+	}
+	if ws, err := getCurrentWorkspace(); err == nil && ws != "" {
+		return ws
+	}
+	return ""
+}
+
+// shipBranchSlugMax bounds the readable part of a branch name. Long enough
+// for a real title ("fix-voice-chat-parent-title-resolution"), short
+// enough that GitHub's branch picker shows the whole thing.
+const shipBranchSlugMax = 48
+
+// shipBranchName joins the two halves: the slug says what the change is,
+// the id keeps two sessions with the same title off the same ref. With no
+// slug the identity alone names the branch, as it always has.
+func shipBranchName(identity, slug string) string {
+	if slug == "" {
+		return "kai/" + identity
+	}
+	return "kai/" + slug + "-" + shipShortID(identity)
+}
+
+// shipShortID is the identity's distinguishing part: "s-98d60850" →
+// "98d608". Six hex characters of a session UUID, beside a slug that
+// already differs between most sessions, is ample to keep refs apart.
+func shipShortID(identity string) string {
+	id := shipSlugify(strings.TrimPrefix(identity, "s-"))
+	id = strings.ReplaceAll(id, "-", "")
+	if len(id) > 6 {
+		id = id[:6]
+	}
+	if id == "" {
+		return "kai"
+	}
+	return id
+}
+
+// shipBranchOfIdentity reports whether branch is a ship branch this
+// identity produced: the bare kai/<identity>, or a named kai/<slug>-<id>.
+func shipBranchOfIdentity(branch, identity string) bool {
+	if identity == "" || !strings.HasPrefix(branch, "kai/") {
+		return false
+	}
+	return branch == "kai/"+identity || strings.HasSuffix(branch, "-"+shipShortID(identity))
+}
+
+// shipSlugify turns a title into the readable half of a branch name:
+// lowercase words joined by dashes, cut on a word boundary at
+// shipBranchSlugMax. A title that is itself a transport placeholder
+// ("ship: kai/s-98d60850") names nothing and yields "".
+func shipSlugify(title string) string {
+	title = strings.TrimSpace(title)
+	if strings.HasPrefix(strings.ToLower(title), "ship: kai/") {
+		return ""
+	}
+	var words []string
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			words = append(words, cur.String())
+			cur.Reset()
+		}
+	}
+	for _, r := range strings.ToLower(title) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			cur.WriteRune(r)
+		case r == '\'':
+			// "don't" → "dont", not "don-t"
+		default:
+			flush()
+		}
+	}
+	flush()
+	out := ""
+	for _, w := range words {
+		next := w
+		if out != "" {
+			next = out + "-" + w
+		}
+		if len(next) > shipBranchSlugMax {
+			if out == "" {
+				out = w[:shipBranchSlugMax]
+			}
+			break
+		}
+		out = next
+	}
+	return out
+}
+
+// shipFirstCommitSubject is the subject of the session's first own commit
+// in a spawned workspace — the part's one-line intent, and fixed from the
+// moment it exists, so a branch named from it does not drift between
+// re-ships. kai's own bookkeeping commits (the spawn baseline, warm syncs,
+// merges, earlier ship fallbacks) are not the session's intent and are
+// skipped. "" outside a spawn, or before the session has committed.
+func shipFirstCommitSubject(cwd string) string {
+	if shipSpawnEntry(cwd) == nil {
+		return ""
+	}
+	base := shipBaselineCommit(cwd)
+	if base == "" || base == "HEAD" {
+		return ""
+	}
+	out, err := gitOut(cwd, "log", "--reverse", "--format=%s", base+"..HEAD")
+	if err != nil {
+		return ""
+	}
+	for _, subject := range strings.Split(out, "\n") {
+		subject = strings.TrimSpace(subject)
+		low := strings.ToLower(subject)
+		if subject == "" || strings.HasPrefix(low, "kai spawn from") || strings.HasPrefix(low, "kai warm sync") ||
+			strings.HasPrefix(low, "merge ") || strings.HasPrefix(low, "ship: kai/") {
+			continue
+		}
+		return subject
+	}
+	return ""
 }
 
 // resolveShipSession returns the full session UUID for the commit
