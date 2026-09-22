@@ -503,27 +503,37 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	// sequential so the source numbering remains stable and reproducible.
 	toolCalls := 0
 	for turn := 0; turn < 5; turn++ {
-		// RequireToolUse on EVERY turn, not just the first: the challenge has
-		// no legitimate text-only turn. Every step is either an experiment
-		// (review_shell) or the terminal answer (submit_review), and after
-		// four experiments only submit_review is on offer. A plain-text turn
-		// is always a protocol failure here, and it used to be an expensive
-		// one — rcValidateChallenge would parse the prose as JSON and fail
-		// closed on the first character, discarding a complete review.
+		// No RequireToolUse here, and that is a measured decision rather than
+		// an oversight.
 		//
-		// A provider that REJECTED this field rather than ignoring it would
-		// turn an intermittent failure into a total one, so it was checked
-		// rather than assumed. The production path is kailab, and the review
-		// model z-ai/glm-5.2 is in KailabOpenRouterModels, so it routes
-		// through kailab's OpenAI-shaped /completions proxy; that model
-		// lists tools + tool_choice + reasoning together in its OpenRouter
-		// supported_parameters (2026-09-19). A bare OpenAI-compatible
-		// endpoint (KindOpenAI: vLLM, Ollama, LM Studio) is reachable only
-		// by an explicit KAI_PROVIDER=openai opt-in and takes tool_choice as
-		// standard chat-completions vocabulary. If one ever does 400 on it,
-		// gate this by provider.Kind the way rcFastModel gates substitution
-		// — do not drop the constraint everywhere to accommodate it.
-		resp, err := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: msgs, Tools: available, MaxTokens: 6000, RequireToolUse: true})
+		// Forcing the tool call was shipped and rolled back the same day
+		// (kai-ci f320883, 2026-09-19). The reasoning was sound on paper —
+		// the challenge has no legitimate text-only turn, so make prose
+		// impossible instead of parsing it as JSON. What it missed is the
+		// COST on this model. A/B on one commit against the real provider
+		// and model (z-ai/glm-5.2 over kailab), same input both arms:
+		// without tool_choice 5/5 reviews finished in 4-28s; with it 5/5
+		// failed, four on "challenge call: context deadline exceeded" and one
+		// on multiple tool calls in a single turn. In production the fast
+		// pass's median went 42s to 99s against its ~100s budget and the
+		// did-not-finish rate went 47% to 5-of-6.
+		//
+		// Note the sandbox is NOT configured in CI (KAI_REVIEW_SANDBOX_IMAGE
+		// is unset), so submit_review is the only tool on offer and no shell
+		// experiment is involved: the single challenge call itself got
+		// slower under the constraint.
+		//
+		// Prose is still handled — by rcRepairSubmission, which is what
+		// actually recovers it: the answer fails to decode, one corrected
+		// resubmission is requested, and the review publishes. That path
+		// needs no tool_choice, because rcRequestResubmission accepts a
+		// plain-JSON reply too. kai-engine#109 (tool_choice honored on the
+		// OpenAI shape) stays correct and stays in the engine; this caller
+		// simply cannot afford it on a hidden-CoT model under these budgets.
+		// If a cheap non-reasoning challenge model is ever configured,
+		// provider.IsReasoningModel is the gate to reach for — see
+		// rcFastModel, which already makes exactly that distinction.
+		resp, err := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: msgs, Tools: available, MaxTokens: 6000})
 		if err != nil {
 			return nil, fmt.Errorf("challenge call: %w", err)
 		}
@@ -707,7 +717,12 @@ func rcRequestResubmission(ctx context.Context, prov provider.Provider, model st
 		correction = message.ToolResult{ToolCallID: callID, Name: "submit_review", Content: feedback, IsError: true}
 	}
 	retryMsgs := append(append([]message.Message(nil), msgs...), message.Message{Role: message.RoleAssistant, Parts: failed.Parts}, message.Message{Role: message.RoleUser, Parts: []message.ContentPart{correction}})
-	resp, sendErr := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: retryMsgs, Tools: []tools.ToolInfo{rcSubmitReviewToolInfo()}, MaxTokens: 6000, RequireToolUse: true})
+	// Not forced either, for the reason above — and this call is the one
+	// with the least budget left. kai-tui#143 lost a correction to
+	// "correction call: context deadline exceeded" under the constraint.
+	// rcRequestResubmission accepts a plain-JSON reply, so the repair does
+	// not depend on a tool call to work.
+	resp, sendErr := prov.Send(ctx, provider.Request{Model: model, System: rcChallengeSystem, Messages: retryMsgs, Tools: []tools.ToolInfo{rcSubmitReviewToolInfo()}, MaxTokens: 6000})
 	if sendErr != nil {
 		return "", fmt.Errorf("correction call: %w", sendErr)
 	}
