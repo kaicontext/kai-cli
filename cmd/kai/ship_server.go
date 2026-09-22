@@ -167,6 +167,17 @@ func runShipServer(cwd, branch, sessionID, authored string) error {
 	}
 	baseSHA := base.SHA
 
+	// Title: the caller's, else the session's first commit (resolved in
+	// runShip), else what the change touched. Without this last step a
+	// spawn that never committed still ships a PR titled
+	// "ship: kai/<branch>" — the shape this change set exists to remove —
+	// on any server that has not taken the same fallback yet.
+	stats := shipFileStats(cwd, shipStatsBase(cwd), changed, false)
+	title := shipTitle
+	if title == "" {
+		title = shipTitleFromFiles(stats)
+	}
+
 	payload := shipServerRequest{
 		SessionID:    sessionID,
 		Workspace:    shipServerWorkspace(cwd),
@@ -174,11 +185,11 @@ func runShipServer(cwd, branch, sessionID, authored string) error {
 		BaseGitSHA:   baseSHA,
 		BaseSnapshot: baseSnapshot,
 		HeadSnapshot: shipSnapshotHex(cwd),
-		Title:        shipTitle,
+		Title:        title,
 		Body: shipPRBody(shipBodyInput{
-			Branch: branch, SessionID: sessionID, Title: shipTitle, Authored: authored,
+			Branch: branch, SessionID: sessionID, Title: title, Authored: authored,
 			Commits:     shipSessionCommits(cwd),
-			Files:       shipFileStats(cwd, shipStatsBase(cwd), changed, false),
+			Files:       stats,
 			KnownIssues: ledgerKnownIssues(),
 		}),
 		Ready: shipReady,
