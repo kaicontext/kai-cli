@@ -275,7 +275,12 @@ func runShip(cmd *cobra.Command, args []string) error {
 	if prBase == "" {
 		prBase = "main"
 	}
+	// No title given and no session commit to borrow one from: name the
+	// PR by what it touched rather than by its branch.
 	title := shipTitle
+	if title == "" {
+		title = shipTitleFromFiles(stats)
+	}
 	if title == "" {
 		title = "ship: " + branch
 	}

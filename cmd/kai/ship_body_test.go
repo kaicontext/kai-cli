@@ -220,3 +220,36 @@ func TestShipSessionCommitsAndFileStats(t *testing.T) {
 		t.Fatalf("outside a spawn there are no session commits, got %+v", got)
 	}
 }
+
+// A local ship with no title and no commits is named by what it touched,
+// not "ship: kai/<branch>" — the same shape the server uses.
+func TestShipTitleFromFiles(t *testing.T) {
+	st := func(paths ...string) []shipFileStat {
+		var out []shipFileStat
+		for _, p := range paths {
+			out = append(out, shipFileStat{Path: p})
+		}
+		return out
+	}
+	cases := []struct {
+		files []shipFileStat
+		want  string
+	}{
+		{st("frontend/dist/app.js", "frontend/dist/style.css", "frontend/dist/voice-tasks.js"), "frontend/dist: update app, style and voice-tasks"},
+		{st("frontend/dist/app.js", "frontend/dist/app.test.js"), "frontend/dist: update app"},
+		{st("ship.go"), "Update ship"},
+		{st("a/x.go", "b/y.go"), "Update x and y"},
+		{st("a/1.go", "a/2.go", "a/3.go", "a/4.go", "a/5.go"), "a: update 1, 2, 3 and 2 more"},
+		{st("x_test.go"), "Update x_test"},
+		{nil, ""},
+	}
+	for _, c := range cases {
+		if got := shipTitleFromFiles(c.files); got != c.want {
+			t.Errorf("shipTitleFromFiles(%v) = %q, want %q", c.files, got, c.want)
+		}
+	}
+	long := st("some/really/deeply/nested/directory/structure/that/goes/on/alpha.go", "some/really/deeply/nested/directory/structure/that/goes/on/beta.go")
+	if got := shipTitleFromFiles(long); got != "Update 2 files" {
+		t.Errorf("an over-long title falls back to a count, got %q", got)
+	}
+}

@@ -341,3 +341,76 @@ func shipCommitProse(body string) string {
 	}
 	return strings.TrimSpace(strings.Join(lines[:end], "\n"))
 }
+
+// shipTitleFromFiles names a change by what it touched, for a ship with no
+// title and no commit to borrow one from — the same shape the server's
+// fallback produces ("frontend/dist: update app, style and voice-tasks"),
+// so a PR opened locally does not arrive titled "ship: kai/<branch>".
+// Tests are left out when anything else changed: the test accompanies the
+// change rather than being it. "" when nothing changed.
+func shipTitleFromFiles(files []shipFileStat) string {
+	var subjects []shipFileStat
+	for _, f := range files {
+		if !shipPathIsTest(f.Path) {
+			subjects = append(subjects, f)
+		}
+	}
+	if len(subjects) == 0 {
+		subjects = files
+	}
+	if len(subjects) == 0 {
+		return ""
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, f := range subjects {
+		base := path.Base(f.Path)
+		base = strings.TrimSuffix(base, path.Ext(base))
+		if base != "" && !seen[base] {
+			seen[base] = true
+			names = append(names, base)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	const nameCap = 3
+	var list string
+	switch {
+	case len(names) == 1:
+		list = names[0]
+	case len(names) <= nameCap:
+		list = strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	default:
+		list = fmt.Sprintf("%s and %d more", strings.Join(names[:nameCap], ", "), len(names)-nameCap)
+	}
+	title := "Update " + list
+	if scope := shipCommonDir(subjects); scope != "" {
+		title = scope + ": update " + list
+	}
+	if len([]rune(title)) > 72 {
+		title = fmt.Sprintf("Update %d files", len(subjects))
+	}
+	return title
+}
+
+// shipPathIsTest reports whether a path is a test file or lives under a
+// test directory.
+func shipPathIsTest(p string) bool {
+	lower := strings.ToLower(p)
+	base := path.Base(lower)
+	for _, marker := range []string{".test.", ".spec.", "_test."} {
+		if strings.Contains(base, marker) {
+			return true
+		}
+	}
+	if strings.HasPrefix(base, "test_") {
+		return true
+	}
+	for _, seg := range strings.Split(path.Dir(lower), "/") {
+		if seg == "test" || seg == "tests" || seg == "__tests__" || seg == "testdata" {
+			return true
+		}
+	}
+	return false
+}
