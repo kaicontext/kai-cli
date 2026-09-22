@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -481,18 +482,21 @@ func shipFirstCommitSubject(cwd string) string {
 	return ""
 }
 
+// shipMergeRefsRe matches the "merge <ref> into <ref>" a workspace refresh
+// writes — two bare refs, nothing else. Prose says more: "merge the two
+// handlers into one function" is a change, and skipping it would cost the
+// branch its name.
+var shipMergeRefsRe = regexp.MustCompile(`^merge \S+ into \S+$`)
+
 // shipIsMergeSubject reports whether a lowercased subject is a merge
-// commit's — git's own wordings, plus the "merge <ref> into <ref>" a
-// workspace refresh writes. Not any subject starting with "merge": "merge
-// the two handlers" is a change, and skipping it would cost the branch its
-// name.
+// commit's: git's own wordings, or the refresh's two-ref form.
 func shipIsMergeSubject(low string) bool {
 	for _, p := range []string{"merge pull request", "merge branch", "merge remote-tracking branch", "merge commit", "merge tag"} {
 		if strings.HasPrefix(low, p) {
 			return true
 		}
 	}
-	return strings.HasPrefix(low, "merge ") && strings.Contains(low, " into ")
+	return shipMergeRefsRe.MatchString(strings.TrimSpace(low))
 }
 
 // resolveShipSession returns the full session UUID for the commit

@@ -226,7 +226,8 @@ func TestShipIsMergeSubject(t *testing.T) {
 		"merge remote-tracking branch 'origin/main'":  true,
 		"merge origin/main into kai/s-98d60850":       true,
 		"merge tag 'v1'":                              true,
-		"merge the two handlers into one function":    true, // says "into": indistinguishable from a merge
+		"merge feat/x into main":                      true,
+		"merge the two handlers into one function":    false, // prose, not two refs
 		"merge the two handlers":                      false,
 		"merges are not the subject here":             false,
 		"keep the composer readable with pasted text": false,
