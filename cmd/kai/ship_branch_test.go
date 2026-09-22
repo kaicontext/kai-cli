@@ -116,6 +116,10 @@ func TestShipBranchIsSessions(t *testing.T) {
 	git("commit", "-q", "--allow-empty", "-m", "Fix login", "-m", "Kai-Session: 98d60850-dd4e")
 	git("checkout", "-q", "-b", "kai/other-work-98d608")
 	git("commit", "-q", "--allow-empty", "-m", "Other work", "-m", "Kai-Session: 98d608ff-0000")
+	// Another session's branch, whose body MENTIONS this session's id in
+	// prose: a substring test would take it for this session's own.
+	git("checkout", "-q", "-b", "kai/mentions-it-98d608")
+	git("commit", "-q", "--allow-empty", "-m", "Undo what Kai-Session: 98d60850-dd4e did", "-m", "Kai-Session: 98d608ff-0000")
 
 	const id, sid = "s-98d60850", "98d60850-dd4e"
 	cases := []struct {
