@@ -138,8 +138,10 @@ func runShip(cmd *cobra.Command, args []string) error {
 	// Already on a ship branch of this session: re-ship onto it, even when
 	// this ship's title would name a different one — a second title must
 	// not fork the session's work onto a second branch and PR.
-	if shipBranch == "" && current != branch && shipBranchOfIdentity(current, shipIdentityFor(cwd)) {
-		branch = current
+	if shipBranch == "" && current != branch {
+		if identity, _ := shipIdentityFor(cwd); shipBranchIsSessions(cwd, current, identity, sessionID) {
+			branch = current
+		}
 	}
 	reShip := current == branch
 	if !reShip && gitio.BranchExists(cwd, branch) {
@@ -282,7 +284,10 @@ func resolveShipBranch(cwd string) (string, error) {
 	if shipBranch != "" {
 		return shipBranch, nil
 	}
-	identity := shipIdentityFor(cwd)
+	identity, err := shipIdentityFor(cwd)
+	if err != nil {
+		return "", err
+	}
 	if identity == "" {
 		return "", fmt.Errorf("no session identity: pass --session, --branch, or check out a kai workspace")
 	}
@@ -299,18 +304,21 @@ func resolveShipBranch(cwd string) (string, error) {
 
 // shipIdentityFor is the session identity a branch is made unique by:
 // --session's workspace base (s-<first 8>), else the current kai
-// workspace name. "" when there is neither.
-func shipIdentityFor(cwd string) string {
+// workspace name. "" when there is neither; an error when --session was
+// given but cannot name one, so a malformed id is not reported as a
+// missing one.
+func shipIdentityFor(cwd string) (string, error) {
 	if shipSession != "" {
-		if base, err := spawnpkg.WorkspaceBase(shipSession, ""); err == nil {
-			return base
+		base, err := spawnpkg.WorkspaceBase(shipSession, "")
+		if err != nil {
+			return "", fmt.Errorf("--session: %w", err)
 		}
-		return ""
+		return base, nil
 	}
 	if ws, err := getCurrentWorkspace(); err == nil && ws != "" {
-		return ws
+		return ws, nil
 	}
-	return ""
+	return "", nil
 }
 
 // shipBranchSlugMax bounds the readable part of a branch name. Long enough
@@ -328,28 +336,59 @@ func shipBranchName(identity, slug string) string {
 	return "kai/" + slug + "-" + shipShortID(identity)
 }
 
-// shipShortID is the identity's distinguishing part: "s-98d60850" →
-// "98d608". Six hex characters of a session UUID, beside a slug that
-// already differs between most sessions, is ample to keep refs apart.
+// shipShortID is the identity's distinguishing part. A session identity
+// ("s-98d60850") contributes the first six hex characters of its UUID —
+// random, so six beside a slug that already differs between most sessions
+// keep refs apart. A workspace name is not random ("my-workspace" and
+// "my-workflow" share any prefix you cut), so it is kept whole.
 func shipShortID(identity string) string {
-	id := shipSlugify(strings.TrimPrefix(identity, "s-"))
-	id = strings.ReplaceAll(id, "-", "")
-	if len(id) > 6 {
-		id = id[:6]
+	if hex := strings.TrimPrefix(identity, "s-"); hex != identity && shipIsHex(hex) {
+		if len(hex) > 6 {
+			hex = hex[:6]
+		}
+		return hex
 	}
-	if id == "" {
-		return "kai"
+	if id := shipSlugify(identity); id != "" {
+		return id
 	}
-	return id
+	return "kai"
 }
 
-// shipBranchOfIdentity reports whether branch is a ship branch this
-// identity produced: the bare kai/<identity>, or a named kai/<slug>-<id>.
-func shipBranchOfIdentity(branch, identity string) bool {
+func shipIsHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// shipBranchIsSessions reports whether branch — the one checked out — is a
+// ship branch of THIS session, so a re-ship lands on it instead of forking
+// a second branch because this ship's title names a different one. The
+// bare kai/<identity> always is. A named kai/<slug>-<id> must end in this
+// identity's id and, when the session is known, its tip must carry this
+// session's Kai-Session trailer: six hex characters alone could, however
+// rarely, be another session's, and re-shipping onto its PR would be far
+// worse than opening a second one.
+func shipBranchIsSessions(cwd, branch, identity, sessionID string) bool {
 	if identity == "" || !strings.HasPrefix(branch, "kai/") {
 		return false
 	}
-	return branch == "kai/"+identity || strings.HasSuffix(branch, "-"+shipShortID(identity))
+	if branch == "kai/"+identity {
+		return true
+	}
+	if !strings.HasSuffix(branch, "-"+shipShortID(identity)) {
+		return false
+	}
+	if sessionID == "" {
+		return true
+	}
+	msg, err := gitOut(cwd, "log", "-1", "--format=%B", branch)
+	return err == nil && strings.Contains(msg, "Kai-Session: "+sessionID)
 }
 
 // shipSlugify turns a title into the readable half of a branch name:

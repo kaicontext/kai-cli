@@ -80,26 +80,72 @@ func TestShipSlugify(t *testing.T) {
 	}
 }
 
-func TestShipShortIDAndIdentityMatch(t *testing.T) {
-	if got := shipShortID("s-98d60850"); got != "98d608" {
-		t.Errorf("shipShortID(s-98d60850) = %q", got)
-	}
-	if got := shipShortID("my-workspace"); got != "mywork" {
-		t.Errorf("shipShortID(my-workspace) = %q", got)
-	}
-	for branch, want := range map[string]bool{
-		"kai/s-98d60850":                       true,  // the legacy bare identity
-		"kai/fix-login-98d608":                 true,  // a named branch of the same session
-		"kai/fix-login-aaaaaa":                 false, // another session
-		"feature/fix-login-98d608":             false, // not a kai ship branch
-		"kai/remove-context-percentage-98d608": true,
+func TestShipShortID(t *testing.T) {
+	for identity, want := range map[string]string{
+		"s-98d60850":   "98d608", // a session: six random hex characters
+		"s-98d6":       "98d6",
+		"my-workspace": "my-workspace", // a name is not random: kept whole
+		"my-workflow":  "my-workflow",
+		"s-not-hex":    "s-not-hex",
+		"!!!":          "kai",
 	} {
-		if got := shipBranchOfIdentity(branch, "s-98d60850"); got != want {
-			t.Errorf("shipBranchOfIdentity(%q) = %v, want %v", branch, got, want)
+		if got := shipShortID(identity); got != want {
+			t.Errorf("shipShortID(%q) = %q, want %q", identity, got, want)
 		}
 	}
-	if shipBranchOfIdentity("kai/anything", "") {
-		t.Error("an empty identity must match nothing")
+}
+
+// A re-ship stays on the checked-out branch only when it is provably this
+// session's: the bare identity, or a named branch with this identity's id
+// whose tip carries this session's trailer.
+func TestShipBranchIsSessions(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := exec.Command("git", "init", "-q", repo).Run(); err != nil {
+		t.Fatal(err)
+	}
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	git("branch", "kai/fix-login-98d608")
+	git("checkout", "-q", "kai/fix-login-98d608")
+	git("commit", "-q", "--allow-empty", "-m", "Fix login", "-m", "Kai-Session: 98d60850-dd4e")
+	git("checkout", "-q", "-b", "kai/other-work-98d608")
+	git("commit", "-q", "--allow-empty", "-m", "Other work", "-m", "Kai-Session: 98d608ff-0000")
+
+	const id, sid = "s-98d60850", "98d60850-dd4e"
+	cases := []struct {
+		branch, identity, session string
+		want                      bool
+	}{
+		{"kai/s-98d60850", id, sid, true},            // the bare identity
+		{"kai/fix-login-98d608", id, sid, true},      // named, and its tip is this session's
+		{"kai/other-work-98d608", id, sid, false},    // same six hex, another session's tip
+		{"kai/fix-login-aaaaaa", id, sid, false},     // another id
+		{"feature/fix-login-98d608", id, sid, false}, // not a ship branch
+		{"kai/fix-login-98d608", id, "", true},       // no session to check against: the id decides
+		{"kai/x-my-workspace", "my-workspace", "", true},
+		{"kai/x-my-workflow", "my-workspace", "", false}, // a workspace name is matched whole
+		{"kai/anything", "", sid, false},
+	}
+	for _, c := range cases {
+		if got := shipBranchIsSessions(repo, c.branch, c.identity, c.session); got != c.want {
+			t.Errorf("shipBranchIsSessions(%q, %q, %q) = %v, want %v", c.branch, c.identity, c.session, got, c.want)
+		}
+	}
+}
+
+// A malformed --session is reported as such, not as a missing identity.
+func TestResolveShipBranch_MalformedSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	withShipFlags(t, "!!!", "", "", "Fix it")
+	_, err := resolveShipBranch(t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "--session") {
+		t.Fatalf("err = %v, want a --session error", err)
 	}
 }
 
@@ -137,5 +183,30 @@ func TestResolveShipBranch_FirstCommitSubjectInASpawn(t *testing.T) {
 	}
 	if got := shipFirstCommitSubject(t.TempDir()); got != "" {
 		t.Fatalf("outside a spawn the first commit names nothing, got %q", got)
+	}
+}
+
+// A registered spawn that has not committed past its baseline has no first
+// commit to name a branch from — the git walk runs and finds nothing.
+func TestShipFirstCommitSubject_SpawnWithoutOwnCommits(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	spawn := filepath.Join(t.TempDir(), "repo")
+	if err := exec.Command("git", "init", "-q", spawn).Run(); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", spawn, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+		"commit", "-q", "--allow-empty", "-m", "kai spawn from 0123456789ab")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if err := spawnpkg.Add(spawnpkg.Entry{Path: spawn, SessionID: "98d60850-dd4e", Durable: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := shipFirstCommitSubject(spawn); got != "" {
+		t.Fatalf("a spawn with only its baseline has no first commit, got %q", got)
+	}
+	withShipFlags(t, "98d60850-dd4e", "", "", "")
+	if got, err := resolveShipBranch(spawn); err != nil || got != "kai/s-98d60850" {
+		t.Fatalf("branch = %q, %v; want the bare identity", got, err)
 	}
 }
