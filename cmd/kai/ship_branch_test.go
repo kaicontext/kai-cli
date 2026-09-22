@@ -125,6 +125,7 @@ func TestShipBranchIsSessions(t *testing.T) {
 		{"kai/s-98d60850", id, sid, true},            // the bare identity
 		{"kai/fix-login-98d608", id, sid, true},      // named, and its tip is this session's
 		{"kai/other-work-98d608", id, sid, false},    // same six hex, another session's tip
+		{"kai/mentions-it-98d608", id, sid, false},   // a body that only mentions the id
 		{"kai/fix-login-aaaaaa", id, sid, false},     // another id
 		{"feature/fix-login-98d608", id, sid, false}, // not a ship branch
 		{"kai/fix-login-98d608", id, "", true},       // no session to check against: the id decides

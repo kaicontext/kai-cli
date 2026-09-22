@@ -139,6 +139,8 @@ func runShip(cmd *cobra.Command, args []string) error {
 	// this ship's title would name a different one — a second title must
 	// not fork the session's work onto a second branch and PR.
 	if shipBranch == "" && current != branch {
+		// The identity error is already reported: resolveShipBranch above
+		// asked for the same identity and returned any --session error.
 		if identity, _ := shipIdentityFor(cwd); shipBranchIsSessions(cwd, current, identity, sessionID) {
 			branch = current
 		}
@@ -387,8 +389,18 @@ func shipBranchIsSessions(cwd, branch, identity, sessionID string) bool {
 	if sessionID == "" {
 		return true
 	}
-	msg, err := gitOut(cwd, "log", "-1", "--format=%B", branch)
-	return err == nil && strings.Contains(msg, "Kai-Session: "+sessionID)
+	// The trailer, parsed as a trailer: a body that merely mentions another
+	// session's id in prose must not pass for it.
+	out, err := gitOut(cwd, "log", "-1", "--format=%(trailers:key=Kai-Session,valueonly)", branch)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == sessionID {
+			return true
+		}
+	}
+	return false
 }
 
 // shipSlugify turns a title into the readable half of a branch name:
