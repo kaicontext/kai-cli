@@ -173,6 +173,9 @@ func TestResolveShipBranch_FirstCommitSubjectInASpawn(t *testing.T) {
 	git("commit", "-q", "--allow-empty", "-m", "kai spawn from 0123456789ab")
 	git("tag", "kai-baseline")
 	git("commit", "-q", "--allow-empty", "-m", "kai warm sync")
+	// A real change whose subject merely starts with the word "merge".
+	git("commit", "-q", "--allow-empty", "-m", "Merge origin/main into kai/s-98d60850")
+	git("commit", "-q", "--allow-empty", "-m", "Merge pull request #12 from x/y")
 	git("commit", "-q", "--allow-empty", "-m", "Keep the composer readable with pasted text")
 	git("commit", "-q", "--allow-empty", "-m", "Address review: test the grip")
 	if err := spawnpkg.Add(spawnpkg.Entry{Path: spawn, SessionID: "98d60850-dd4e", Durable: true}); err != nil {
@@ -213,5 +216,23 @@ func TestShipFirstCommitSubject_SpawnWithoutOwnCommits(t *testing.T) {
 	withShipFlags(t, "98d60850-dd4e", "", "", "")
 	if got, err := resolveShipBranch(spawn); err != nil || got != "kai/s-98d60850" {
 		t.Fatalf("branch = %q, %v; want the bare identity", got, err)
+	}
+}
+
+func TestShipIsMergeSubject(t *testing.T) {
+	for subject, want := range map[string]bool{
+		"merge pull request #12 from x/y":             true,
+		"merge branch 'main' into feat":               true,
+		"merge remote-tracking branch 'origin/main'":  true,
+		"merge origin/main into kai/s-98d60850":       true,
+		"merge tag 'v1'":                              true,
+		"merge the two handlers into one function":    true, // says "into": indistinguishable from a merge
+		"merge the two handlers":                      false,
+		"merges are not the subject here":             false,
+		"keep the composer readable with pasted text": false,
+	} {
+		if got := shipIsMergeSubject(subject); got != want {
+			t.Errorf("shipIsMergeSubject(%q) = %v, want %v", subject, got, want)
+		}
 	}
 }

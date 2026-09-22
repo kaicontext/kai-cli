@@ -431,6 +431,9 @@ func shipSlugify(title string) string {
 		}
 	}
 	flush()
+	// Only ASCII letters and digits were kept above, so byte length and
+	// byte slicing are character counts here. A word longer than the cap on
+	// its own is cut; anything else stops at the last whole word.
 	out := ""
 	for _, w := range words {
 		next := w
@@ -470,12 +473,26 @@ func shipFirstCommitSubject(cwd string) string {
 		subject = strings.TrimSpace(subject)
 		low := strings.ToLower(subject)
 		if subject == "" || strings.HasPrefix(low, "kai spawn from") || strings.HasPrefix(low, "kai warm sync") ||
-			strings.HasPrefix(low, "merge ") || strings.HasPrefix(low, "ship: kai/") {
+			shipIsMergeSubject(low) || strings.HasPrefix(low, "ship: kai/") {
 			continue
 		}
 		return subject
 	}
 	return ""
+}
+
+// shipIsMergeSubject reports whether a lowercased subject is a merge
+// commit's — git's own wordings, plus the "merge <ref> into <ref>" a
+// workspace refresh writes. Not any subject starting with "merge": "merge
+// the two handlers" is a change, and skipping it would cost the branch its
+// name.
+func shipIsMergeSubject(low string) bool {
+	for _, p := range []string{"merge pull request", "merge branch", "merge remote-tracking branch", "merge commit", "merge tag"} {
+		if strings.HasPrefix(low, p) {
+			return true
+		}
+	}
+	return strings.HasPrefix(low, "merge ") && strings.Contains(low, " into ")
 }
 
 // resolveShipSession returns the full session UUID for the commit
