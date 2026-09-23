@@ -22,6 +22,7 @@ concurrency:
 
 permissions:
   contents: write
+  pull-requests: write
 
 env:
   GOPRIVATE: github.com/kaicontext/*
@@ -72,23 +73,32 @@ jobs:
           go mod tidy
           CGO_ENABLED=1 go build ./...
           CGO_ENABLED=1 go test -timeout 5m -skip 'TestRunCompletion' ./...
-      - name: Commit bump to main and tag the next kai-cli release
+      - name: Open a PR for the bump and tag the next kai-cli release
         env:
           VERSION: ${{ steps.v.outputs.version }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          git config user.name "kai-release-bot"
-          git config user.email "bot@kaicontext.com"
-          # Commit ONLY the dependency files, never a fixture a test may dirty.
-          if ! git diff --quiet go.mod go.sum; then
-            git commit go.mod go.sum -m "chore(deps): bump kai-engine to ${VERSION}"
-          fi
-          # Idempotency keyed on the TAG, not the go.mod diff: a bump that landed
-          # on main but died before tagging (tag collision, transient push
-          # failure) must still be released, not silently dropped by a re-run.
-          if git describe --exact-match --tags HEAD >/dev/null 2>&1; then
-            echo "HEAD already tagged $(git describe --exact-match --tags HEAD); nothing to release."
+          # main is branch-protected: "changes must be made through a pull
+          # request" (0 approvals) plus an extra approval for UNATTRIBUTED
+          # commits. A direct `git push origin HEAD:main` is rejected with
+          # GH013 — that is exactly what broke the v0.6.72 cascade. So: author
+          # the commit AS THE APP BOT (attributed, so the unattributed rule does
+          # not demand a review), push a branch, squash-merge the PR (0
+          # approvals required, and the squash commit is app-authored = also
+          # attributed), then tag the merged main. Tags are NOT branch-protected
+          # (the GH013 rule is on refs/heads/main only), so tagging still
+          # triggers ci.yml -> build + publish.
+          bot_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+
+          # Nothing to adopt AND already released -> nothing to do (re-run safe).
+          if git diff --quiet go.mod go.sum && git describe --exact-match --tags HEAD >/dev/null 2>&1; then
+            echo "go.mod already at ${VERSION} and HEAD is tagged $(git describe --exact-match --tags HEAD); nothing to release."
             exit 0
           fi
+
           # Next free strict-semver patch. `10#` forces base-10 (a zero-padded
           # component like 08 is never mis-read as octal); refresh tags and skip
           # any that already exist so a concurrent tag can't collide.
@@ -100,27 +110,41 @@ jobs:
           while git rev-parse -q --verify "refs/tags/$next" >/dev/null; do
             PA=$((10#$PA + 1)); next="v$((10#$MA)).$((10#$MI)).${PA}"
           done
-          git tag "$next"
-          # Atomic push: commit + tag land together or not at all, so a failure
-          # leaves no partial state and the next run retries cleanly.
-          # main is shared with humans; a lost push race is a
-          # rebase-and-retry, not a failure (2026-08-23: this bump died
-          # twice against a human push and needed a manual re-dispatch;
-          # the same race rejected the human's push hours later). The
-          # tag rides HEAD, so it is re-cut after each rebase.
-          pushed=""
-          for attempt in 1 2 3; do
-            if git push --atomic origin HEAD:main "refs/tags/$next"; then   # triggers ci.yml -> build + publish
-              pushed=yes
-              break
-            fi
-            echo "push rejected (attempt $attempt) — rebasing onto origin/main and retrying"
-            git tag -d "$next"
-            git pull --rebase origin main
-            git tag "$next"
+
+          # Push the bump on a branch and open the PR. Commit ONLY the
+          # dependency files, never a fixture a test may have dirtied.
+          branch="release/engine-${VERSION}-${next}"
+          git checkout -b "$branch"
+          git commit go.mod go.sum -m "chore(deps): bump kai-engine to ${VERSION} (release ${next})"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "chore(deps): bump kai-engine to ${VERSION} (release ${next})" \
+            --body "Automated engine adoption, cut as a PR because main is branch-protected. Triggered by kai-engine ${VERSION}; merging this tags ${next} and publishes via ci.yml."
+
+          # 0 approvals + an attributed commit => mergeable as soon as GitHub has
+          # computed mergeability. Retry to ride out that brief delay.
+          merged=""
+          for attempt in 1 2 3 4 5 6; do
+            if gh pr merge "$branch" --squash --delete-branch; then merged=yes; break; fi
+            echo "PR not mergeable yet (attempt $attempt) — waiting"
+            sleep 8
           done
-          if [ -z "$pushed" ]; then
-            echo "push still rejected after 3 rebases — giving up" >&2
+          if [ -z "$merged" ]; then
+            echo "PR $branch did not merge after retries — leaving it open for a human" >&2
             exit 1
           fi
-          echo "Released kai-cli $next"
+
+          # Tag the merged main. A lost race on the tag is a re-fetch-and-retry,
+          # not a failure.
+          for attempt in 1 2 3; do
+            git fetch origin main --tags --force >/dev/null 2>&1 || true
+            git tag -f "$next" origin/main
+            if git push origin "refs/tags/$next"; then   # triggers ci.yml -> build + publish
+              echo "Released kai-cli $next (engine ${VERSION}) via PR on $branch"
+              exit 0
+            fi
+            echo "tag push rejected (attempt $attempt) — refreshing and retrying"
+            git tag -d "$next" >/dev/null 2>&1 || true
+          done
+          echo "merged the bump but could not push tag $next — tag it manually" >&2
+          exit 1
