@@ -143,9 +143,8 @@ type rcDecisionResult struct {
 
 // rcChallengeResult is everything the challenge decided. Review is the text to
 // publish, assembled from Allegations and Decisions; Incomplete is set when any
-// allegation OR decision is unresolved, and the caller then marks the bundle
-// incomplete and exits non-zero, so a partial review is never read as a
-// completed one.
+// allegation OR decision is unresolved, independently of execution completion. The caller publishes
+// completed_with_unresolved and keeps the legacy incomplete flag for older readers.
 type rcChallengeResult struct {
 	Review      string               `json:"-"`
 	Allegations []rcAllegationResult `json:"allegations,omitempty"`
@@ -465,7 +464,7 @@ func rcResponseText(resp provider.Response) string {
 // an invalid intent or readiness value) return an error and the caller
 // withholds the draft. An unresolved allegation or decision is NOT an error:
 // every supported finding is still published, and Incomplete tells the caller
-// to mark the bundle incomplete and exit non-zero. A citation whose location
+// to publish a completed_with_unresolved outcome. A citation whose location
 // does not exist gets ONE correction round; whatever is still unresolvable
 // afterwards makes its allegation unresolved — it never withholds the review.
 func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
@@ -978,7 +977,7 @@ func rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions int, ma
 	}
 	b.WriteString(".")
 	if unresolved+unresolvedDecisions > 0 {
-		b.WriteString(" Review incomplete: not every item could be confirmed or cleared.")
+		b.WriteString(" Review completed with unresolved questions: not every item could be confirmed or cleared.")
 	}
 	fmt.Fprintf(&b, " Intent %s; readiness %d/5.", string(match), int(readiness))
 	return b.String()
@@ -1029,7 +1028,7 @@ func rcAssembleReview(scope, limitations []string, results []rcAllegationResult,
 		b.WriteString("No proposed defect was confirmed by this check within the reviewed scope.\n")
 	}
 	if len(unresolved)+len(unresolvedDecisions) > 0 {
-		b.WriteString("\n**This review is incomplete.** The following could not be confirmed or cleared, for the reason given. No fix is proposed for them:\n")
+		b.WriteString("\n**Unresolved questions.** The following could not be confirmed or cleared, for the reason given. No fix is proposed for them:\n")
 		for _, r := range unresolved {
 			fmt.Fprintf(&b, "- %s — %s\n", r.Issue, r.Reason)
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,6 +80,8 @@ THE ENVIRONMENT IS NOT CLEAN. Correct on the author's machine is not correct. Na
 - WRITES NOBODY ASKED FOR. Does it touch git history, a dotfile, or anything outside its own state? Name it, and say whether there is an opt-out.
 
 NEW DEFAULTS POINT SOMEWHERE. A new config default that is a URL, host, e-mail address, or path ships to every user who never sets the variable. Confirm the target exists and that something in this repo, or a repo you can see, serves it; a default pointing at a domain nobody here owns is a defect. (The pipeline also greps for hosts the change introduces that nothing else mentions and files them as risks; you still have to say whether the target is real.)
+
+Before raising an ISSUES allegation, establish its triggering conditions from the code. For a possible race, identify the concurrent caller; unlocked fields alone do not establish a race. If a dependency contract or caller cannot be read, state a scoped limitation once rather than inventing a defect or asking the author to prove a hypothetical safe. Never treat an unread contract as verified.
 
 Then write the review the way a good colleague would leave it on the PR:
 - Open with one line naming your scope: the repo and revision you read, plus anything the change obviously touches that you could NOT read (another repo, a client, a deployed config, a provider's behavior). Then a short paragraph: what the change actually does, and your overall take.
@@ -340,7 +343,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	var inc *rcIncomplete
 	// challenge is the publication gate's structured record from whichever path
 	// ran: each allegation's and decision's final status. Its Incomplete flag
-	// means the review is incomplete even though it has a body.
+	// records unresolved items, independently of whether execution completed.
 	var challenge *rcChallengeResult
 	if fast {
 		// The fast pass may substitute a non-reasoning model for the DRAFT. The
@@ -408,14 +411,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		incomplete = true
 		fmt.Fprintf(os.Stderr, "  review produced no conclusion — emitting an incomplete-review finding, then failing\n")
 	}
-	// A published review that could not settle every allegation or decision is
-	// incomplete too. Its body is real — it carries the supported findings —
-	// but the bundle must say so and the run must exit non-zero, or Atlas and
-	// CI would read a partial review as a completed one.
+	// Unresolved questions are a completed assessment with limits, not a failed
+	// execution. Keep the legacy incomplete flag for older bundle consumers,
+	// but expose the outcome separately and do not fail the command for it.
 	if challenge != nil && challenge.Incomplete {
-		incomplete = true
 		open := challenge.unresolved()
-		fmt.Fprintf(os.Stderr, "  review incomplete: %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
+		fmt.Fprintf(os.Stderr, "  review completed with %d unresolved item(s): %s\n", len(open), strings.Join(open, "; "))
 	}
 	// An empty record (the draft had nothing to challenge) is omitted from the
 	// bundle rather than published as a hollow block.
@@ -534,35 +535,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		if fast {
 			depth = "fast"
 		}
-		// incomplete rides along because the counts cannot carry it: a run
-		// that stopped before its conclusion emits no risks, no decisions and
-		// an unknown intent, which is arithmetically identical to a review
-		// that read everything and liked it. Without this flag the renderer
-		// has only the prose to go on, and it opened two timed-out reviews
-		// with "Nothing jumped out" directly above their own "This review did
-		// not finish" (kai-desktop#304, kai-server#186, 2026-09-08).
-		out, err := json.MarshalIndent(struct {
-			finding.Finding
-			Review     string      `json:"review,omitempty"`
-			Depth      string      `json:"depth,omitempty"`
-			Incomplete bool        `json:"incomplete,omitempty"`
-			Coverage   *rcCoverage `json:"coverage,omitempty"`
-			// Challenge is the publication gate's structured record: each
-			// allegation's and decision's final status, reason and citations.
-			// Additive and optional; readers that do not know it ignore it.
-			Challenge *rcChallengeResult `json:"challenge,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge}, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshaling finding: %w", err)
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), string(out))
-		// Emitted first, failed second, and the order is the entire point: the
-		// bundle is on stdout (so the workflow's `> finding.json` has content to
-		// ingest) before the non-zero exit tells CI the review did not finish.
-		if incomplete {
-			return rcErrIncompleteReview
-		}
-		return nil
+		return rcEmitReviewBundle(cmd.OutOrStdout(), f, prose, depth, incomplete, rcCoverageOf(inc), challenge)
 	}
 
 	// Text mode: the review itself is the output. Fall back to the parsed
@@ -575,7 +548,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// The status is part of the text a human reads, not only the exit code.
 		if challenge != nil && challenge.Incomplete {
 			open := challenge.unresolved()
-			fmt.Printf("\nStatus: INCOMPLETE — %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
+			fmt.Printf("\nStatus: COMPLETED WITH UNRESOLVED QUESTIONS — %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
 		}
 		if incomplete {
 			return rcErrIncompleteReview
@@ -774,7 +747,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// the pinned commit where that is possible, named as a limitation where it
 	// is not — both rendered from one result, so a block saying "you cannot
 	// read these" can never sit beside one containing the source.
-	if deps := rcChangedDeps(diff); len(deps) > 0 {
+	if deps := rcReviewDeps(primary.Path, diff, changed); len(deps) > 0 {
 		phase := time.Now()
 		src, unresolved := rcFetchDepSources(ctx, deps)
 		user.WriteString(rcDepSourceBlock(src))
@@ -1298,7 +1271,7 @@ type rcIncomplete struct {
 	// Challenge is the gate's structured record when it PUBLISHED a review.
 	// Unlike ChallengeFailure, the review body is real and kept; when
 	// Challenge.Incomplete is set the caller marks the bundle incomplete and
-	// exits non-zero so a partial review is never read as a completed one.
+	// carries completed_with_unresolved without turning uncertainty into execution failure.
 	Challenge *rcChallengeResult
 }
 
@@ -1977,4 +1950,41 @@ func rcOneLine(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// rcReviewOutcome separates execution failure from uncertainty about the code.
+// The incomplete bundle flag remains conservative for older consumers.
+func rcReviewOutcome(interrupted bool, challenge *rcChallengeResult) string {
+	if interrupted {
+		return "interrupted"
+	}
+	if challenge != nil && challenge.Incomplete {
+		return "completed_with_unresolved"
+	}
+	return "completed"
+}
+
+// rcEmitReviewBundle writes before returning an execution failure, allowing CI
+// to deliver interrupted coverage. Unresolved questions retain incomplete=true
+// for old readers but carry an explicit outcome for newer consumers.
+func rcEmitReviewBundle(w io.Writer, f finding.Finding, prose, depth string, interrupted bool, coverage *rcCoverage, challenge *rcChallengeResult) error {
+	out, err := json.MarshalIndent(struct {
+		finding.Finding
+		Review     string             `json:"review,omitempty"`
+		Depth      string             `json:"depth,omitempty"`
+		Incomplete bool               `json:"incomplete,omitempty"`
+		Outcome    string             `json:"outcome"`
+		Coverage   *rcCoverage        `json:"coverage,omitempty"`
+		Challenge  *rcChallengeResult `json:"challenge,omitempty"`
+	}{f, prose, depth, interrupted || (challenge != nil && challenge.Incomplete), rcReviewOutcome(interrupted, challenge), coverage, challenge}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling finding: %w", err)
+	}
+	if _, err := fmt.Fprintln(w, string(out)); err != nil {
+		return fmt.Errorf("writing finding: %w", err)
+	}
+	if interrupted {
+		return rcErrIncompleteReview
+	}
+	return nil
 }
