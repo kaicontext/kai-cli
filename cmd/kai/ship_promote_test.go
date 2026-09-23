@@ -11,6 +11,21 @@ import (
 	spawnpkg "github.com/kaicontext/kai-engine/spawn"
 )
 
+// promoteGitIdentity gives the git runShipPromote shells out to an
+// identity, and hides the host's global config (CI has no identity; a
+// developer's may sign commits) so runs match everywhere. Call it after
+// setting HOME.
+func promoteGitIdentity(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(k, "kai test")
+	}
+	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "kai@test")
+	}
+}
+
 // TestShipPromote_StripsCheckoutEdits verifies the delta-stripping logic
 // works end-to-end through promote: the checkout had an uncommitted edit,
 // the spawn's baseline is a copy of that dirty tree, the agent adds a line
@@ -59,6 +74,7 @@ func TestShipPromote_StripsCheckoutEdits(t *testing.T) {
 
 	// Isolate the spawn registry so this test doesn't touch the host's.
 	t.Setenv("HOME", t.TempDir())
+	promoteGitIdentity(t)
 	if err := spawnpkg.Add(spawnpkg.Entry{Path: spawn, SourceRepo: src, BaseGitSHA: baseSHA, SessionID: "sid-1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +163,7 @@ func TestShipPromote_FailureRestoresSourceRepo(t *testing.T) {
 	}
 
 	t.Setenv("HOME", t.TempDir())
+	promoteGitIdentity(t)
 	if err := spawnpkg.Add(spawnpkg.Entry{Path: spawn, SourceRepo: src, BaseGitSHA: baseSHA, SessionID: "sid-fail"}); err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +172,9 @@ func TestShipPromote_FailureRestoresSourceRepo(t *testing.T) {
 	shipPush = false
 	defer func() { shipPromote = false; shipPush = true }()
 
-	if err := runShipPromote(spawn, "kai/promote-fail", "sid-fail"); err == nil {
-		t.Fatal("expected the failing pre-commit hook to fail the promote")
+	err := runShipPromote(spawn, "kai/promote-fail", "sid-fail")
+	if err == nil || !strings.Contains(err.Error(), "committing") {
+		t.Fatalf("expected the failing pre-commit hook to fail the commit, got: %v", err)
 	}
 
 	if got := gitIn(t, src, "branch", "--show-current"); got != originalBranch {
@@ -326,6 +344,7 @@ func TestShipPromote_RoutesThroughRunShip(t *testing.T) {
 	}
 
 	t.Setenv("HOME", t.TempDir())
+	promoteGitIdentity(t)
 	if err := spawnpkg.Add(spawnpkg.Entry{Path: spawn, SourceRepo: src, BaseGitSHA: baseSHA, SessionID: "sid-route"}); err != nil {
 		t.Fatal(err)
 	}
