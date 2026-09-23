@@ -621,25 +621,33 @@ func runShipPromote(cwd, branch, sessionID string) error {
 		if err := gitio.CreateBranch(srcRepo, branch); err != nil {
 			return fmt.Errorf("creating %s in %s: %w", branch, srcRepo, err)
 		}
-		// On any failure after the branch exists, put the source repo
-		// back where it was — checkout the original branch and delete
-		// the promote branch — but only when promote did not ship.
-		// The local path restores just the ref; promote also discards
-		// the foreign files it wrote into the working tree: git reset
-		// --hard reverts tracked files and git clean -fd removes the
-		// untracked files the delta apply loop may have written, since
-		// the source repo started clean and the rollback must leave
-		// it that way.
-		defer func() {
-			if shipped || reShip {
-				return
+	}
+	// On any failure after the branch exists or the re-ship begins,
+	// restore the source repo's working tree to a clean state. For a
+	// fresh promote that did not ship, also check out the original
+	// branch and delete the promote branch. For a re-ship, only the
+	// working tree is cleaned — the branch is already checked out and
+	// may be retried.
+	defer func() {
+		if shipped {
+			return
+		}
+		_ = gitio.DiscardChanges(srcRepo)
+		// Remove only the files the apply loop wrote — not a blanket
+		// git clean, which would delete pre-existing untracked files
+		// and respect .gitignore (leaving ignored files promote wrote).
+		// os.Remove is path-precise and ignores .gitignore.
+		for _, f := range files {
+			if f.delete {
+				continue
 			}
-			_ = gitio.DiscardChanges(srcRepo)
-			_, _ = gitOut(srcRepo, "clean", "-fd") // remove untracked files the promote wrote
+			_ = os.Remove(filepath.Join(srcRepo, filepath.FromSlash(f.path)))
+		}
+		if !reShip {
 			_ = gitio.CheckoutBranch(srcRepo, current)
 			_ = gitio.DeleteBranch(srcRepo, branch)
-		}()
-	}
+		}
+	}()
 
 	// Apply the delta into the source repo's working tree.
 	for _, f := range files {
@@ -673,13 +681,15 @@ func runShipPromote(cwd, branch, sessionID string) error {
 		return nil
 	}
 	if err := gitio.Push(srcRepo, shipRemote, branch); err != nil {
-		// The commit is real and correct; don't unwind it over a push
-		// failure. A source repo without the named remote is the
-		// common spawned-workspace case — degrade to "committed
-		// locally" rather than a hard error so the work isn't stranded
-		// behind an opaque network failure.
+		// The commit is real and stays on the promote branch (retry
+		// the push with git -C <src> push origin <branch>). But
+		// switch the source repo back to its original branch so its
+		// owner doesn't find their checkout on a surprise kai/ branch.
 		shipped = true
-		return fmt.Errorf("committed on %s in %s but push to %s failed: %w", branch, srcRepo, shipRemote, err)
+		if !reShip {
+			_ = gitio.CheckoutBranch(srcRepo, current)
+		}
+		return fmt.Errorf("committed on %s in %s but push to %s failed: %w — the source repo is back on %s; retry the push with: git -C %s push %s %s", branch, srcRepo, shipRemote, err, current, srcRepo, shipRemote, branch)
 	}
 	fmt.Printf("pushed %s to %s\n", branch, shipRemote)
 	shipped = true
