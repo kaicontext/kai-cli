@@ -56,6 +56,7 @@ var (
 	shipPush     bool
 	shipPR       bool
 	shipDryRun   bool
+	shipPromote  bool
 	shipServer   bool
 	shipLocal    bool
 	shipClean    bool
@@ -114,6 +115,7 @@ func init() {
 	shipCmd.Flags().BoolVar(&shipClean, "clean", false, "after a successful --server ship, stash the shipped changes (labeled; `git stash pop` restores) so the working tree returns to pristine main")
 	shipCmd.Flags().BoolVar(&shipServer, "server", false, "publish via the kailab server (GitHub App) instead of local git — the default inside a spawned workspace; --repo means kai org/repo in this mode")
 	shipCmd.Flags().BoolVar(&shipLocal, "local", false, "force the local git path (branch, commit, push with your own token) even inside a spawned workspace")
+	shipCmd.Flags().BoolVar(&shipPromote, "promote", false, "promote the spawn's delta into the source repo as a new branch + commit + push (no PR); requires a spawned workspace")
 	rootCmd.AddCommand(shipCmd)
 }
 
@@ -121,6 +123,25 @@ func runShip(cmd *cobra.Command, args []string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
+	}
+
+	if shipPromote && shipServer {
+		return fmt.Errorf("--promote and --server are mutually exclusive")
+	}
+
+	if shipPromote {
+		// --promote takes its own path into the source repo,
+		// bypassing the local/server dispatch entirely. It does
+		// not consult shipUseServer: a spawned workspace defaults
+		// to the server path, and --promote must override that
+		// default (not just the explicit --server flag, which the
+		// mutex above already blocks).
+		branch, err := resolveShipBranch(cwd)
+		if err != nil {
+			return err
+		}
+		sessionID := resolveShipSession(cwd)
+		return runShipPromote(cwd, branch, sessionID)
 	}
 
 	useServer, err := shipUseServer(cwd, shipServer, shipLocal)
@@ -683,6 +704,209 @@ func resolveShipClient(cwd string) (*autofix.Client, error) {
 		}
 	}
 	return autofix.NewClient(shipToken, repo)
+}
+
+// kai ship --promote — push the spawn's delta into the source repo
+
+// runShipPromote promotes a spawned workspace's delta directly into the
+// original source repo (the repo the spawn was created from): it creates
+// a branch there, applies the delta, commits, and pushes — no PR, no
+// GitHub App. It mirrors the local-ship path's branch/rollback discipline
+// (reShip coalescing, restore-on-failure defer) but the tree it mutates is
+// the SOURCE repo, not cwd, and the delta is the spawn baseline-vs-tree
+// (so committed agent work ships) — the same measurement the server path
+// uses.
+func runShipPromote(cwd, branch, sessionID string) error {
+	entry := shipSpawnEntry(cwd)
+	if entry == nil {
+		return fmt.Errorf("--promote needs a spawned workspace (no spawn registry entry for this directory)")
+	}
+	if entry.SourceRepo == "" {
+		return fmt.Errorf("--promote needs a source repo (this spawn has no recorded source repo)")
+	}
+	srcRepo := entry.SourceRepo
+
+	// Verify the source repo is a git repo we can act on, before any
+	// mutation: the promote target is foreign to cwd, so a bad path
+	// should fail loudly and early.
+	if _, err := gitio.CurrentBranch(srcRepo); err != nil {
+		return fmt.Errorf("source repo %s is not a usable git repo: %w", srcRepo, err)
+	}
+
+	// Serialize concurrent promotes into the same source repo: two
+	// ships fighting over its working tree would clobber each other.
+	// acquireShipLock keys off the .kai/ dir of its argument, so a
+	// plain git repo (no .kai/) returns a no-op unlock and proceeds
+	// unlocked — the same behavior as the local path for non-kai repos.
+	unlock, err := acquireShipLock(srcRepo)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	// Refuse to clobber uncommitted work in the source repo. Promote
+	// writes foreign files into the source working tree; a dirty tree
+	// would mix the user's edits with the agent's delta.
+	if dirty, err := gitio.WorkingTreeDirty(srcRepo); err != nil {
+		return fmt.Errorf("checking source repo %s: %w", srcRepo, err)
+	} else if dirty {
+		return fmt.Errorf("source repo %s has uncommitted changes — promote would clobber them; commit or stash in the source repo first", srcRepo)
+	}
+
+	changed, err := shipDeltaNames(cwd)
+	if err != nil {
+		return fmt.Errorf("computing the delta: %w", err)
+	}
+	changed = autofix.FilterArtifacts(changed)
+	if len(changed) == 0 {
+		return fmt.Errorf("nothing to promote — the workspace has no changes")
+	}
+
+	baseline := shipBaselineCommit(cwd)
+	type promoteFile struct {
+		path    string
+		content []byte
+		delete  bool
+		created bool // absent from the source tree before the apply
+	}
+	var overlaps []string
+	files := make([]promoteFile, 0, len(changed))
+	for _, p := range changed {
+		content, rerr := shipContentFor(cwd, entry, baseline, p, &overlaps)
+		if rerr != nil && os.IsNotExist(rerr) {
+			files = append(files, promoteFile{path: p, delete: true})
+			continue
+		}
+		if rerr != nil {
+			return fmt.Errorf("reading %s: %w", p, rerr)
+		}
+		files = append(files, promoteFile{path: p, content: content})
+	}
+	if len(overlaps) > 0 {
+		fmt.Fprintf(os.Stderr, "note: %s carr%s edits from your checkout that overlap the agent's change — shipped with them included\n",
+			strings.Join(overlaps, ", "), map[bool]string{true: "y", false: "ies"}[len(overlaps) > 1])
+	}
+
+	current, err := gitio.CurrentBranch(srcRepo)
+	if err != nil {
+		return fmt.Errorf("reading source repo branch: %w", err)
+	}
+
+	if shipDryRun {
+		fmt.Printf("would promote %d file(s) from %s into %s on branch %s (currently on %s)\n", len(files), cwd, srcRepo, branch, current)
+		for _, f := range files {
+			mark := ""
+			if f.delete {
+				mark = " (delete)"
+			}
+			fmt.Printf("  %s%s\n", f.path, mark)
+		}
+		return nil
+	}
+
+	// Re-ship: the source repo is already on the promote branch (a
+	// prior promote from this spawn). Coalesce onto it — skip
+	// CreateBranch and skip the rollback defer, exactly as the local
+	// path does. A fresh promote that finds the branch already present
+	// (but not checked out) is a conflict we refuse.
+	reShip := current == branch
+	if !reShip && gitio.BranchExists(srcRepo, branch) {
+		return fmt.Errorf("branch %s already exists in %s — check it out to re-promote, or pass --branch for a fresh one", branch, srcRepo)
+	}
+	var shipped bool
+	if !reShip {
+		// Branch from the commit the delta was measured against, not the
+		// source repo's current HEAD: shipContentFor yields whole files —
+		// the base's version plus the agent's hunks — so committing them
+		// on a HEAD that has moved since the spawn would silently revert
+		// every later commit to those files. From the base, those commits
+		// meet the promoted change in an ordinary merge instead.
+		start := entry.BaseGitSHA
+		if start == "" {
+			start = "HEAD"
+		}
+		if _, err := gitOut(srcRepo, "checkout", "-q", "-b", branch, start); err != nil {
+			return fmt.Errorf("creating %s at %.12s in %s: %w", branch, start, srcRepo, err)
+		}
+	}
+	// On any failure after the branch exists or the re-ship begins,
+	// restore the source repo's working tree to a clean state. For a
+	// fresh promote that did not ship, also check out the original
+	// branch and delete the promote branch. For a re-ship, only the
+	// working tree is cleaned — the branch is already checked out and
+	// may be retried.
+	defer func() {
+		if shipped {
+			return
+		}
+		_ = gitio.DiscardChanges(srcRepo)
+		// Remove only the files the apply loop created — not a blanket
+		// git clean, which would delete pre-existing untracked files
+		// and respect .gitignore (leaving ignored files promote wrote).
+		// A file that existed before the apply is tracked (the tree was
+		// clean) and the reset above already restored it; removing it
+		// would leave the owner's checkout with a deleted file.
+		for _, f := range files {
+			if !f.created {
+				continue
+			}
+			_ = os.Remove(filepath.Join(srcRepo, filepath.FromSlash(f.path)))
+		}
+		if !reShip {
+			_ = gitio.CheckoutBranch(srcRepo, current)
+			_ = gitio.DeleteBranch(srcRepo, branch)
+		}
+	}()
+
+	// Apply the delta into the source repo's working tree.
+	for i := range files {
+		f := &files[i]
+		target := filepath.Join(srcRepo, filepath.FromSlash(f.path))
+		if f.delete {
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing %s: %w", f.path, err)
+			}
+			continue
+		}
+		if _, err := os.Lstat(target); os.IsNotExist(err) {
+			f.created = true
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("creating dir for %s: %w", f.path, err)
+		}
+		if err := os.WriteFile(target, f.content, 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", f.path, err)
+		}
+	}
+
+	if _, err := gitio.StageAndDiffPaths(srcRepo, "HEAD", changed); err != nil {
+		return fmt.Errorf("staging changes in %s: %w", srcRepo, err)
+	}
+	snapHex := shipSnapshotHex(cwd)
+	if err := gitio.CommitStaged(srcRepo, shipCommitMessage(branch, sessionID, snapHex)); err != nil {
+		return fmt.Errorf("committing in %s: %w", srcRepo, err)
+	}
+	fmt.Printf("promoted %d file(s) to %s on %s\n", len(changed), srcRepo, branch)
+
+	if !shipPush {
+		shipped = true
+		fmt.Printf("promoted locally — push with: git -C %s push %s %s\n", srcRepo, shipRemote, branch)
+		return nil
+	}
+	if err := gitio.Push(srcRepo, shipRemote, branch); err != nil {
+		// The commit is real and stays on the promote branch (retry
+		// the push with git -C <src> push origin <branch>). But
+		// switch the source repo back to its original branch so its
+		// owner doesn't find their checkout on a surprise kai/ branch.
+		shipped = true
+		if !reShip {
+			_ = gitio.CheckoutBranch(srcRepo, current)
+		}
+		return fmt.Errorf("committed on %s in %s but push to %s failed: %w — the source repo is back on %s; retry the push with: git -C %s push %s %s", branch, srcRepo, shipRemote, err, current, srcRepo, shipRemote, branch)
+	}
+	fmt.Printf("pushed %s to %s\n", branch, shipRemote)
+	shipped = true
+	return nil
 }
 
 // ---------------------------------------------------------------------------
