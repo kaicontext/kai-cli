@@ -12,7 +12,7 @@ import (
 	"github.com/kaicontext/kai-engine/provider"
 )
 
-// review-commit --fast is the SHALLOW first pass: one model call over the diff,
+// review-commit --fast is the SHALLOW first pass: a model draft over the diff,
 // no agent loop, no graph, no `kai capture`. It exists to land a review inside
 // the ~2 minutes a PR author will actually wait, which the grounded reviewer
 // cannot do and should not try to — its 9m soft budget buys the callers-checked
@@ -25,7 +25,8 @@ import (
 // The fast reviewer therefore starts oriented, and its ISSUES still ground to
 // real path:line through rcGroundIssue, which reads git trees and never the DB.
 //
-// What it gives up, and must say out loud: kai_callers / kai_dependents /
+// Drafts with issues also go through the bounded publication challenge. What
+// this pass gives up, and must say out loud: kai_callers / kai_dependents /
 // kai_context, kai_web_search, and reading any file the diff did not touch.
 //
 // The budget. The CI step is clone -> review -> ingest; with capture skipped
@@ -101,17 +102,23 @@ ISSUES:
 DECISIONS:
 - <what the author is deciding, who it affects, and the consequence — no path:line>`
 
-// rcRunFastReview makes ONE completion over the diff and its git-derived
+// rcRunFastReview drafts over the diff and its git-derived
 // context. No agent loop, no session store, no graph — so it also runs in a
 // repo that was never captured, which is what lets the CI workflow skip the
-// capture step entirely.
+// capture step entirely. Proposed issues are challenged before publication,
+// within the same overall deadline.
 //
 // The separate intent-reconstruction call the slow path makes is deliberately
 // NOT made here: it is a serial round-trip whose only consumer is the review
 // prompt, and the fast reviewer can read the commit message itself. The
 // finding's Intent.Stated still comes from the commit subject, exactly as
 // before, so the bundle shape is unchanged.
-func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, authorContext, subject, body, diff string, changedPaths []string) (string, error) {
+//
+// model is the DRAFT model — the fast pass may substitute a non-reasoning model
+// for speed. challengeModel is the configured review model, which the
+// publication challenge must use: the substitution meant for the one-call skim
+// must never silently apply to the gate that decides what is published.
+func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challengeModel, root, authorContext, subject, body, diff string, changedPaths []string) (string, *rcChallengeResult, error) {
 	var user strings.Builder
 	if sc := strings.TrimSpace(authorContext); sc != "" {
 		if len(sc) > rcMaxAuthorContextBytes {
@@ -181,7 +188,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, a
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}}},
 	})
 	if err != nil {
-		return "", fmt.Errorf("fast review call: %w", err)
+		return "", nil, fmt.Errorf("fast review call: %w", err)
 	}
 	var out strings.Builder
 	for _, p := range resp.Parts {
@@ -189,7 +196,13 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, root, a
 			out.WriteString(t.Text)
 		}
 	}
-	return strings.TrimSpace(out.String()), nil
+	draft := strings.TrimSpace(out.String())
+	fmt.Fprintf(os.Stderr, "  challenge model: requested %s (draft was requested from %s)\n", challengeModel, model)
+	res, err := rcChallengeReview(cctx, prov, challengeModel, draft, []rcSource{rcPromptSource(user.String())}, rcConfiguredSandbox())
+	if err != nil {
+		return "", nil, fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
+	}
+	return res.Review, res, nil
 }
 
 // rcCapFastReadiness enforces the ceiling the prompt states. The prompt is the

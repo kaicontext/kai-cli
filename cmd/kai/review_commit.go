@@ -338,12 +338,19 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// Non-nil only on the grounded path, and only describes HOW the run ended
 	// — see rcIncomplete. Used solely when the review produced nothing to parse.
 	var inc *rcIncomplete
+	// challenge is the publication gate's structured record from whichever path
+	// ran: each allegation's and decision's final status. Its Incomplete flag
+	// means the review is incomplete even though it has a body.
+	var challenge *rcChallengeResult
 	if fast {
+		// The fast pass may substitute a non-reasoning model for the DRAFT. The
+		// CHALLENGE — the publication gate — uses the configured review model;
+		// the substitution must never silently reach it.
 		fastModel := rcFastModel(model, provKind)
-		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (model %s, budget %s)…\n",
-			fastModel, rcFastHardDeadline)
+		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (draft model %s, challenge model %s, budget %s)…\n",
+			fastModel, model, rcFastHardDeadline)
 		phase := time.Now()
-		raw, err = rcRunFastReview(ctx, prov, fastModel, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, model, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
 		if err != nil {
 			return err
 		}
@@ -362,6 +369,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff, rcPathsOf(files))
 		if err != nil {
 			return err
+		}
+		if inc != nil {
+			challenge = inc.Challenge
 		}
 		fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
 	}
@@ -397,6 +407,20 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		prose = salvaged
 		incomplete = true
 		fmt.Fprintf(os.Stderr, "  review produced no conclusion — emitting an incomplete-review finding, then failing\n")
+	}
+	// A published review that could not settle every allegation or decision is
+	// incomplete too. Its body is real — it carries the supported findings —
+	// but the bundle must say so and the run must exit non-zero, or Atlas and
+	// CI would read a partial review as a completed one.
+	if challenge != nil && challenge.Incomplete {
+		incomplete = true
+		open := challenge.unresolved()
+		fmt.Fprintf(os.Stderr, "  review incomplete: %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
+	}
+	// An empty record (the draft had nothing to challenge) is omitted from the
+	// bundle rather than published as a hollow block.
+	if challenge.rcEmpty() {
+		challenge = nil
 	}
 
 	// Blast radius: walk the captured graph outward from the changed files so the
@@ -523,7 +547,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			Depth      string      `json:"depth,omitempty"`
 			Incomplete bool        `json:"incomplete,omitempty"`
 			Coverage   *rcCoverage `json:"coverage,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc)}, "", "  ")
+			// Challenge is the publication gate's structured record: each
+			// allegation's and decision's final status, reason and citations.
+			// Additive and optional; readers that do not know it ignore it.
+			Challenge *rcChallengeResult `json:"challenge,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -543,6 +571,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Println(prose)
 		if note != "" {
 			fmt.Printf("\nBottom line: %s\n", note)
+		}
+		// The status is part of the text a human reads, not only the exit code.
+		if challenge != nil && challenge.Incomplete {
+			open := challenge.unresolved()
+			fmt.Printf("\nStatus: INCOMPLETE — %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
 		}
 		if incomplete {
 			return rcErrIncompleteReview
@@ -692,6 +725,7 @@ func rcRepoHeader(repo string) string {
 // the run inspectable (`kai run summary`), and ApplyEffort honors KAI_SPEED.
 // rcReviewSystem rides in Options.System underneath the mode prompt.
 func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, diff string, changed []string) (string, *rcIncomplete, error) {
+	publicationCtx := ctx
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
 
@@ -949,9 +983,20 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// was there for, without covering the one it should not.
 	if rcNeedsConclusion(raw) {
 		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", inc.FinishReason)
-		if concluded := rcConcludeFromTranscript(ctx, prov, model, transcript); concluded != "" {
+		if concluded := rcConcludeFromTranscript(publicationCtx, prov, model, transcript); concluded != "" {
 			raw = concluded
 		}
+	}
+	if rcUsableCoda(raw) {
+		fmt.Fprintln(os.Stderr, "  challenging proposed defects before publication…")
+		res, err := rcChallengeReview(publicationCtx, prov, model, raw, rcChallengeSources(transcript), rcConfiguredSandbox())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  review challenge incomplete: %v\n", err)
+			inc.ChallengeFailure = err.Error()
+			return "", inc, nil
+		}
+		raw = res.Review
+		inc.Challenge = res
 	}
 	return raw, inc, nil
 }
@@ -1233,12 +1278,6 @@ func rcTurns(transcript []message.Message) int {
 	return n
 }
 
-// rcConclusionTailMessages bounds the retry's prompt when a conclusion over
-// the whole transcript blew its deadline. Big enough to hold the run's late
-// reasoning (where its actual findings are), small enough that the second call
-// is cheap. The first message is always kept: it carries the review task.
-const rcConclusionTailMessages = 40
-
 // rcIncomplete records how a review run ENDED, so a run that never wrote
 // itself down can still say something true about itself.
 //
@@ -1251,10 +1290,16 @@ const rcConclusionTailMessages = 40
 // "Couldn't finish reviewing this change" and no trace of the twelve minutes.
 // Losing the work is not the same as reporting that it did not finish.
 type rcIncomplete struct {
-	FinishReason string
-	Elapsed      time.Duration
-	Turns        int
-	FilesRead    []string
+	ChallengeFailure string
+	FinishReason     string
+	Elapsed          time.Duration
+	Turns            int
+	FilesRead        []string
+	// Challenge is the gate's structured record when it PUBLISHED a review.
+	// Unlike ChallengeFailure, the review body is real and kept; when
+	// Challenge.Incomplete is set the caller marks the bundle incomplete and
+	// exits non-zero so a partial review is never read as a completed one.
+	Challenge *rcChallengeResult
 }
 
 // rcCoverage is the machine-written record of what a review actually did:
@@ -1369,6 +1414,10 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 	if inc == nil {
 		return ""
 	}
+	if inc.ChallengeFailure != "" {
+		return "**This review did not finish.** The draft's defect claims could not be checked before publication. " +
+			"The unchecked draft has been withheld; this is not an approval or a verdict on the change. Re-run the review."
+	}
 	reason := "the run ended without writing its review down"
 	if inc.FinishReason == string(message.FinishReasonTimeBudget) {
 		reason = "the review ran out of time before it could write its conclusion"
@@ -1401,39 +1450,28 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 	if len(transcript) == 0 {
 		return ""
 	}
-	// Trim tool-result bodies: the conclusion needs the run's reasoning and
-	// what it read, not every full file dump — a 12-file review's verbatim
-	// transcript pushed the single call past its deadline on a slow provider
-	// hour (PR#90 retrigger, 2026-08-26).
-	trimmed := make([]message.Message, 0, len(transcript))
-	for _, m := range transcript {
-		parts := make([]message.ContentPart, 0, len(m.Parts))
-		for _, pt := range m.Parts {
-			if tr, ok := pt.(message.ToolResult); ok && len(tr.Content) > 2000 {
-				tr.Content = tr.Content[:2000] + "\n… (tool result trimmed for the conclusion call)"
-				parts = append(parts, tr)
-				continue
-			}
-			parts = append(parts, pt)
-		}
-		m.Parts = parts
-		trimmed = append(trimmed, m)
+	// Preserve the actual evidence. Prefix trimming can remove the changed
+	// function while retaining the model's allegation about it. Desktop #418's
+	// incorrect shell review went through this fallback.
+	// If full evidence cannot fit, leave this review incomplete.
+	encoded, err := json.Marshal(transcript)
+	if err != nil || len(encoded) > rcEvidenceLimit {
+		fmt.Fprintln(os.Stderr, "  conclusion evidence is too large; refusing to discard source material")
+		return ""
 	}
-	msgs := append(trimmed, message.Message{
+	msgs := append(append([]message.Message(nil), transcript...), message.Message{
 		Role: message.RoleUser,
-		Parts: []message.ContentPart{message.TextContent{Text: "Your review time is up. Write the review NOW from what you have " +
-			"already read — no more tool calls, no more exploration. Output the human review prose, then the line " +
-			rcReviewDataMarker + " followed by INTENT_MATCH: (verified|partial|diverges), SUMMARY:, and ISSUES: " +
-			"with one line per concrete defect (empty ISSUES: section if none). If you saw too little to judge some part, " +
-			"say so explicitly in the prose rather than omitting the review."}},
+		Parts: []message.ContentPart{message.TextContent{Text: "Finish the review using only the evidence already present. " +
+			"Do not invent runtime behavior or promote a suspicion into a defect to finish the task. " +
+			"State unresolved questions as limitations. Output the human review and a complete " +
+			rcReviewDataMarker + " coda with INTENT_MATCH, MERGE_READY, SUMMARY, ISSUES and DECISIONS."}},
 	})
 	// The conclusion is a deliberate grace period BEYOND the run, so it gets
 	// a FRESH deadline — hanging it off the run's context handed it whatever
 	// scraps remained of the 12-minute hard deadline, which after a 9-minute
 	// review was not enough for one completion (the PR#90 failure).
-	_ = ctx
 	send := func(m []message.Message) (provider.Response, error) {
-		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
 		return prov.Send(cctx, provider.Request{
 			Model:     model,
@@ -1444,25 +1482,8 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 	}
 	resp, err := send(msgs)
 	if err != nil {
-		// One completion over a long review's history can itself exceed the
-		// grace period — kai-server#184 (2026-09-08) reviewed a 39-file diff
-		// for 12m7s and the conclusion call died with "context deadline
-		// exceeded", losing everything. Trimming tool-result BODIES was not
-		// enough there: the message COUNT is the cost. Retry over the tail,
-		// which is where the run's conclusions live anyway; a short prompt has
-		// a real chance inside the same 3 minutes, and the alternative is not
-		// a slower answer but no answer.
 		fmt.Fprintf(os.Stderr, "  conclusion call failed: %v\n", err)
-		if len(msgs) > rcConclusionTailMessages {
-			tail := append([]message.Message{msgs[0]}, msgs[len(msgs)-rcConclusionTailMessages:]...)
-			fmt.Fprintf(os.Stderr, "  retrying the conclusion over the last %d of %d messages…\n", rcConclusionTailMessages, len(msgs))
-			if resp, err = send(tail); err != nil {
-				fmt.Fprintf(os.Stderr, "  conclusion retry failed: %v\n", err)
-				return ""
-			}
-		} else {
-			return ""
-		}
+		return ""
 	}
 	var out strings.Builder
 	for _, p := range resp.Parts {
