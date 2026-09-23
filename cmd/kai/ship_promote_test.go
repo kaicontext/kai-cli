@@ -193,3 +193,93 @@ func TestShipPromote_MutexWithServer(t *testing.T) {
 		t.Fatalf("error should mention both --promote and --server, got: %v", err)
 	}
 }
+
+// TestShipPromote_RoutesThroughRunShip verifies the routing fix: a bare
+// `kai ship --promote` inside a spawned workspace (the flag's only valid
+// use case) reaches runShipPromote, NOT runShipServer. A spawn with no
+// explicit --server/--local defaults useServer=true (shipUseServer returns
+// true because shipSpawnEntry(cwd) != nil), so the old code returned from
+// the useServer arm before the promote check — silently routing --promote
+// to the server path. The fix short-circuits promote before shipUseServer.
+//
+// The assertion is behavioral: the promote path creates and checks out a
+// kai/ branch in the SOURCE repo; the server path never touches the source
+// repo's working tree. So if runShip leaves src on a kai/ branch, it routed
+// through runShipPromote. On the unfixed code, runShip routes to
+// runShipServer, which returns a not-logged-in error and leaves src on its
+// original branch — the test fails.
+func TestShipPromote_RoutesThroughRunShip(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+
+	base := "line1\nline2\nline3\nline4\n"
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "app.js"), []byte(base), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, src, "init", "-q")
+	gitIn(t, src, "add", "-A")
+	gitIn(t, src, "commit", "-q", "-m", "base")
+	baseSHA := gitIn(t, src, "rev-parse", "HEAD")
+
+	// The spawn: baseline matches src, then the agent's edit sits as a
+	// dirty working-tree change (the delta shipDeltaNames measures
+	// against the "kai spawn from" baseline commit).
+	spawn := t.TempDir()
+	if err := os.WriteFile(filepath.Join(spawn, "app.js"), []byte(base), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, spawn, "init", "-q")
+	gitIn(t, spawn, "add", "-A")
+	gitIn(t, spawn, "commit", "-q", "-m", "kai spawn from test123")
+	if err := os.WriteFile(filepath.Join(spawn, "app.js"), []byte(base+"line5 AGENT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	if err := spawnpkg.Add(spawnpkg.Entry{Path: spawn, SourceRepo: src, BaseGitSHA: baseSHA, SessionID: "sid-route"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The default flags a bare `kai ship --promote` would have: promote on,
+	// no explicit --server/--local, push on by default (set false so no push).
+	shipPromote = true
+	shipServer = false
+	shipLocal = false
+	shipPush = false
+	shipBranch = "kai/route-test"
+	defer func() {
+		shipPromote = false
+		shipServer = false
+		shipLocal = false
+		shipPush = true
+		shipBranch = ""
+	}()
+
+	// runShip starts with os.Getwd(); chdir into the spawn so it resolves
+	// as a registered spawn (same pattern as TestShipPromote_MutexWithServer).
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+	if err := os.Chdir(spawn); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runShip(nil, nil); err != nil {
+		t.Fatalf("runShip routed to a path that errored (expected runShipPromote to succeed): %v", err)
+	}
+
+	// The promote path checks out the kai/ branch in the source repo.
+	// runShipServer never touches the source repo's working tree, so this
+	// assertion distinguishes the two routes.
+	got, err := gitio.CurrentBranch(src)
+	if err != nil {
+		t.Fatalf("CurrentBranch(src): %v", err)
+	}
+	if got != "kai/route-test" {
+		t.Fatalf("runShip did not route through runShipPromote: src should be on kai/route-test, got %s", got)
+	}
+}

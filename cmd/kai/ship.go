@@ -109,6 +109,21 @@ func runShip(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--promote and --server are mutually exclusive")
 	}
 
+	if shipPromote {
+		// --promote takes its own path into the source repo,
+		// bypassing the local/server dispatch entirely. It does
+		// not consult shipUseServer: a spawned workspace defaults
+		// to the server path, and --promote must override that
+		// default (not just the explicit --server flag, which the
+		// mutex above already blocks).
+		branch, err := resolveShipBranch(cwd)
+		if err != nil {
+			return err
+		}
+		sessionID := resolveShipSession(cwd)
+		return runShipPromote(cwd, branch, sessionID)
+	}
+
 	useServer, err := shipUseServer(cwd, shipServer, shipLocal)
 	if err != nil {
 		return err
@@ -125,10 +140,6 @@ func runShip(cmd *cobra.Command, args []string) error {
 			shipServer = true
 		}
 		return runShipServer(cwd, branch, sessionID)
-	}
-
-	if shipPromote {
-		return runShipPromote(cwd, branch, sessionID)
 	}
 
 	current, err := gitio.CurrentBranch(cwd)
@@ -526,6 +537,17 @@ func runShipPromote(cwd, branch, sessionID string) error {
 		return fmt.Errorf("source repo %s is not a usable git repo: %w", srcRepo, err)
 	}
 
+	// Serialize concurrent promotes into the same source repo: two
+	// ships fighting over its working tree would clobber each other.
+	// acquireShipLock keys off the .kai/ dir of its argument, so a
+	// plain git repo (no .kai/) returns a no-op unlock and proceeds
+	// unlocked — the same behavior as the local path for non-kai repos.
+	unlock, err := acquireShipLock(srcRepo)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	// Refuse to clobber uncommitted work in the source repo. Promote
 	// writes foreign files into the source working tree; a dirty tree
 	// would mix the user's edits with the agent's delta.
@@ -603,14 +625,17 @@ func runShipPromote(cwd, branch, sessionID string) error {
 		// back where it was — checkout the original branch and delete
 		// the promote branch — but only when promote did not ship.
 		// The local path restores just the ref; promote also discards
-		// the foreign files it wrote into the working tree (git
-		// checkout -- . / git clean), since the source repo started
-		// clean and the rollback must leave it that way.
+		// the foreign files it wrote into the working tree: git reset
+		// --hard reverts tracked files and git clean -fd removes the
+		// untracked files the delta apply loop may have written, since
+		// the source repo started clean and the rollback must leave
+		// it that way.
 		defer func() {
 			if shipped || reShip {
 				return
 			}
 			_ = gitio.DiscardChanges(srcRepo)
+			_, _ = gitOut(srcRepo, "clean", "-fd") // remove untracked files the promote wrote
 			_ = gitio.CheckoutBranch(srcRepo, current)
 			_ = gitio.DeleteBranch(srcRepo, branch)
 		}()
