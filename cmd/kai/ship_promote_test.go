@@ -53,6 +53,7 @@ func TestShipPromote_StripsCheckoutEdits(t *testing.T) {
 	}
 
 	// Commit the user's edit in src so src is clean.
+	userBranch := gitIn(t, src, "branch", "--show-current")
 	gitIn(t, src, "add", "-A")
 	gitIn(t, src, "commit", "-q", "-m", "user edit")
 
@@ -86,6 +87,93 @@ func TestShipPromote_StripsCheckoutEdits(t *testing.T) {
 	}
 	if got := string(out); got != want {
 		t.Fatalf("promoted app.js:\nwant %q\ngot  %q", want, got)
+	}
+
+	// The promote commit sits on the spawn's base, not on the source's
+	// moved HEAD: committed there, the whole-file content above would
+	// silently revert the user's later "user edit" commit. From the base,
+	// the two meet in an ordinary merge that keeps both.
+	if parent := gitIn(t, src, "rev-parse", "HEAD^"); parent != baseSHA {
+		t.Fatalf("promote commit's parent = %s, want the spawn base %s", parent, baseSHA)
+	}
+	gitIn(t, src, "checkout", "-q", userBranch)
+	gitIn(t, src, "merge", "-q", "--no-edit", "kai/promote-test")
+	merged, err := os.ReadFile(filepath.Join(src, "app.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := userTree + "line5 AGENT\n"; string(merged) != want {
+		t.Fatalf("merged app.js:\nwant %q\ngot  %q", want, merged)
+	}
+}
+
+// TestShipPromote_FailureRestoresSourceRepo verifies the rollback after a
+// failed commit: the source repo is back on its branch, clean, with the
+// tracked file promote overwrote restored (not deleted) and the file
+// promote created removed.
+func TestShipPromote_FailureRestoresSourceRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+
+	base := "line1\nline2\n"
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "app.js"), []byte(base), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, src, "init", "-q")
+	gitIn(t, src, "add", "-A")
+	gitIn(t, src, "commit", "-q", "-m", "base")
+	baseSHA := gitIn(t, src, "rev-parse", "HEAD")
+	originalBranch := gitIn(t, src, "branch", "--show-current")
+	// Every commit in src fails, after promote has written and staged.
+	hook := filepath.Join(src, ".git", "hooks", "pre-commit")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	spawn := t.TempDir()
+	if err := os.WriteFile(filepath.Join(spawn, "app.js"), []byte(base), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, spawn, "init", "-q")
+	gitIn(t, spawn, "add", "-A")
+	gitIn(t, spawn, "commit", "-q", "-m", "kai spawn from test123")
+	if err := os.WriteFile(filepath.Join(spawn, "app.js"), []byte(base+"AGENT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spawn, "new.js"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	if err := spawnpkg.Add(spawnpkg.Entry{Path: spawn, SourceRepo: src, BaseGitSHA: baseSHA, SessionID: "sid-fail"}); err != nil {
+		t.Fatal(err)
+	}
+
+	shipPromote = true
+	shipPush = false
+	defer func() { shipPromote = false; shipPush = true }()
+
+	if err := runShipPromote(spawn, "kai/promote-fail", "sid-fail"); err == nil {
+		t.Fatal("expected the failing pre-commit hook to fail the promote")
+	}
+
+	if got := gitIn(t, src, "branch", "--show-current"); got != originalBranch {
+		t.Fatalf("src should be back on %s, got %s", originalBranch, got)
+	}
+	if st := gitIn(t, src, "status", "--porcelain"); st != "" {
+		t.Fatalf("src should be clean after the rollback, got:\n%s", st)
+	}
+	got, err := os.ReadFile(filepath.Join(src, "app.js"))
+	if err != nil {
+		t.Fatalf("tracked app.js should be restored, not removed: %v", err)
+	}
+	if string(got) != base {
+		t.Fatalf("app.js = %q, want the committed %q", got, base)
+	}
+	if gitio.BranchExists(src, "kai/promote-fail") {
+		t.Fatal("the failed promote's branch should be deleted")
 	}
 }
 

@@ -767,6 +767,7 @@ func runShipPromote(cwd, branch, sessionID string) error {
 		path    string
 		content []byte
 		delete  bool
+		created bool // absent from the source tree before the apply
 	}
 	var overlaps []string
 	files := make([]promoteFile, 0, len(changed))
@@ -814,8 +815,18 @@ func runShipPromote(cwd, branch, sessionID string) error {
 	}
 	var shipped bool
 	if !reShip {
-		if err := gitio.CreateBranch(srcRepo, branch); err != nil {
-			return fmt.Errorf("creating %s in %s: %w", branch, srcRepo, err)
+		// Branch from the commit the delta was measured against, not the
+		// source repo's current HEAD: shipContentFor yields whole files —
+		// the base's version plus the agent's hunks — so committing them
+		// on a HEAD that has moved since the spawn would silently revert
+		// every later commit to those files. From the base, those commits
+		// meet the promoted change in an ordinary merge instead.
+		start := entry.BaseGitSHA
+		if start == "" {
+			start = "HEAD"
+		}
+		if _, err := gitOut(srcRepo, "checkout", "-q", "-b", branch, start); err != nil {
+			return fmt.Errorf("creating %s at %.12s in %s: %w", branch, start, srcRepo, err)
 		}
 	}
 	// On any failure after the branch exists or the re-ship begins,
@@ -829,12 +840,14 @@ func runShipPromote(cwd, branch, sessionID string) error {
 			return
 		}
 		_ = gitio.DiscardChanges(srcRepo)
-		// Remove only the files the apply loop wrote — not a blanket
+		// Remove only the files the apply loop created — not a blanket
 		// git clean, which would delete pre-existing untracked files
 		// and respect .gitignore (leaving ignored files promote wrote).
-		// os.Remove is path-precise and ignores .gitignore.
+		// A file that existed before the apply is tracked (the tree was
+		// clean) and the reset above already restored it; removing it
+		// would leave the owner's checkout with a deleted file.
 		for _, f := range files {
-			if f.delete {
+			if !f.created {
 				continue
 			}
 			_ = os.Remove(filepath.Join(srcRepo, filepath.FromSlash(f.path)))
@@ -846,13 +859,17 @@ func runShipPromote(cwd, branch, sessionID string) error {
 	}()
 
 	// Apply the delta into the source repo's working tree.
-	for _, f := range files {
+	for i := range files {
+		f := &files[i]
 		target := filepath.Join(srcRepo, filepath.FromSlash(f.path))
 		if f.delete {
 			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("removing %s: %w", f.path, err)
 			}
 			continue
+		}
+		if _, err := os.Lstat(target); os.IsNotExist(err) {
+			f.created = true
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return fmt.Errorf("creating dir for %s: %w", f.path, err)
