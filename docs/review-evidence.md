@@ -9,8 +9,8 @@ The challenge uses a fresh model conversation containing the draft, the original
 review context, and complete successful tool results. It tries to disprove each
 issue, looks for contradictory reasoning, and checks proposed repairs against the
 supported inputs. It returns **one structured result per allegation** —
-supported, refuted, or unverified — with its reasoning, its citations, and, for
-a supported allegation, the finding text and any remedy. It assesses each of the
+supported, refuted, unverified, or observation — with its reasoning, its
+citations, and, for a supported allegation, the finding text and any remedy. It assesses each of the
 draft's `DECISIONS` the same way.
 
 The published review is **assembled in code** from those results. The challenger
@@ -21,6 +21,16 @@ the summary, the counts and the `ISSUES` coda are now the same data, so they
 cannot disagree:
 
 - a **supported** allegation is published as a finding, with its remedy;
+- an **observation** — an allegation that describes the code accurately but
+  names nothing to fix — is published as a note under "Notes (nothing to fix)",
+  never as a finding: it stays out of the `ISSUES` coda, rides in the bundle as
+  an `info` claim rather than a risk, and never moves readiness. A supported
+  verdict whose remedy opens with "No fix needed" (or "none", "correct as
+  written", "noted for completeness", …) is reclassified as an observation
+  before publication, because that remedy is the allegation classifying
+  itself; the original wording is kept in the record as withheld. Kai's review
+  of kai-server#302 (2026-09-24) is the case: two such notes were posted as 🐞
+  comments and counted toward a 3/5;
 - a **refuted** allegation is not published, and neither is its remedy (the
   proposal is kept in the bundle's record as withheld, never as advice);
 - an **unverified** allegation or decision is listed as unresolved, with its
@@ -30,9 +40,13 @@ cannot disagree:
   partial review is never read as a completed one. A draft decision the
   challenger did not assess, or a supported verdict with no finding text, is
   unresolved in the same way rather than sinking the whole review;
-- readiness is only ever **capped** from what the challenger proposed — at
-  "small fixes" when a defect is confirmed, at "decide, then merge" when a
-  decision is open or anything is unresolved — and never raised.
+- readiness is **capped** from what the challenger proposed — at "small fixes"
+  when a defect is confirmed, at "decide, then merge" when a decision is open
+  or anything is unresolved — and, by the same contract read the other way,
+  **floored** when nothing is supported, nothing is unresolved and the intent
+  is verified: at "decide, then merge" with a decision open, otherwise at
+  "merge". A 3 over zero confirmed defects was counting something that is not
+  a defect.
 
 Structural failures still prevent publication: malformed responses, a missing or
 duplicated check, a check for an issue the draft never raised, a supported or

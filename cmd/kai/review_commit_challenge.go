@@ -42,18 +42,20 @@ Finish by calling submit_review with this shape (plain JSON is accepted if tool 
  "limitations":["what was NOT covered, and any caveat on the coverage"],
  "intent_match":"verified|partial|diverges",
  "merge_ready":1-5,
- "checks":[{"issue":"exact original ISSUES bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"concrete reasoning, including the counterexample considered","finding":"for a SUPPORTED verdict only: the published description of the defect","remedy":"the proposed fix for THIS allegation, if any","evidence":[{"source":1,"line_start":3,"line_end":5}]}],
+ "checks":[{"issue":"exact original ISSUES bullet, without its list marker","verdict":"supported|refuted|unverified|observation","reason":"concrete reasoning, including the counterexample considered","finding":"for a SUPPORTED verdict, the published description of the defect; for an OBSERVATION, the note","remedy":"for a SUPPORTED verdict only: the proposed fix for THIS allegation, if any","evidence":[{"source":1,"line_start":3,"line_end":5}]}],
  "decisions":[{"decision":"exact original DECISIONS bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"why this is, or is not, a genuine choice the change already makes","evidence":[{"source":1,"line_start":3,"line_end":5}]}]}
 
 Do NOT write a revised review. There is no review, assessment or summary field, and none is wanted: the system assembles the published review, its summary, its counts and its ISSUES list from your per-item verdicts, so they cannot disagree with them. Scope and limitations describe COVERAGE only — what you did and did not examine. They are not a place to state, hint at, or paraphrase any allegation's outcome or fix.
 
-There must be exactly one check per supplied issue. Both supported and refuted checks need evidence from the supplied sources or a successful review_shell tool result. Source numbers are one-based. Do not cite the draft, another check, or your own assertion as evidence. An unverified check means the allegation could not be settled with the evidence available; do not turn missing evidence into an all-clear. A supported check needs a non-empty "finding".
+There must be exactly one check per supplied issue. Both supported and refuted checks need evidence from the supplied sources or a successful review_shell tool result. Source numbers are one-based. Do not cite the draft, another check, or your own assertion as evidence. An unverified check means the allegation could not be settled with the evidence available; do not turn missing evidence into an all-clear. A supported check needs a non-empty "finding", and "supported" means the code is WRONG: something must change before this merges.
+
+SOME ACCURATE ALLEGATIONS ARE NOT DEFECTS. An allegation that describes the code correctly but names nothing to change — a remark on how a test is built, a pattern that is correct as written, a limit that is intended, anything whose remedy would be "no fix needed" — is an "observation". Put the note in "finding", leave "remedy" empty, and cite what you read. An observation is published as a note, never as a defect: it does not go on a line of the diff, it is not counted as a finding, and it never lowers merge_ready. If you catch yourself writing "no fix needed", "noted for completeness" or "correct as written" as a remedy, the verdict is observation, not supported.
 
 A remedy belongs to its allegation. Put a proposed fix ONLY in that allegation's "remedy" field; it is published only when the allegation is supported. Do not place repair advice anywhere else.
 
 Assess every DECISIONS bullet in the draft the same way, one "decisions" entry each, and an empty array when the draft has none. A decision is a genuine choice the change already makes that still needs a human's yes; it is never a place to propose a repair. Do not add decisions the draft did not make.
 
-Set intent_match and merge_ready from the SUPPORTED findings only. A fast draft remains a fast, limited review, with merge_ready at most 4.`
+Set intent_match and merge_ready from the SUPPORTED findings only. Observations and refuted allegations do not lower merge_ready; when nothing is supported and nothing is unverified, the score is 4 (a decision is open) or 5. A fast draft remains a fast, limited review, with merge_ready at most 4.`
 
 const rcEvidenceLimit = 1024 * 1024
 
@@ -111,14 +113,27 @@ type rcCitationRef struct {
 
 // Final statuses. "unverified" from the model becomes "unresolved" here: the
 // allegation is neither published as a finding nor cleared.
+//
+// "observation" is the fourth class, and it exists because the first three
+// could not say "true, and nothing to fix". A challenger holding only
+// supported/refuted/unverified, handed "the test pins the invariant but not
+// the 10Gi value; intended, noted for completeness", has one honest answer —
+// it IS accurate, so: supported — and then writes "No fix needed" as the
+// remedy. The pipeline downstream reads status, not remedy: the allegation
+// became an ISSUES bullet, a risk-tagged claim, a 🐞 comment on the line and a
+// third of a 3/5 readiness. kai-server#302 (rc-f04ff39763255f72, 2026-09-24)
+// shipped exactly that twice in one review. An observation is published as a
+// note, never as a finding, and never moves the score.
 const (
-	rcStatusSupported  = "supported"
-	rcStatusRefuted    = "refuted"
-	rcStatusUnresolved = "unresolved"
+	rcStatusSupported   = "supported"
+	rcStatusRefuted     = "refuted"
+	rcStatusUnresolved  = "unresolved"
+	rcStatusObservation = "observation"
 )
 
 // rcAllegationResult is the final result for one of the draft's allegations.
-// Finding and Remedy are published only when Status is supported; a remedy the
+// Finding is published when Status is supported (as a finding) or observation
+// (as a note). Remedy is published only when Status is supported; a remedy the
 // model proposed for anything else is kept as WithheldRemedy for the record and
 // never published as advice.
 type rcAllegationResult struct {
@@ -183,12 +198,15 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 	str := func() map[string]any { return map[string]any{"type": "string"} }
 	intg := func() map[string]any { return map[string]any{"type": "integer"} }
 	verdict := map[string]any{"type": "string", "enum": []string{"supported", "refuted", "unverified"}}
+	// A check may also be an observation; a decision may not, because a
+	// decision already IS the "correct, and still needs a human" class.
+	checkVerdict := map[string]any{"type": "string", "enum": []string{"supported", "refuted", "unverified", "observation"}}
 	evidence := map[string]any{"type": "object", "properties": map[string]any{
 		"source": intg(), "line_start": intg(), "line_end": intg(),
 	}, "required": []string{"source", "line_start", "line_end"}}
 	evidenceList := map[string]any{"type": "array", "items": evidence}
 	check := map[string]any{"type": "object", "properties": map[string]any{
-		"issue": str(), "verdict": verdict, "reason": str(), "finding": str(), "remedy": str(), "evidence": evidenceList,
+		"issue": str(), "verdict": checkVerdict, "reason": str(), "finding": str(), "remedy": str(), "evidence": evidenceList,
 	}, "required": []string{"issue", "verdict", "reason", "evidence"}}
 	decision := map[string]any{"type": "object", "properties": map[string]any{
 		"decision": str(), "verdict": verdict, "reason": str(), "evidence": evidenceList,
@@ -669,14 +687,14 @@ func rcRepairSubmission(ctx context.Context, prov provider.Provider, model strin
 	feedback := fmt.Sprintf("Your submission was rejected: %v.\n\n"+
 		"Resubmit the COMPLETE answer as a submit_review tool call, not as prose. Required SHAPE:\n"+
 		"- checks and decisions are arrays of OBJECTS, never arrays of strings;\n"+
-		"- each check object is {\"issue\": string, \"verdict\": \"supported\"|\"refuted\"|\"unverified\", \"reason\": string, \"evidence\": [{\"source\": integer, \"line_start\": integer, \"line_end\": integer}]} and may add \"finding\" and \"remedy\";\n"+
+		"- each check object is {\"issue\": string, \"verdict\": \"supported\"|\"refuted\"|\"unverified\"|\"observation\", \"reason\": string, \"evidence\": [{\"source\": integer, \"line_start\": integer, \"line_end\": integer}]} and may add \"finding\" and \"remedy\";\n"+
 		"- each decision object is the same with \"decision\" in place of \"issue\";\n"+
 		"- intent_match is \"verified\", \"partial\" or \"diverges\"; merge_ready is an integer 1-5.\n\n"+
 		"Required CONTENT:\n"+
 		"- EXACTLY ONE check per bullet in ISSUES TO CHECK, and one decision per bullet in DECISIONS TO ASSESS — no duplicates, none invented, none dropped;\n"+
 		"- each \"issue\" and \"decision\" string copied EXACTLY from that bullet, without its list marker;\n"+
 		"- every check and decision needs a non-empty \"reason\"; a supported check also needs a non-empty \"finding\";\n"+
-		"- a supported or refuted verdict needs at least one evidence citation.\n\n"+
+		"- a supported or refuted verdict needs at least one evidence citation; an observation (accurate, but nothing to fix) needs a \"finding\" note and no remedy.\n\n"+
 		"Your findings do not change — re-express the SAME assessment under these rules. Do not drop items to make it fit. Do not treat this rejection as evidence about any allegation. If evidence cannot establish a verdict, mark it unverified rather than manufacturing support. No additional experiments are available. This is the only correction attempt.", cause)
 	answer, resubErr := rcRequestResubmission(ctx, prov, model, msgs, failed, callID, feedback)
 	if resubErr != nil {
@@ -816,24 +834,46 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 		}
 		seen[check.Issue] = true
 		status, reason := check.Verdict, strings.TrimSpace(check.Reason)
+		findingText, remedy := strings.TrimSpace(check.Finding), strings.TrimSpace(check.Remedy)
 		switch status {
 		case rcStatusSupported, rcStatusRefuted:
 			if len(check.Evidence) == 0 {
 				return nil, nil, fmt.Errorf("challenge supplied no evidence")
 			}
+		case rcStatusObservation:
+			// Asserts that nothing is wrong, so it carries no evidence bar:
+			// there is no verdict here for a citation to prop up.
 		case "unverified":
 			status = rcStatusUnresolved
 		default:
 			return nil, nil, fmt.Errorf("challenge returned an unknown verdict %q", check.Verdict)
 		}
+		if status == rcStatusSupported && rcNoFixRemedy(remedy) {
+			// The backstop for a challenger that has the observation class
+			// and still answers the old way. A remedy that says there is
+			// nothing to fix is the allegation classifying itself; the
+			// status merely disagreed with it, and the status is what every
+			// reader downstream acts on.
+			fmt.Fprintf(os.Stderr, "  challenge: %q was marked supported with the remedy %q — nothing to fix, so it is published as an observation, not a defect\n", rcOneLine(check.Issue, 100), rcOneLine(remedy, 60))
+			status = rcStatusObservation
+		}
 		refs, bad := rcResolveEvidence(checkIndex+1, check.Evidence, sources)
-		problems = append(problems, bad...)
 		r := rcAllegationResult{ID: id + 1, Issue: check.Issue, Status: status, Reason: reason, Evidence: refs}
-		findingText, remedy := strings.TrimSpace(check.Finding), strings.TrimSpace(check.Remedy)
-		if len(bad) > 0 && status != rcStatusUnresolved {
+		switch {
+		case status == rcStatusObservation:
+			// A citation that points nowhere costs the note its citation, not
+			// its place: nothing was asserted that the citation had to carry,
+			// so it is not a problem worth a correction round either.
+			if len(bad) > 0 {
+				fmt.Fprintf(os.Stderr, "  challenge: observation %q cites a location that does not exist (%s); published without it\n", rcOneLine(check.Issue, 100), bad[0].Reason)
+			}
+		case len(bad) > 0 && status != rcStatusUnresolved:
 			// A verdict cannot rest on evidence that points nowhere. The item
 			// is unresolved with the exact reason; the others are untouched.
+			problems = append(problems, bad...)
 			r.Status, r.Reason = rcStatusUnresolved, fmt.Sprintf("citation %d could not be resolved (%s); the verdict %q was not published on evidence that does not exist", bad[0].Citation, bad[0].Reason, status)
+		default:
+			problems = append(problems, bad...)
 		}
 		if r.Status == rcStatusSupported && findingText == "" {
 			// Nothing publishable was written for it. Do not invent a
@@ -841,9 +881,18 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 			// unresolved, with the reason.
 			r.Status, r.Reason = rcStatusUnresolved, "the challenge supported this allegation but wrote no finding description to publish"
 		}
-		if r.Status == rcStatusSupported {
+		switch r.Status {
+		case rcStatusSupported:
 			r.Finding, r.Remedy = findingText, remedy
-		} else {
+		case rcStatusObservation:
+			// The note is the finding text; with none written, the reasoning
+			// is the note. The "no fix needed" the model may have put in the
+			// remedy is kept on the record, never published as advice.
+			if findingText == "" {
+				findingText = reason
+			}
+			r.Finding, r.WithheldRemedy = findingText, remedy
+		default:
 			r.WithheldRemedy = remedy
 		}
 		results[id] = r
@@ -895,11 +944,13 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	}
 
 	res := &rcChallengeResult{Allegations: results, Decisions: dresults}
-	supported, refuted, unresolved := 0, 0, 0
+	supported, observations, refuted, unresolved := 0, 0, 0, 0
 	for _, r := range results {
 		switch r.Status {
 		case rcStatusSupported:
 			supported++
+		case rcStatusObservation:
+			observations++
 		case rcStatusRefuted:
 			refuted++
 		default:
@@ -917,10 +968,9 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	}
 	res.Incomplete = unresolved+unresolvedDecisions > 0
 
-	// Readiness is only ever CAPPED from what the challenger proposed: a
-	// confirmed defect is never near-merge, and an open or unsettled item is
-	// never a clean merge. A score lower than the results would justify is
-	// left alone — the system never raises it.
+	// Readiness is CAPPED from what the challenger proposed: a confirmed
+	// defect is never near-merge, and an open or unsettled item is never a
+	// clean merge.
 	readiness := proposed
 	if supported > 0 && readiness > finding.ReadinessSmallFixes {
 		readiness = finding.ReadinessSmallFixes
@@ -931,6 +981,25 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	if readiness != proposed {
 		fmt.Fprintf(os.Stderr, "  challenge: merge_ready %d is more permissive than the final results allow — capped to %d\n", int(proposed), int(readiness))
 	}
+	// And FLOORED, by the same contract read the other way. The scale's
+	// 1-3 are defined by real defects, and the prompt says outright that
+	// concerns which turned out not to be defects are a 4 or a 5. So a
+	// score of 3 over zero supported allegations was computed by counting
+	// something else — an observation, before the class existed — and
+	// "0 confirmed findings; readiness 3/5" is the same contradiction the
+	// cap exists to prevent, in the other direction. Only a verified intent
+	// qualifies: a partial or diverging one is a reason of its own to hold
+	// a branch, and the results here say nothing about it.
+	if supported == 0 && !res.Incomplete && match == finding.MatchVerified {
+		floor := finding.ReadinessMerge
+		if keptDecisions > 0 {
+			floor = finding.ReadinessDecideThenMerge
+		}
+		if readiness < floor {
+			fmt.Fprintf(os.Stderr, "  challenge: merge_ready %d with no confirmed defect — nothing in the results holds this below %d, so it is raised\n", int(readiness), int(floor))
+			readiness = floor
+		}
+	}
 
 	for _, r := range results {
 		fmt.Fprintf(os.Stderr, "  challenge: %s — %s\n    %s\n", r.Status, r.Issue, r.Reason)
@@ -938,7 +1007,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	for _, d := range dresults {
 		fmt.Fprintf(os.Stderr, "  challenge: decision %s — %s\n    %s\n", d.Status, d.Decision, d.Reason)
 	}
-	summary := rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions, match, readiness)
+	summary := rcDeriveSummary(supported, observations, refuted, unresolved, unresolvedDecisions, match, readiness)
 	res.Review = rcAssembleReview(rcNonEmpty(answer.Scope), rcNonEmpty(answer.Limitations), results, dresults, match, readiness, summary)
 	return res, problems, nil
 }
@@ -954,11 +1023,45 @@ func rcNonEmpty(items []string) []string {
 	return out
 }
 
+// rcNoFixRemedy reports whether a remedy says there is nothing to fix. It is
+// the shape of the answer, not a search of its wording: the phrase has to be
+// what the remedy OPENS with, so "No fix needed — the pattern is standard"
+// matches and "Rename it; no fix needed elsewhere" does not. The list is the
+// set of ways a model has actually declined to propose a fix, and it is
+// consulted only after the model chose "supported": with the observation class
+// available, this is the seam between what it said and what it meant.
+func rcNoFixRemedy(remedy string) bool {
+	r := strings.ToLower(strings.TrimSpace(remedy))
+	r = strings.TrimLeft(r, "*_`\"'([ ")
+	if r == "" {
+		return false
+	}
+	for _, exact := range []string{"none", "n/a", "na", "nothing", "no fix", "no change", "no changes", "not needed", "not required"} {
+		if r == exact || strings.HasPrefix(r, exact+".") || strings.HasPrefix(r, exact+",") || strings.HasPrefix(r, exact+";") || strings.HasPrefix(r, exact+" —") || strings.HasPrefix(r, exact+" -") || strings.HasPrefix(r, exact+" (") || strings.HasPrefix(r, exact+":") {
+			return true
+		}
+	}
+	for _, opener := range []string{
+		"no fix needed", "no fix is needed", "no fix required", "no fix is required", "no fix necessary", "no fix is necessary",
+		"no change needed", "no change is needed", "no change required", "no change is required",
+		"no changes needed", "no changes are needed", "no changes required", "no changes are required",
+		"no action needed", "no action is needed", "no action required", "no action is required",
+		"no remedy needed", "no remedy is needed", "no remedy required", "no remedy is required",
+		"nothing to fix", "nothing needs to change", "nothing needs changing", "none needed", "none required",
+		"correct as written", "noted for completeness", "no fix —", "no fix -", "no fix:",
+	} {
+		if strings.HasPrefix(r, opener) {
+			return true
+		}
+	}
+	return false
+}
+
 // rcDeriveSummary builds the coda SUMMARY from the final counts. It is a
 // function of the validated results, so it cannot restate — verbatim or in
 // paraphrase — an allegation the challenge refuted or could not settle, and it
 // never reads as an all-clear while anything is unresolved.
-func rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions int, match finding.Match, readiness finding.Readiness) string {
+func rcDeriveSummary(supported, observations, refuted, unresolved, unresolvedDecisions int, match finding.Match, readiness finding.Readiness) string {
 	plural := func(n int) string {
 		if n == 1 {
 			return ""
@@ -967,6 +1070,9 @@ func rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions int, ma
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d confirmed finding%s", supported, plural(supported))
+	if observations > 0 {
+		fmt.Fprintf(&b, ", %d observation%s (nothing to fix)", observations, plural(observations))
+	}
 	if refuted > 0 {
 		fmt.Fprintf(&b, ", %d refuted", refuted)
 	}
@@ -986,10 +1092,13 @@ func rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions int, ma
 
 // rcAssembleReview builds the published review from the final results: Scope,
 // one section per SUPPORTED allegation (its description and, when given, its
-// remedy), an incomplete notice listing every unresolved allegation and
+// remedy), one note per OBSERVATION under a heading that says there is nothing
+// to fix, an incomplete notice listing every unresolved allegation and
 // decision with its reason and no repair advice, Limitations, the SUPPORTED
 // decisions, and one machine coda. A refuted allegation contributes nothing but
-// its count; nothing the model wrote about it is copied through.
+// its count; nothing the model wrote about it is copied through. Observations
+// stay out of the ISSUES coda: that list is what becomes a risk claim, a
+// comment on a line and a count in the headline, and a note is none of those.
 func rcAssembleReview(scope, limitations []string, results []rcAllegationResult, decisions []rcDecisionResult, match finding.Match, readiness finding.Readiness, summary string) string {
 	var b strings.Builder
 	if len(scope) > 0 {
@@ -999,11 +1108,13 @@ func rcAssembleReview(scope, limitations []string, results []rcAllegationResult,
 		}
 		b.WriteString("\n")
 	}
-	var kept, unresolved []rcAllegationResult
+	var kept, noted, unresolved []rcAllegationResult
 	for _, r := range results {
 		switch r.Status {
 		case rcStatusSupported:
 			kept = append(kept, r)
+		case rcStatusObservation:
+			noted = append(noted, r)
 		case rcStatusUnresolved:
 			unresolved = append(unresolved, r)
 		}
@@ -1027,6 +1138,12 @@ func rcAssembleReview(scope, limitations []string, results []rcAllegationResult,
 		}
 	} else if len(results) > 0 {
 		b.WriteString("No proposed defect was confirmed by this check within the reviewed scope.\n")
+	}
+	if len(noted) > 0 {
+		b.WriteString("\n## Notes (nothing to fix)\n")
+		for _, r := range noted {
+			fmt.Fprintf(&b, "\n### %s\n%s\n", r.Issue, r.Finding)
+		}
 	}
 	if len(unresolved)+len(unresolvedDecisions) > 0 {
 		b.WriteString("\n**This review is incomplete.** The following could not be confirmed or cleared, for the reason given. No fix is proposed for them:\n")
