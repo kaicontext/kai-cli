@@ -281,6 +281,27 @@ func rcGroundIssue(hash, item string, tree []string, readFile func(hash, path st
 	return c
 }
 
+// rcObservationClaims turns the challenge's observations — allegations it
+// found accurate with nothing to fix — into info claims. Each is grounded
+// exactly as an ISSUES bullet is (rcGroundIssue), so the inbox can show the
+// line it is about; the tag is what makes it a note rather than a risk, and
+// the tag is the only thing a reader downstream keys on.
+func rcObservationClaims(hash string, challenge *rcChallengeResult, tree []string, readFile func(hash, path string) ([]string, bool)) []finding.Claim {
+	if challenge == nil {
+		return nil
+	}
+	var out []finding.Claim
+	for _, a := range challenge.Allegations {
+		if a.Status != rcStatusObservation {
+			continue
+		}
+		c := rcGroundIssue(hash, a.Issue, tree, readFile)
+		c.Tag = finding.TagInfo
+		out = append(out, c)
+	}
+	return out
+}
+
 // rcDecisionClaim wraps a DECISIONS bullet. It is grounded by construction —
 // the reviewer traced a value to a charge, a cap, a send, or a delete — and
 // deliberately carries no path:line, so its lookup says what it is instead

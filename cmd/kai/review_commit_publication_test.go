@@ -36,7 +36,7 @@ func findingsSection(review string) string {
 		return ""
 	}
 	rest := review[i:]
-	for _, end := range []string{"\n**This review is incomplete.**", "\n## Limitations", "\n## Decisions", "\n" + rcReviewDataMarker} {
+	for _, end := range []string{"\n## Notes", "\n**This review is incomplete.**", "\n## Limitations", "\n## Decisions", "\n" + rcReviewDataMarker} {
 		if j := strings.Index(rest, end); j >= 0 {
 			rest = rest[:j]
 		}
@@ -197,7 +197,7 @@ func TestPublicationSummaryFindingsAndCodaAgree(t *testing.T) {
 			if strings.Join(issues, "\n") != strings.Join(supported, "\n") {
 				t.Fatalf("coda ISSUES %v != supported results %v", issues, supported)
 			}
-			if want := rcDeriveSummary(len(supported), refuted, unresolved, 0, match, readiness); summary != want {
+			if want := rcDeriveSummary(len(supported), 0, refuted, unresolved, 0, match, readiness); summary != want {
 				t.Fatalf("summary %q != derived %q", summary, want)
 			}
 			if got := strings.Count(prose, "\n### "); got != len(supported) {

@@ -482,6 +482,13 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	for _, d := range decisions {
 		claims = append(claims, rcDecisionClaim(d))
 	}
+	// An OBSERVATION is an allegation the challenge found accurate and
+	// harmless: nothing to fix, nothing to decide. It rides as an info claim
+	// so Atlas shows what was noted and where; because it is not risk-tagged
+	// the server neither counts it, puts it on a line of the diff, nor lets
+	// it move the verdict. It stays out of Intent.Risks for the same reason —
+	// that list is the questions for a human, and a note answers its own.
+	claims = append(claims, rcObservationClaims(hash, challenge, tree, rcFileLines)...)
 	for _, c := range rcNewHostClaims(hash, diff, changedPaths, rcFilesMentioningHost) {
 		claims = append(claims, c)
 		flags = append(flags, c.Statement)
