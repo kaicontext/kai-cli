@@ -27,7 +27,12 @@ func TestGateAndFastPassDoNotPublishTestAndIntentNoise(t *testing.T) {
 }
 
 func TestFastPassChecksContractsVisibleInTheDiff(t *testing.T) {
-	if !strings.Contains(rcFastReviewSystem, "a value whose producer and consumer are both in the diff and disagree") {
-		t.Error("fast-pass prompt does not check producer/consumer agreement")
+	// The rule and the four concrete mismatches the benchmark missed: a
+	// reword that keeps the sentence but drops the examples fails here.
+	for _, want := range []string{"a value whose producer and consumer are both in the diff and disagree",
+		"an id vs a name", "a credential id vs a user id", "a Response vs its body", "a stale token after a refresh"} {
+		if !strings.Contains(rcFastReviewSystem, want) {
+			t.Errorf("fast-pass prompt is missing %q", want)
+		}
 	}
 }
