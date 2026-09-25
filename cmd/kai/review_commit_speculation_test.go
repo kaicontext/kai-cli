@@ -14,6 +14,8 @@ var rcSpeculativeBenchmarkIssues = []string{
 	"packages/features/ee/workflows/api/scheduleSMSReminders.ts:38 — New `retryCount > 1` deletion branch omits the `method: SMS` guard the original branch had; dormant today (only SMS writes retryCount in this repo) but will silently delete email/whatsapp reminders if retry-incrementing is ever added to those paths.",
 	"packages/lib/constants.ts:103 — `APP_CREDENTIAL_SHARING_ENABLED` holds the encryption-key string, not a boolean; latent footgun for future strict comparisons.",
 	"src/auth/guard.ts:40 — the null check only works because it runs first; a future guard reorder would dereference session before it is checked.",
+	// The baseline corpus run of 2026-09-25 (kai-cli v0.35.89) on Cal.com #10600.
+	"apps/web/pages/api/auth/two-factor/totp/disable.ts:58-66 — disable path relies on terminal-wipe for single-use; a future non-terminal step would break the \"exactly once\" invariant.",
 }
 
 // Golden defects from the same benchmark: real triggers, stated plainly. None
@@ -26,6 +28,7 @@ var rcRealBenchmarkIssues = []string{
 	"services/src/main/java/org/keycloak/services/resources/admin/permissions/GroupPermissionsV2.java:70 — canManage() falls back to VIEW and MANAGE, so a view-only caller passes it and can create top-level groups.",
 	"apps/web/pages/api/webhook/app-credential.ts:24 — the webhook secret is compared with !==, a timing side channel on an authorization boundary.",
 	"internal/cache/cache.go:88 — if the entry is ever evicted between Get and Set, the second writer overwrites the first; two requests hit this on every cold start.",
+	"apps/web/lib/booking.ts:40 — a booking date in the future is compared as a string, so 2026-10-01 sorts before 2026-9-30 and the slot is rejected.",
 }
 
 func TestSpeculativePhraseCatchesTheBenchmarkCases(t *testing.T) {

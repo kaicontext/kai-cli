@@ -27,6 +27,8 @@ var rcSpeculativePhrases = []string{
 	"is ever reordered", "are ever reordered", "is ever changed to", "is ever refactored",
 	"if someone later", "if someone ever", "should anyone later", "if a future",
 	"a future change", "a future refactor", "a future caller", "future strict",
+	"a future step", "a future edit", "a future version", "a future maintainer",
+	"a future contributor", "future non-terminal", "future code path",
 	"future guard reorder", "if the guards are reordered", "if the checks are reordered",
 	"would break if someone", "will break if someone",
 }
