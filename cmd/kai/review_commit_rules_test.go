@@ -39,6 +39,12 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 			needs: []string{"A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY", "reachable trigger", "failure mechanism", "ANY(array)", "never goes in ISSUES"},
 		},
 		{
+			// Missing tests, intent and consistency points took over the
+			// defect list on the 2026-09-24 benchmark.
+			name:  "tests, intent and consistency are not defects by themselves",
+			needs: []string{"TESTS, INTENT AND CONSISTENCY ARE NOT DEFECTS BY THEMSELVES", "specific missing requirement", "concrete regression risk", "#36880", "presents a test as the proof of its fix"},
+		},
+		{
 			name:  "environment assumptions get named",
 			needs: []string{"THE ENVIRONMENT IS NOT CLEAN", "failure mode is the finding"},
 		},
