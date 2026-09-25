@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -283,20 +284,172 @@ func TestReviewCitationIsExtractedBySystem(t *testing.T) {
 	if b, _ := json.Marshal(schema.Parameters); strings.Contains(string(b), `"quote"`) || !strings.Contains(string(b), `"line_start"`) {
 		t.Fatalf("schema still asks for quotes: %s", b)
 	}
-	if strings.Contains(rcChallengeSystem, "verbatim excerpt") || !strings.Contains(rcChallengeSystem, "BY LOCATION") {
-		t.Fatal("prompt still asks the model to copy excerpts")
+	for _, shell := range []bool{false, true} {
+		if system := rcChallengeSystemPrompt(shell); strings.Contains(system, "verbatim excerpt") || !strings.Contains(system, "BY LOCATION") {
+			t.Fatal("prompt still asks the model to copy excerpts")
+		}
 	}
 }
 
+// A challenger that is ALWAYS truncated, or keeps calling a tool it was not
+// offered, still fails closed — after its bounded retries, not on the first try.
 func TestReviewChallengeRejectsTruncatedAnswerAndUnexpectedTool(t *testing.T) {
-	for _, resp := range []provider.Response{
-		{FinishReason: message.FinishReasonMaxTokens, Parts: []message.ContentPart{message.TextContent{Text: `{}`}}},
-		{Parts: []message.ContentPart{message.ToolCall{ID: "bad", Name: "bash", Input: `{"command":"pwd"}`}}},
+	for _, tc := range []struct {
+		name      string
+		resp      provider.Response
+		wantCalls int
+		wantErr   string
+	}{
+		// The first answer and exactly one retry, then fail closed.
+		{"always truncated", provider.Response{FinishReason: message.FinishReasonMaxTokens, Parts: []message.ContentPart{message.TextContent{Text: `{}`}}}, 1 + rcMaxTruncations, "truncated"},
+		// Each refused call is answered; the one past the limit fails closed.
+		{"always an unoffered tool", provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "bad", Name: "bash", Input: `{"command":"pwd"}`}}}, rcMaxRefusedCalls + 1, `unavailable tool "bash"`},
 	} {
-		p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) { return resp, nil }}
-		if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []rcSource{rcRowSource(rcCDSource)}, nil); err == nil || got != nil {
-			t.Fatalf("accepted invalid challenge: %+v %v", got, err)
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) { calls++; return tc.resp, nil }}
+			got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue), []rcSource{rcRowSource(rcCDSource)}, nil)
+			if err == nil || got != nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("accepted invalid challenge: %+v %v", got, err)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("made %d calls, want exactly %d", calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// Every kind of retry used up in one challenge — the refused calls and the
+// truncation — still leaves the turn for the final answer.
+func TestReviewChallengeEveryRetryThenSubmits(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		switch {
+		case calls <= rcMaxRefusedCalls:
+			return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "sh" + strconv.Itoa(calls), Name: "review_shell", Input: `{"script":"true"}`}}}, nil
+		case calls <= rcMaxRefusedCalls+rcMaxTruncations:
+			return provider.Response{FinishReason: message.FinishReasonMaxTokens, Parts: []message.ContentPart{message.TextContent{Text: `{"scope":`}}}, nil
 		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || calls != rcMaxRefusedCalls+rcMaxTruncations+1 || !strings.Contains(res.Review, rcEscapeIssue) {
+		t.Fatalf("final answer lost after every retry: calls=%d %+v %v", calls, res, err)
+	}
+	if max := rcMaxExperiments + rcMaxRefusedCalls + rcMaxTruncations + 1; rcChallengeMaxTurns <= max {
+		t.Fatalf("turn backstop %d leaves no slack over the worst case %d", rcChallengeMaxTurns, max)
+	}
+}
+
+func TestReviewChallengeAppendToEmptyTurn(t *testing.T) {
+	got := rcAppendToLastTurn(nil, message.TextContent{Text: "note"})
+	if len(got) != 1 || got[0].Role != message.RoleUser || len(got[0].Parts) != 1 {
+		t.Fatalf("empty conversation not started as a user turn: %+v", got)
+	}
+}
+
+// Without a sandbox (the default, and CI), the prompt must not invite a
+// review_shell call — and if the model makes one anyway, it gets an error
+// result and the review still finishes. This used to abort every challenge
+// with `challenge requested unavailable tool "review_shell"`.
+func TestReviewChallengeAnswersUnofferedToolAndFinishes(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if strings.Contains(req.System, "review_shell") {
+			t.Fatal("prompt mentions review_shell although no sandbox is configured")
+		}
+		if len(req.Tools) != 1 || req.Tools[0].Name != "submit_review" {
+			t.Fatalf("offered tools: %v", req.Tools)
+		}
+		if calls == 1 {
+			return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "sh", Name: "review_shell", Input: `{"script":"cd /tmp && pwd"}`}}}, nil
+		}
+		last := req.Messages[len(req.Messages)-1]
+		tr, ok := last.Parts[0].(message.ToolResult)
+		if !ok || tr.ToolCallID != "sh" || !tr.IsError || !strings.Contains(tr.Content, "review_shell is not available") {
+			t.Fatalf("unoffered call was not answered with an error result: %+v", last)
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || calls != 2 || !strings.Contains(res.Review, rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDIssue) {
+		t.Fatalf("review did not finish after an unoffered tool call: calls=%d %+v %v", calls, res, err)
+	}
+}
+
+// The prompt names review_shell exactly when it is offered.
+func TestReviewChallengePromptMatchesSandbox(t *testing.T) {
+	if strings.Contains(rcChallengeSystemPrompt(false), "review_shell") {
+		t.Fatal("no-sandbox prompt mentions review_shell")
+	}
+	if !strings.Contains(rcChallengeSystemPrompt(true), "review_shell") {
+		t.Fatal("sandbox prompt does not mention review_shell")
+	}
+}
+
+// An answer cut off at the output limit gets one concise retry instead of
+// failing the review. The cut-off reply (here a half-written submit_review) is
+// not replayed; the retry is told why it is being asked again.
+func TestReviewChallengeRecoversFromTruncatedAnswer(t *testing.T) {
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if req.MaxTokens < rcChallengeMaxTokens {
+			t.Fatalf("challenge limit %d is below %d", req.MaxTokens, rcChallengeMaxTokens)
+		}
+		if calls == 1 {
+			return provider.Response{FinishReason: message.FinishReasonMaxTokens, Parts: []message.ContentPart{message.ToolCall{ID: "cut", Name: "submit_review", Input: `{"scope":["the two`}}}, nil
+		}
+		if len(req.Messages) != 1 {
+			t.Fatalf("truncated reply was replayed: %d messages", len(req.Messages))
+		}
+		parts := req.Messages[0].Parts
+		if note, ok := parts[len(parts)-1].(message.TextContent); !ok || note.Text != rcTruncationNote {
+			t.Fatalf("retry does not say the answer was cut off: %+v", parts)
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || calls != 2 || !strings.Contains(res.Review, rcEscapeIssue) {
+		t.Fatalf("review did not finish after a truncated answer: calls=%d %+v %v", calls, res, err)
+	}
+}
+
+// A truncation retry whose answer then needs a citation correction: the note
+// stays in the history (the model is told why it was asked again), the one
+// correction round still runs, and the corrected review publishes.
+func TestReviewChallengeTruncationThenCitationCorrection(t *testing.T) {
+	bad := rcCDChecks()
+	bad.Checks[0].Evidence[0] = rcCheckEvidence{Source: 9, LineStart: 1, LineEnd: 1}
+	calls := 0
+	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return provider.Response{FinishReason: message.FinishReasonMaxTokens, Parts: []message.ContentPart{message.TextContent{Text: `{"scope":`}}}, nil
+		case 2:
+			return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, bad)}}}, nil
+		}
+		// The correction turn: prompt (with the truncation note), the
+		// submission, and the citation feedback as its tool result.
+		if len(req.Messages) != 3 {
+			t.Fatalf("correction turn has %d messages, want 3", len(req.Messages))
+		}
+		first := req.Messages[0].Parts
+		if note, ok := first[len(first)-1].(message.TextContent); !ok || note.Text != rcTruncationNote {
+			t.Fatalf("truncation note missing from the correction history: %+v", first)
+		}
+		tr, ok := req.Messages[2].Parts[0].(message.ToolResult)
+		if !ok || tr.ToolCallID != "s" || !strings.Contains(tr.Content, "challenge citation invalid") {
+			t.Fatalf("correction feedback missing: %+v", req.Messages[2])
+		}
+		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s2", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	if err != nil || calls != 3 || res.Incomplete || !strings.Contains(res.Review, rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDIssue) {
+		t.Fatalf("review did not finish after truncation and correction: calls=%d %+v %v", calls, res, err)
 	}
 }
 
