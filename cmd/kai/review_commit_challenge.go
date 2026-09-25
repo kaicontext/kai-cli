@@ -33,7 +33,7 @@ const rcChallengeSystemHead = `Check a draft code review before it is published.
 
 An allegation is a defect only when its trigger is reachable in the code as it stands: an input, caller, configuration or state that exists today and reaches the line. REFUTE one whose failure needs a future change ("dormant today", "if X is ever added", "if the guards are reordered", "a footgun for later") — say in the reason that the trigger is hypothetical. An allegation that rests on an external API or library behaving a certain way is supported only when a source establishes that behaviour.
 
-REFUTE an allegation that is only a missing or weak test, a difference from the surrounding code's style or conventions, or a behaviour change the author describes as intended — unless it names a specific requirement the change must meet that nothing verifies, or a concrete regression (what breaks, for whom, on which input). Say which in the reason.
+REFUTE an allegation that is only a missing or weak test, a difference from the surrounding code's style or conventions, or a behaviour change the author describes as intended — unless it names a specific requirement the change must meet that nothing verifies, or a concrete regression (what breaks, for whom, on which input). A change that claims to fix a bug and adds nothing that would fail without the fix has such a requirement: support that one. Say which in the reason.
 
 An ISSUE may name more places after "(also: …)": they are the same defect at other locations, one allegation, and one check.
 

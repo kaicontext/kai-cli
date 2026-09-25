@@ -69,7 +69,7 @@ That shapes what you are for. Report what is VISIBLE IN THE DIFF ITSELF — the 
 - A read, check and write of shared state that two concurrent requests would both pass: a counter set to the value read plus one instead of an atomic increment, a one-time code checked and then written back without a transaction or conditional update.
 - A secret, token, password, session id, HMAC or signature compared with ==/!= instead of a constant-time compare.
 - Missing validation on an input the diff newly trusts; a new branch beside an existing one that skips a guard the older branch right there in the diff still has.
-- A test the diff presents as the proof of its fix that would pass on the unfixed code: it calls the thing and discards the answer, asserts that a mechanism was configured rather than that the behaviour happened, or skips for an environmental reason. A path without a test, a style or consistency point, or a change the author says is intended is not an issue.
+- A test the diff presents as the proof of its fix that would pass on the unfixed code: it calls the thing and discards the answer, asserts that a mechanism was configured rather than that the behaviour happened, or skips for an environmental reason. A path without a test, a style or consistency point, or a change the author says is intended is not an issue; a claimed fix with nothing that would fail without it is.
 
 SAY WHAT YOU DID NOT READ. Your first line names your scope in the author's words, not as a disclaimer: this is a fast pass over the diff only, callers and dependents were not checked, and a grounded review is following.
 
