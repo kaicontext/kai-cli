@@ -98,6 +98,28 @@ func TestSpeculativeIssuesAreNeverPublished(t *testing.T) {
 	}
 }
 
+// The draft was scored with its speculative issues in it. Once they are gone
+// the published score must not still say "small fixes first".
+func TestAllSpeculativeDraftIsNotScoredAsNeedingFixes(t *testing.T) {
+	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		t.Fatal("the gate was called")
+		return provider.Response{}, nil
+	}}
+	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcSpeculativeBenchmarkIssues...), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, r, _ := rcParseReviewOutput(res.Review); int(r) != 4 {
+		t.Errorf("readiness = %d, want 4 (no defect left; not re-examined, so not 5)", int(r))
+	}
+	// A draft that keeps a real issue keeps the reviewer's score for the gate.
+	mixed := rcTestReview(rcSpeculativeBenchmarkIssues[0], rcRealBenchmarkIssues[0])
+	out, _ := rcWithoutSpeculativeIssues(mixed)
+	if got := rcLiftReadinessAfterSpeculation(out); got != out {
+		t.Error("a draft with a real issue left had its score changed")
+	}
+}
+
 // The gate and the fast pass carry the same bar as the deep review.
 func TestGateAndFastPassRefuteFutureTriggers(t *testing.T) {
 	for _, want := range []string{"REFUTE one whose failure needs a future change", "trigger is hypothetical", "supported only when a source establishes"} {

@@ -519,6 +519,9 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 	// withheld and why; when the gate fails, the whole draft is withheld and
 	// there is no result to record them on.
 	draft, speculative := rcWithoutSpeculativeIssues(draft)
+	if len(speculative) > 0 {
+		draft = rcLiftReadinessAfterSpeculation(draft)
+	}
 	res, err := rcChallengeDraft(ctx, prov, model, draft, sources, sandbox)
 	if err != nil || len(speculative) == 0 {
 		return res, err

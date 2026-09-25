@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/kaicontext/kai-engine/finding"
 )
 
 // A defect needs a trigger that exists today. The benchmark run of 2026-09-24
@@ -106,4 +108,32 @@ func rcWithoutSpeculativeIssues(draft string) (string, []rcAllegationResult) {
 		return draft, nil
 	}
 	return draft[:start] + strings.Join(kept, "\n"), dropped
+}
+
+// rcLiftReadinessAfterSpeculation fixes the score of a draft whose every
+// ISSUE was speculative. The reviewer scored the draft WITH those issues, so
+// its MERGE_READY still reads "small fixes first" over a review that now
+// publishes none. The prompt's own rule is that concerns judged not to be
+// defects do not count against the score and that such a review is a 4 or a
+// 5; it is lifted to 4, never to 5, because nothing here re-examined the
+// change. A draft that still has issues or decisions keeps its score: the
+// gate scores those.
+func rcLiftReadinessAfterSpeculation(draft string) string {
+	_, issues, decisions, _, readiness, _ := rcParseReviewOutput(draft)
+	if len(issues) > 0 || len(decisions) > 0 || readiness == finding.ReadinessUnknown || int(readiness) >= 4 {
+		return draft
+	}
+	start := strings.Index(draft, rcReviewDataMarker)
+	if start < 0 {
+		return draft
+	}
+	lines := strings.Split(draft[start:], "\n")
+	for i, line := range lines {
+		if key, _, ok := rcMachineLine(strings.TrimSpace(line)); ok && key == "merge_ready" {
+			lines[i] = "MERGE_READY: 4"
+			fmt.Fprintf(os.Stderr, "  every issue was speculative; MERGE_READY %d -> 4\n", int(readiness))
+			return draft[:start] + strings.Join(lines, "\n")
+		}
+	}
+	return draft
 }
