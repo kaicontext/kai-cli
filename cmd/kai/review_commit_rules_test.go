@@ -33,6 +33,12 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 			needs: []string{"SKIPS for an environmental reason"},
 		},
 		{
+			// A defect's trigger must exist today (benchmark 2026-09-24:
+			// Cal.com #14943 "dormant today…", #11059 "future footgun").
+			name:  "a defect needs a trigger that exists today",
+			needs: []string{"A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY", "reachable trigger", "failure mechanism", "ANY(array)", "never goes in ISSUES"},
+		},
+		{
 			name:  "environment assumptions get named",
 			needs: []string{"THE ENVIRONMENT IS NOT CLEAN", "failure mode is the finding"},
 		},
