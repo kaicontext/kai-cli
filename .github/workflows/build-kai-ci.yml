@@ -256,6 +256,9 @@ jobs:
     needs: build
     if: ${{ inputs.pin != 'none' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write # dispatch review-regressions for the before/after
     steps:
       - name: Mint App token for kai-server
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -368,3 +371,34 @@ jobs:
           Pinning stays a human decision on purpose — this PR removes the laptop build and the hand-copied digest, not the review. Check what changed in the binaries before merging: the reviewer's prompts, model choice and budgets live inside this image, so a bump can change what Kai says on every pull request.
           EOF
           )"
+
+      # Measure the repin before anyone merges it: replay the regression
+      # corpus on the kai-cli this image carries and on the one production pins
+      # today, and post the before/after on the pin PR (review-regressions.yml,
+      # PIN mode). The baseline is read from the last merged pin PR's "Built
+      # from" line, which this job writes. Best effort: a failed dispatch never
+      # fails the pin.
+      - name: Request the before/after on the pin PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          DISPATCH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          PROVENANCE: ${{ needs.build.outputs.provenance }}
+        run: |
+          set -uo pipefail
+          BR="kai-ci/pin-${DIGEST:7:12}"
+          PR="$(gh pr list --repo kaicontext/kai-server --head "$BR" --state open --json number --jq '.[0].number // empty')"
+          NEW_REF="$(grep -oE 'kai-cli=[^@ ]+' <<<"$PROVENANCE" | head -1 | cut -d= -f2)"
+          # By head branch, not by search: the search index lags and misses.
+          LAST="$(gh pr list --repo kaicontext/kai-server --state merged --limit 50 --json number,headRefName \
+                    --jq 'map(select(.headRefName | startswith("kai-ci/pin-")))[0].number // empty')"
+          BASE_REF=""
+          [ -n "$LAST" ] && BASE_REF="$(gh pr view "$LAST" --repo kaicontext/kai-server --json body --jq .body \
+                                          | grep -oE 'kai-cli=[^@ ]+' | head -1 | cut -d= -f2)"
+          if [ -z "$PR" ] || [ -z "$NEW_REF" ] || [ -z "$BASE_REF" ]; then
+            echo "::warning::no before/after: pr='$PR' new='$NEW_REF' baseline='$BASE_REF'"; exit 0
+          fi
+          GH_TOKEN="$DISPATCH_TOKEN" gh workflow run review-regressions.yml --repo "${{ github.repository }}" \
+            -f kai_ref="$NEW_REF" -f baseline_ref="$BASE_REF" -f pin_pr="$PR" \
+            && echo "requested before/after on kai-server#$PR: $BASE_REF -> $NEW_REF" \
+            || echo "::warning::could not dispatch review-regressions"
