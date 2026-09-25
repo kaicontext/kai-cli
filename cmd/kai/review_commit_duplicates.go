@@ -26,8 +26,15 @@ import (
 
 // rcRepeatOpeners are the ways a bullet announces it repeats the one before.
 var rcRepeatOpeners = []string{
-	"same ", "the same ", "likewise", "as above", "ditto", "identical ", "same:", "same;",
+	"same ", "the same ", "same:", "same;", "same.", "same,", "same —", "same -",
+	"likewise", "similarly", "as above", "as in ", "ditto", "identical ",
 }
+
+// rcMinFoldWords is the shortest sentence folded for being repeated word for
+// word. A terse repeat ("missing error check") is a pattern, not proof of one
+// cause; a sentence long enough to describe a mechanism, repeated verbatim at
+// another place, is the same failure described twice.
+const rcMinFoldWords = 8
 
 var rcIssueLeadRe = regexp.MustCompile(`^\s*` + "`?" + `[A-Za-z0-9_./\-]+\.[A-Za-z0-9]+:\d+[0-9,\- ]*` + "`?" + `\s*(?:—|–|--|-|:)?\s*`)
 
@@ -118,7 +125,7 @@ func rcMergeDuplicateIssues(draft string) (string, []string) {
 		case !hasLoc:
 		case rcIsRepeat(sentence) && len(bullets) > 0:
 			into = bullets[len(bullets)-1]
-		case bySentence[norm] != nil && norm != "":
+		case bySentence[norm] != nil && len(strings.Fields(norm)) >= rcMinFoldWords:
 			into = bySentence[norm]
 		}
 		if into != nil {

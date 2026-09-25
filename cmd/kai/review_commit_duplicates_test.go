@@ -74,6 +74,28 @@ func TestIdenticalSentencesAtDifferentPlacesAreOneIssue(t *testing.T) {
 
 // Different defects that share words stay separate: merging is only for a
 // bullet that says it repeats, or one that repeats word for word.
+func TestRepeatOpenersCoverPunctuationAndSynonyms(t *testing.T) {
+	for _, s := range []string{"Same. Zoho CRM stores it too.", "Similarly, Zoho CRM stores the Response.", "Same — Zoho CRM stores it too.", "As in HubSpot, the Response is stored."} {
+		if !rcIsRepeat(s) {
+			t.Errorf("not recognised as a repeat: %q", s)
+		}
+	}
+	for _, s := range []string{"Samesite is not set on the cookie.", "Sameness of ids is never checked before the merge."} {
+		if rcIsRepeat(s) {
+			t.Errorf("a sentence that merely starts with 'same' was taken for a repeat: %q", s)
+		}
+	}
+}
+
+// A terse sentence repeated at two places is a pattern, not proof of one
+// cause, and is left for the reviewer.
+func TestTerseRepeatsAreNotFolded(t *testing.T) {
+	in := rcTestReview("internal/a.go:10 — missing error check.", "internal/b.go:20 — missing error check.")
+	if out, notes := rcMergeDuplicateIssues(in); out != in || notes != nil {
+		t.Fatalf("terse repeats were folded: %q", notes)
+	}
+}
+
 func TestDistinctDefectsAreNotMerged(t *testing.T) {
 	distinct := []string{
 		"services/src/main/java/org/keycloak/services/resources/admin/permissions/GroupPermissionsV2.java:70 — canManage() checks VIEW and MANAGE, so view-only callers pass it.",
