@@ -1,0 +1,107 @@
+{
+  "about": "Regression cases for kai review-commit, taken from Martian's Code Review Bench (github.com/withmartian/code-review-benchmark, offline/golden_comments) and Kai's own findings on the 2026-09-24 run (the jschatz1/*__kai__PR*__20260924 forks, PR #1). base/head are the fork's PR #1. 'expect' is a golden comment Kai must publish: a published claim matches when it names the file and contains one of 'any' (case-insensitive). 'forbid' is a finding Kai published and must not: any published claim that names the file and contains one of 'any' fails the case. 'at_most' caps how many published claims may match, for one root cause posted several times. Run with scripts/review-regressions.sh.",
+  "cases": [
+    {
+      "id": "calcom-14943",
+      "upstream": "https://github.com/calcom/cal.com/pull/14943",
+      "repo": "jschatz1/cal_dot_com__cal.com__kai__PR14943__20260924",
+      "base": "917c7b0764f4c6bfdca95db2c5f73dbfdbe11757",
+      "head": "c790227e0cda780e6fea9bb03af27948d9e286b9",
+      "expect": [
+        {"issue": "P1-concurrency", "file": "scheduleSMSReminders.ts", "any": ["atomic", "concurren", "race condition", "lost update", "lose increments", "stale value", "two requests", "simultaneous"],
+         "golden": "retryCount: reminder.retryCount + 1 reads a possibly stale value and can lose increments under concurrency; use an atomic increment."}
+      ],
+      "forbid": [
+        {"issue": "P1-speculation", "file": "scheduleSMSReminders.ts", "any": ["dormant", "is ever added", "ever added", "if retry-incrementing is ever"],
+         "was": "New retryCount > 1 deletion branch omits the method: SMS guard; dormant today but will silently delete email/whatsapp reminders if retry-incrementing is ever added to those paths."}
+      ]
+    },
+    {
+      "id": "calcom-10600",
+      "upstream": "https://github.com/calcom/cal.com/pull/10600",
+      "repo": "jschatz1/cal_dot_com__cal.com__kai__PR10600__20260924",
+      "base": "efa6d464a38e60ceeeb88f40668c1c4ac4bfaf54",
+      "head": "54486a059cd2032042189bb565646ba4e0f6bd61",
+      "expect": [
+        {"issue": "P1-concurrency", "file": "next-auth-options.ts", "any": ["concurren", "race condition", "more than once", "simultaneous", "atomic", "two requests", "twice"],
+         "golden": "backupCodes are decrypted and mutated in memory before being written back; two concurrent logins with the same code can both pass, so a one-time code is accepted more than once."}
+      ],
+      "forbid": [
+        {"issue": "P2-noise", "file": "BackupCode.tsx", "any": ["minLength", "maxLength"],
+         "was": "minLength/maxLength are native constraint attributes, not zod validation."}
+      ]
+    },
+    {
+      "id": "calcom-11059",
+      "upstream": "https://github.com/calcom/cal.com/pull/11059",
+      "repo": "jschatz1/cal_dot_com__cal.com__kai__PR11059__20260924",
+      "base": "bc89fe00ea84d20bedcec782f0701b9711dc8201",
+      "head": "9fde0e906897cc0f4f71793f647dd629faba3317",
+      "expect": [
+        {"issue": "P1-contracts", "file": "CalendarService.ts", "any": ["res.data", "res?.data", "Response", "refreshOAuthTokens"],
+         "golden": "refreshFunction returns the fetch Response in sync mode, but callers such as GoogleCalendarService expect res.data / an integration-specific token."},
+        {"issue": "P1-contracts", "file": "", "any": ["credentialId", "userId"],
+         "golden": "refreshOAuthTokens is passed credentialId instead of userId, breaking the credential-sync user lookup."},
+        {"issue": "P1-contracts", "file": "", "any": ["jsforce", "stale", "instance_url"],
+         "golden": "jsforce.Connection is created with the stale credentialKey.access_token/instance_url after a token refresh."}
+      ],
+      "forbid": [
+        {"issue": "P1-speculation", "file": "constants.ts", "any": ["footgun", "future"],
+         "was": "APP_CREDENTIAL_SHARING_ENABLED holds the encryption-key string, not a boolean; latent footgun for future strict comparisons."},
+        {"issue": "P2-noise", "file": "app-credential.ts", "any": ["inconsistent with every other handler", "method guard"],
+         "was": "no HTTP method guard and unhandled Zod parse throw; inconsistent with every other handler."}
+      ],
+      "at_most": [
+        {"issue": "P2-duplicates", "any": ["Axios/Response mismatch", "same Axios", "returns a `fetch Response`", "fetch Response"], "max": 1,
+         "was": "HubSpot, Zoho Bigin and Zoho CRM each got their own finding for one refreshOAuthTokens return-shape mismatch."}
+      ]
+    },
+    {
+      "id": "keycloak-36880",
+      "upstream": "https://github.com/keycloak/keycloak/pull/36880",
+      "repo": "jschatz1/keycloak__keycloak__kai__PR36880__20260924",
+      "base": "f257c9eb595a074ee8c3ce1dce883c008bb216eb",
+      "head": "1950a511026d520a7329c7b6b9ee60a4af8f8b55",
+      "expect": [
+        {"issue": "P1-contracts", "file": "ClientPermissionsV2.java", "any": ["findByName", "getClientId", "owner"],
+         "golden": "hasPermission looks the per-client resource up with findByName(server, client.getId(), ...) but getOrCreateResource creates it with the owner set to resourceServer.getClientId(), so the lookup never finds it."},
+        {"issue": "P1-contracts", "file": "ClientPermissionsV2.java", "any": ["getName", "getClientById", "client id", "client IDs"],
+         "golden": "getClientsWithPermission returns resource.getName() of the type-level resource, while getRoleIdsWithPermissions expects client IDs for realm.getClientById."}
+      ],
+      "forbid": [
+        {"issue": "P2-noise", "file": "PermissionClientTest.java", "any": ["never asserts", "unverified"],
+         "was": "testMapRolesAndCompositesOnlyOneClient never asserts that an admin with MANAGE_CLIENTS is still allowed."}
+      ]
+    },
+    {
+      "id": "keycloak-37038",
+      "upstream": "https://github.com/keycloak/keycloak/pull/37038",
+      "repo": "jschatz1/keycloak__keycloak__kai__PR37038__20260924",
+      "base": "a69e03fef8ff2ed8f65ab103df38659aeca35e1a",
+      "head": "7355f05e6aafe2a7acc6434fb40c686665416606",
+      "expect": [
+        {"issue": "P1-contracts", "file": "GroupPermissionsV2.java", "any": ["getGroupIdsWithViewPermission", "group id", "group IDs", "resource id"],
+         "golden": "getGroupIdsWithViewPermission passes and collects groupResource.getId(), but hasPermission resolves resources by name (a group id) and callers use the result as group IDs."},
+        {"issue": "P1-regression-guard", "file": "GroupPermissionsV2.java", "any": ["canManage", "VIEW"],
+         "golden": "canManage() falls back to VIEW and MANAGE scopes, so view-only users pass it. (Kai found this on 2026-09-24; keep it.)"}
+      ]
+    },
+    {
+      "id": "keycloak-37429",
+      "upstream": "https://github.com/keycloak/keycloak/pull/37429",
+      "repo": "jschatz1/keycloak__keycloak__kai__PR37429__20260924",
+      "base": "a3108aae34748536e06b0b0d413a6d3c75fb85c8",
+      "head": "02f48f776f43734d1ac8914d3ad6a7115acdcb33",
+      "expect": [
+        {"issue": "P1-regression-guard", "file": "messages_lt.properties", "any": ["Italian", "Lithuanian"],
+         "golden": "The translation is in Italian instead of Lithuanian. (Kai found this on 2026-09-24; keep it.)"}
+      ],
+      "forbid": [
+        {"issue": "P1-hostname", "file": "", "any": ["malicious.com"],
+         "was": "this change introduces the host malicious.com, which no file outside the change mentions."},
+        {"issue": "P2-noise", "file": "VerifyMessagePropertiesTest.java", "any": ["assert only", "no assertion"],
+         "was": "tests assert only that some Illegal HTML message exists."}
+      ]
+    }
+  ]
+}
