@@ -16,6 +16,10 @@ import (
 // principle of rcFilterFastIssues — the prompt is the contract, the code makes
 // it true.
 //
+// The phrases name a future CODE change. A future runtime event ("if a future
+// request arrives before the lock is taken") is a trigger that exists today,
+// so bare "if a future" is not on the list.
+//
 // The phrases are the future-change wording itself, not hedges in general: a
 // hedge ("appears", "may") is the fast pass's filter; here the reviewer is
 // sure, and sure about a trigger that does not exist yet. Each was checked
@@ -25,7 +29,7 @@ var rcSpeculativePhrases = []string{
 	"latent footgun", "footgun for future", "footgun if",
 	"is ever added", "are ever added", "is ever introduced", "are ever introduced",
 	"is ever reordered", "are ever reordered", "is ever changed to", "is ever refactored",
-	"if someone later", "if someone ever", "should anyone later", "if a future",
+	"if someone later", "if someone ever", "should anyone later",
 	"a future change", "a future refactor", "a future caller", "future strict",
 	"a future step", "a future edit", "a future version", "a future maintainer",
 	"a future contributor", "future non-terminal", "future code path",

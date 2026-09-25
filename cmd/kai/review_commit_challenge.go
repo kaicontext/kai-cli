@@ -514,8 +514,10 @@ func rcResponseText(resp provider.Response) string {
 // afterwards makes its allegation unresolved — it never withholds the review.
 func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	// An allegation whose trigger is a future change is refuted before the
-	// gate sees it (rcWithoutSpeculativeIssues), and recorded as refuted so
-	// the bundle still says what was withheld and why.
+	// gate sees it (rcWithoutSpeculativeIssues). When the gate answers, the
+	// refutations are recorded with its result so the bundle says what was
+	// withheld and why; when the gate fails, the whole draft is withheld and
+	// there is no result to record them on.
 	draft, speculative := rcWithoutSpeculativeIssues(draft)
 	res, err := rcChallengeDraft(ctx, prov, model, draft, sources, sandbox)
 	if err != nil || len(speculative) == 0 {

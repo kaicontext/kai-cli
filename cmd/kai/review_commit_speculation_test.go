@@ -29,6 +29,7 @@ var rcRealBenchmarkIssues = []string{
 	"apps/web/pages/api/webhook/app-credential.ts:24 — the webhook secret is compared with !==, a timing side channel on an authorization boundary.",
 	"internal/cache/cache.go:88 — if the entry is ever evicted between Get and Set, the second writer overwrites the first; two requests hit this on every cold start.",
 	"apps/web/lib/booking.ts:40 — a booking date in the future is compared as a string, so 2026-10-01 sorts before 2026-9-30 and the slot is rejected.",
+	"packages/features/bookings/lib/handleNewBooking.ts:210 — if a future request arrives before the first commits, both pass the availability check and the slot is double-booked.",
 }
 
 func TestSpeculativePhraseCatchesTheBenchmarkCases(t *testing.T) {
