@@ -78,7 +78,7 @@ THE ENVIRONMENT IS NOT CLEAN. Correct on the author's machine is not correct. Na
 - A NICETY THAT CAN BE FATAL. An optimisation whose failure aborts the whole operation. A failed baseline commit failed kai init outright, and commit signing configured with no usable key is enough to cause it.
 - WRITES NOBODY ASKED FOR. Does it touch git history, a dotfile, or anything outside its own state? Name it, and say whether there is an opt-out.
 
-NEW DEFAULTS POINT SOMEWHERE. A new config default that is a URL, host, e-mail address, or path ships to every user who never sets the variable. Confirm the target exists and that something in this repo, or a repo you can see, serves it; a default pointing at a domain nobody here owns is a defect. (The pipeline also greps for hosts the change introduces that nothing else mentions and files them as risks; you still have to say whether the target is real.)
+NEW DEFAULTS POINT SOMEWHERE. A new config default that is a URL, host, e-mail address, or path ships to every user who never sets the variable. Confirm the target exists and that something in this repo, or a repo you can see, serves it; a default pointing at a domain nobody here owns is a defect. But a host being new to the repository is NOT a defect by itself. Report a URL or host only with a concrete incorrect URL — a typo or the wrong environment of a host the code already uses, a user-facing default on a domain nobody here owns, a path the target does not serve (check with kai_web_search) — or a code path that fails because of it. A host in a test fixture or example data, a developer script, docs, or a provider's documented endpoint (an OAuth authority, a cloud API) is not a finding on its own. HOSTS THIS CHANGE INTRODUCES, when present, lists the new ones for you to check; it is context, not a finding list.
 
 Then write the review the way a good colleague would leave it on the PR:
 - Open with one line naming your scope: the repo and revision you read, plus anything the change obviously touches that you could NOT read (another repo, a client, a deployed config, a provider's behavior). Then a short paragraph: what the change actually does, and your overall take.
@@ -366,7 +366,8 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 
 		fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
 		phase = time.Now()
-		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, diff, rcPathsOf(files))
+		hosts := rcNewHostsBlock(rcNewHosts(hash, diff, rcPathsOf(files), rcFilesMentioningHost))
+		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, hosts, diff, rcPathsOf(files))
 		if err != nil {
 			return err
 		}
@@ -468,10 +469,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// path:line resolves to the source line itself as the lookup, or the
 	// claim is held when that location does not exist at this revision (the
 	// one thing the reviewer was asked to pin down could not be found where
-	// it said). A DECISION is grounded by construction. URL hosts the change
-	// introduces that nothing else in the tree mentions are added as risks
-	// of their own — with the grep as their lookup — and join Intent.Risks so
-	// the intent panel shows them too. The inbox denormalizes RiskCount from
+	// it said). A DECISION is grounded by construction. (URL hosts the change
+	// introduces are no longer added here: they reach the reviewer as context
+	// — rcNewHostsBlock — and become findings only through its ISSUES.) The
+	// inbox denormalizes RiskCount from
 	// grounded risk-tagged claims, so held claims are visible but do not
 	// count.
 	claims := make([]finding.Claim, 0, len(flags))
@@ -481,10 +482,6 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	}
 	for _, d := range decisions {
 		claims = append(claims, rcDecisionClaim(d))
-	}
-	for _, c := range rcNewHostClaims(hash, diff, changedPaths, rcFilesMentioningHost) {
-		claims = append(claims, c)
-		flags = append(flags, c.Statement)
 	}
 
 	f := finding.Finding{
@@ -724,7 +721,7 @@ func rcRepoHeader(repo string) string {
 // injection seeds turn 0 with real context, the session store and run log make
 // the run inspectable (`kai run summary`), and ApplyEffort honors KAI_SPEED.
 // rcReviewSystem rides in Options.System underneath the mode prompt.
-func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, diff string, changed []string) (string, *rcIncomplete, error) {
+func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, hosts, diff string, changed []string) (string, *rcIncomplete, error) {
 	publicationCtx := ctx
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
@@ -782,6 +779,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		fmt.Fprintf(os.Stderr, "  dependencies: %d file(s) fetched, %d module(s) unread (%s)\n",
 			len(src), len(unresolved), time.Since(phase).Round(time.Millisecond))
 	}
+	user.WriteString(hosts)
 	user.WriteString("INTENT:\n")
 	user.WriteString(strings.TrimSpace(intent))
 	user.WriteString("\n\nDIFF:\n")
