@@ -69,6 +69,9 @@ func TestReviewRegressionCorpusIsWellFormed(t *testing.T) {
 			if e.Max == nil {
 				t.Errorf("%s: at_most %s has no max", c.ID, e.Issue)
 			}
+			if e.Was == "" {
+				t.Errorf("%s: at_most %s does not say what was published", c.ID, e.Issue)
+			}
 		}
 	}
 }
