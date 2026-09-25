@@ -28,7 +28,9 @@
       ],
       "forbid": [
         {"issue": "P2-noise", "file": "BackupCode.tsx", "any": ["minLength", "maxLength"],
-         "was": "minLength/maxLength are native constraint attributes, not zod validation."}
+         "was": "minLength/maxLength are native constraint attributes, not zod validation."},
+        {"issue": "P1-speculation", "file": "disable.ts", "any": ["a future non-terminal", "a future step"],
+         "was": "disable path relies on terminal-wipe for single-use; a future non-terminal step would break the exactly-once invariant. (baseline run 2026-09-25, v0.35.89)"}
       ]
     },
     {

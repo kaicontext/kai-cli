@@ -33,6 +33,30 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 			needs: []string{"SKIPS for an environmental reason"},
 		},
 		{
+			// A defect's trigger must exist today (benchmark 2026-09-24:
+			// Cal.com #14943 "dormant today…", #11059 "future footgun").
+			name:  "a defect needs a trigger that exists today",
+			needs: []string{"A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY", "reachable trigger", "failure mechanism", "ANY(array)", "never goes in ISSUES"},
+		},
+		{
+			// Missing tests, intent and consistency points took over the
+			// defect list on the 2026-09-24 benchmark.
+			name:  "tests, intent and consistency are not defects by themselves",
+			needs: []string{"TESTS, INTENT AND CONSISTENCY ARE NOT DEFECTS BY THEMSELVES", "specific missing requirement", "concrete regression risk", "#36880", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
+		},
+		{
+			// Contract mismatches missed in files the review opened
+			// (Keycloak #36880/#37038, Cal.com #11059, 2026-09-24).
+			name:  "trace what crosses a call",
+			needs: []string{"TRACE WHAT CROSSES A CALL", "KIND of identifier", "RETURN SHAPE", "FRESHNESS", "#36880", "#37038", "#11059", "name both ends"},
+		},
+		{
+			// Concurrency bugs missed on the benchmark (Cal.com #14943,
+			// #10600, 2026-09-24).
+			name:  "two requests at once",
+			needs: []string{"TWO REQUESTS AT ONCE", "run it twice at the same time", "#14943", "#10600", "atomic update", "Name the two requests and the interleaving"},
+		},
+		{
 			name:  "environment assumptions get named",
 			needs: []string{"THE ENVIRONMENT IS NOT CLEAN", "failure mode is the finding"},
 		},
