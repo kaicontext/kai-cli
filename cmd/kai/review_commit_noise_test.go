@@ -36,3 +36,9 @@ func TestFastPassChecksContractsVisibleInTheDiff(t *testing.T) {
 		}
 	}
 }
+
+func TestFastPassChecksReadCheckWriteRaces(t *testing.T) {
+	if !strings.Contains(rcFastReviewSystem, "two concurrent requests would both pass") {
+		t.Error("fast-pass prompt does not check read/check/write races")
+	}
+}

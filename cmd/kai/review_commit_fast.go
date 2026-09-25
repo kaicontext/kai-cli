@@ -66,6 +66,7 @@ That shapes what you are for. Report what is VISIBLE IN THE DIFF ITSELF — the 
 - Off-by-one, inverted conditions, nil dereference on a value the diff itself shows can be nil, a loop variable captured by a closure, a slice reused after append.
 - An error created and dropped, returned to a caller that ignores it, or wrapped into the wrong branch; a defer that never runs because it sits after the return.
 - A lock taken and not released on every path, state mutated outside the lock the surrounding code uses, a goroutine/ticker/file/connection opened in the diff with no visible stop or close.
+- A read, check and write of shared state that two concurrent requests would both pass: a counter set to the value read plus one instead of an atomic increment, a one-time code checked and then written back without a transaction or conditional update.
 - A secret, token, password, session id, HMAC or signature compared with ==/!= instead of a constant-time compare.
 - Missing validation on an input the diff newly trusts; a new branch beside an existing one that skips a guard the older branch right there in the diff still has.
 - A test the diff presents as the proof of its fix that would pass on the unfixed code: it calls the thing and discards the answer, asserts that a mechanism was configured rather than that the behaviour happened, or skips for an environmental reason. A path without a test, a style or consistency point, or a change the author says is intended is not an issue.

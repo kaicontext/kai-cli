@@ -51,6 +51,12 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 			needs: []string{"TRACE WHAT CROSSES A CALL", "KIND of identifier", "RETURN SHAPE", "FRESHNESS", "#36880", "#37038", "#11059", "name both ends"},
 		},
 		{
+			// Concurrency bugs missed on the benchmark (Cal.com #14943,
+			// #10600, 2026-09-24).
+			name:  "two requests at once",
+			needs: []string{"TWO REQUESTS AT ONCE", "run it twice at the same time", "#14943", "#10600", "atomic update", "Name the two requests and the interleaving"},
+		},
+		{
 			name:  "environment assumptions get named",
 			needs: []string{"THE ENVIRONMENT IS NOT CLEAN", "failure mode is the finding"},
 		},
