@@ -45,6 +45,12 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 			needs: []string{"TESTS, INTENT AND CONSISTENCY ARE NOT DEFECTS BY THEMSELVES", "specific missing requirement", "concrete regression risk", "#36880", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
 		},
 		{
+			// Contract mismatches missed in files the review opened
+			// (Keycloak #36880/#37038, Cal.com #11059, 2026-09-24).
+			name:  "trace what crosses a call",
+			needs: []string{"TRACE WHAT CROSSES A CALL", "KIND of identifier", "RETURN SHAPE", "FRESHNESS", "#36880", "#37038", "#11059", "name both ends"},
+		},
+		{
 			name:  "environment assumptions get named",
 			needs: []string{"THE ENVIRONMENT IS NOT CLEAN", "failure mode is the finding"},
 		},

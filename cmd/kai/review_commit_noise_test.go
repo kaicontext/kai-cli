@@ -25,3 +25,9 @@ func TestGateAndFastPassDoNotPublishTestAndIntentNoise(t *testing.T) {
 		t.Error("the review prompt still makes every untested fix a finding")
 	}
 }
+
+func TestFastPassChecksContractsVisibleInTheDiff(t *testing.T) {
+	if !strings.Contains(rcFastReviewSystem, "a value whose producer and consumer are both in the diff and disagree") {
+		t.Error("fast-pass prompt does not check producer/consumer agreement")
+	}
+}
