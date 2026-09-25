@@ -70,13 +70,10 @@ func rcWithAlso(item string, locs []string) string {
 			return item[:i+j] + ", " + extra + item[i+j:]
 		}
 	}
-	// The bullet's own closing period stays where the author put it: after
-	// the also-list, not swallowed by it.
-	trimmed := strings.TrimRight(item, " ")
-	if strings.HasSuffix(trimmed, ".") {
-		return strings.TrimSuffix(trimmed, ".") + " (also: " + extra + ")."
-	}
-	return trimmed + " (also: " + extra + ")"
+	// Every merged bullet ends the same way: the sentence, its also-list,
+	// then one full stop — whether or not the author wrote one.
+	trimmed := strings.TrimSuffix(strings.TrimRight(item, " "), ".")
+	return trimmed + " (also: " + extra + ")."
 }
 
 // rcContentWords are a sentence's words of four letters or more, lowercased:

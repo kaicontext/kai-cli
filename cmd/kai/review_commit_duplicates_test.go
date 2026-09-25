@@ -109,7 +109,7 @@ func TestAlsoListKeepsTheBulletsFullStop(t *testing.T) {
 	if got := rcWithAlso("a.go:1 — the token is stale.", []string{"b.go:2"}); got != "a.go:1 — the token is stale (also: b.go:2)." {
 		t.Errorf("got %q", got)
 	}
-	if got := rcWithAlso("a.go:1 — the token is stale", []string{"b.go:2"}); got != "a.go:1 — the token is stale (also: b.go:2)" {
+	if got := rcWithAlso("a.go:1 — the token is stale", []string{"b.go:2"}); got != "a.go:1 — the token is stale (also: b.go:2)." {
 		t.Errorf("got %q", got)
 	}
 }
