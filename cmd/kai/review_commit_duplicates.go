@@ -16,7 +16,7 @@ import (
 // two shapes a duplicate actually takes in a draft:
 //
 //   - a bullet that says it is a repeat ("same …", "likewise", "as above"),
-//     which is folded into the bullet before it;
+//     which is folded into the most recent bullet it shares words with;
 //   - a bullet whose sentence is word for word another's at a different
 //     location, which is folded into the first.
 //
@@ -70,7 +70,49 @@ func rcWithAlso(item string, locs []string) string {
 			return item[:i+j] + ", " + extra + item[i+j:]
 		}
 	}
-	return strings.TrimRight(item, " .") + " (also: " + extra + ")"
+	// The bullet's own closing period stays where the author put it: after
+	// the also-list, not swallowed by it.
+	trimmed := strings.TrimRight(item, " ")
+	if strings.HasSuffix(trimmed, ".") {
+		return strings.TrimSuffix(trimmed, ".") + " (also: " + extra + ")."
+	}
+	return trimmed + " (also: " + extra + ")"
+}
+
+// rcContentWords are a sentence's words of four letters or more, lowercased:
+// enough to tell whether a "same …" bullet is about the bullet it follows.
+func rcContentWords(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_')
+	}) {
+		if len(w) >= 4 {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+// rcRepeatTarget picks the bullet a "same …" repeat refers to: the most recent
+// one sharing at least two content words with it. A repeat that shares
+// nothing with any earlier bullet is left alone rather than folded into
+// whatever happened to precede it.
+func rcRepeatTarget[T any](sentence string, earlier []T, text func(T) string) (T, bool) {
+	words := rcContentWords(sentence)
+	delete(words, "same")
+	for i := len(earlier) - 1; i >= 0; i-- {
+		shared := 0
+		for w := range rcContentWords(text(earlier[i])) {
+			if words[w] {
+				shared++
+			}
+		}
+		if shared >= 2 {
+			return earlier[i], true
+		}
+	}
+	var zero T
+	return zero, false
 }
 
 // rcMergeDuplicateIssues folds repeated ISSUES bullets into the one they
@@ -124,7 +166,9 @@ func rcMergeDuplicateIssues(draft string) (string, []string) {
 		switch {
 		case !hasLoc:
 		case rcIsRepeat(sentence) && len(bullets) > 0:
-			into = bullets[len(bullets)-1]
+			if t, ok := rcRepeatTarget(sentence, bullets, func(b *bullet) string { return b.item }); ok {
+				into = t
+			}
 		case bySentence[norm] != nil && len(strings.Fields(norm)) >= rcMinFoldWords:
 			into = bySentence[norm]
 		}

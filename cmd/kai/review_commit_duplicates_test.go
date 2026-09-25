@@ -89,6 +89,31 @@ func TestRepeatOpenersCoverPunctuationAndSynonyms(t *testing.T) {
 
 // A terse sentence repeated at two places is a pattern, not proof of one
 // cause, and is left for the reviewer.
+// A repeat folds into the cause it names, not into an unrelated bullet that
+// happens to sit between them; one that names nothing earlier is left alone.
+func TestRepeatFoldsIntoTheCauseItNames(t *testing.T) {
+	unrelated := "apps/web/pages/api/webhook/app-credential.ts:24 — the webhook secret is compared with !==, a timing side channel."
+	in := rcTestReview(rc11059Issues[1], unrelated, rc11059Issues[2])
+	out, _ := rcMergeDuplicateIssues(in)
+	_, issues, _, _, _, _ := rcParseReviewOutput(out)
+	if len(issues) != 2 || !strings.Contains(issues[0], "zoho-bigin/lib/CalendarService.ts:96") || strings.Contains(issues[1], "(also:") {
+		t.Fatalf("issues = %q, want the Zoho repeat on HubSpot's bullet, not on the webhook one", issues)
+	}
+	orphan := rcTestReview(unrelated, "internal/a.go:3 — same problem here.")
+	if got, _ := rcMergeDuplicateIssues(orphan); got != orphan {
+		t.Error("a repeat that names nothing earlier was folded")
+	}
+}
+
+func TestAlsoListKeepsTheBulletsFullStop(t *testing.T) {
+	if got := rcWithAlso("a.go:1 — the token is stale.", []string{"b.go:2"}); got != "a.go:1 — the token is stale (also: b.go:2)." {
+		t.Errorf("got %q", got)
+	}
+	if got := rcWithAlso("a.go:1 — the token is stale", []string{"b.go:2"}); got != "a.go:1 — the token is stale (also: b.go:2)" {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestTerseRepeatsAreNotFolded(t *testing.T) {
 	in := rcTestReview("internal/a.go:10 — missing error check.", "internal/b.go:20 — missing error check.")
 	if out, notes := rcMergeDuplicateIssues(in); out != in || notes != nil {
