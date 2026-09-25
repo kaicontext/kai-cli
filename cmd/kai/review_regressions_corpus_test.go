@@ -72,6 +72,11 @@ func TestReviewRegressionCorpusIsWellFormed(t *testing.T) {
 			if e.Was == "" {
 				t.Errorf("%s: at_most %s does not say what was published", c.ID, e.Issue)
 			}
+			// The grader counts at_most matches across the whole review and
+			// ignores "file"; one given here would be silently dropped.
+			if e.File != "" {
+				t.Errorf("%s: at_most %s names a file, which the grader ignores", c.ID, e.Issue)
+			}
 		}
 	}
 }
