@@ -85,7 +85,7 @@ func TestReviewCitationLiveRepairDesktop418(t *testing.T) {
 	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Check these two issues:\n" + rcFalseCDIssue + "\n" + rcEscapeIssue + "\n" + rcRenderSource(1, sources[0]) + rcRenderSource(2, sources[1])}}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	got, err := rcValidateOrRepair(ctx, prov, model, msgs, failed, raw, "original", rcCDIssues, nil, sources)
+	got, err := rcValidateOrRepair(ctx, prov, model, rcChallengeSystemPrompt(false), msgs, failed, raw, "original", rcCDIssues, nil, sources)
 	if err != nil {
 		t.Fatal(err)
 	}
