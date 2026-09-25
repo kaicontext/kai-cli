@@ -98,36 +98,39 @@ func TestSpeculativeIssuesAreNeverPublished(t *testing.T) {
 	}
 }
 
-// The draft was scored with its speculative issues in it. Once they are gone
-// the published score must not still say "small fixes first".
-func TestAllSpeculativeDraftIsNotScoredAsNeedingFixes(t *testing.T) {
+// The draft was written about its speculative issues: prose, SUMMARY and
+// score. Once they are gone none of that may be published.
+func TestAllSpeculativeDraftPublishesNoTraceOfTheRefutedConcerns(t *testing.T) {
 	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
 		t.Fatal("the gate was called")
 		return provider.Response{}, nil
 	}}
-	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcSpeculativeBenchmarkIssues...), nil, nil)
+	draft := "Two defects: the SMS-only deletion branch and the credential flag.\n" + rcReviewDataMarker +
+		"\nINTENT_MATCH: partial\nMERGE_READY: 3\nSUMMARY: 2 defects need small fixes before merge.\nISSUES:\n" +
+		rcTestBullets(rcSpeculativeBenchmarkIssues[:2])
+	res, err := rcChallengeReview(context.Background(), p, "test", draft, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, r, _ := rcParseReviewOutput(res.Review); int(r) != 4 {
-		t.Errorf("readiness = %d, want 4 (no defect left; not re-examined, so not 5)", int(r))
+	for _, stale := range []string{"Two defects", "2 defects need small fixes", "SMS-only deletion branch", "dormant today"} {
+		if strings.Contains(res.Review, stale) {
+			t.Errorf("published review still carries %q:\n%s", stale, res.Review)
+		}
 	}
-	// A draft that keeps a real issue keeps the reviewer's score for the gate.
-	mixed := rcTestReview(rcSpeculativeBenchmarkIssues[0], rcRealBenchmarkIssues[0])
-	out, _ := rcWithoutSpeculativeIssues(mixed)
-	if got := rcLiftReadinessAfterSpeculation(out); got != out {
-		t.Error("a draft with a real issue left had its score changed")
+	_, issues, _, _, r, note := rcParseReviewOutput(res.Review)
+	if len(issues) != 0 || int(r) != 4 || !strings.Contains(note, "No defect survived review") {
+		t.Errorf("issues=%q readiness=%d summary=%q, want none, 4, and a summary saying nothing survived", issues, int(r), note)
+	}
+	if len(res.Allegations) != 2 || res.Allegations[0].Status != rcStatusRefuted {
+		t.Errorf("allegations = %+v, want both recorded as refuted", res.Allegations)
 	}
 }
 
-// The gate and the fast pass carry the same bar as the deep review.
-func TestGateAndFastPassRefuteFutureTriggers(t *testing.T) {
-	for _, want := range []string{"REFUTE one whose failure needs a future change", "trigger is hypothetical", "supported only when a source establishes"} {
-		if !strings.Contains(rcChallengeSystemHead, want) {
-			t.Errorf("challenge prompt is missing %q", want)
-		}
-	}
-	if !strings.Contains(rcFastReviewSystem, "The trigger must exist today") {
-		t.Error("fast-pass prompt is missing the trigger-today rule")
+// A draft that keeps a real issue goes through the gate with the reviewer's
+// own prose and score.
+func TestDraftWithARealIssueStillGoesToTheGate(t *testing.T) {
+	out, spec := rcWithoutSpeculativeIssues(rcTestReview(rcSpeculativeBenchmarkIssues[0], rcRealBenchmarkIssues[0]))
+	if _, ok := rcReviewWithoutSpeculation(out, spec); ok {
+		t.Error("a draft with a real issue left was assembled without the gate")
 	}
 }

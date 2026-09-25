@@ -110,30 +110,24 @@ func rcWithoutSpeculativeIssues(draft string) (string, []rcAllegationResult) {
 	return draft[:start] + strings.Join(kept, "\n"), dropped
 }
 
-// rcLiftReadinessAfterSpeculation fixes the score of a draft whose every
-// ISSUE was speculative. The reviewer scored the draft WITH those issues, so
-// its MERGE_READY still reads "small fixes first" over a review that now
-// publishes none. The prompt's own rule is that concerns judged not to be
-// defects do not count against the score and that such a review is a 4 or a
-// 5; it is lifted to 4, never to 5, because nothing here re-examined the
-// change. A draft that still has issues or decisions keeps its score: the
-// gate scores those.
-func rcLiftReadinessAfterSpeculation(draft string) string {
-	_, issues, decisions, _, readiness, _ := rcParseReviewOutput(draft)
-	if len(issues) > 0 || len(decisions) > 0 || readiness == finding.ReadinessUnknown || int(readiness) >= 4 {
-		return draft
+// rcReviewWithoutSpeculation is the published review of a draft whose every
+// ISSUE was speculative and which has no DECISIONS: nothing is left for the
+// gate to check, but the draft itself cannot be published either — its prose,
+// SUMMARY and MERGE_READY were written about the concerns that were just
+// refuted, so it would say "two defects, small fixes first" over an empty
+// list. It is assembled the way the gate assembles every review, from the
+// verdicts: no finding, the refutations counted, a summary that says so, and
+// MERGE_READY 4 — concerns judged not to be defects do not count against the
+// score, and not 5, because nothing re-examined the change. ok is false when
+// the draft still has an issue or a decision, which the gate then handles.
+func rcReviewWithoutSpeculation(draft string, speculative []rcAllegationResult) (string, bool) {
+	_, issues, decisions, match, readiness, _ := rcParseReviewOutput(draft)
+	if len(speculative) == 0 || len(issues) > 0 || len(decisions) > 0 {
+		return "", false
 	}
-	start := strings.Index(draft, rcReviewDataMarker)
-	if start < 0 {
-		return draft
+	if readiness == finding.ReadinessUnknown || int(readiness) < 4 {
+		readiness = finding.Readiness(4)
 	}
-	lines := strings.Split(draft[start:], "\n")
-	for i, line := range lines {
-		if key, _, ok := rcMachineLine(strings.TrimSpace(line)); ok && key == "merge_ready" {
-			lines[i] = "MERGE_READY: 4"
-			fmt.Fprintf(os.Stderr, "  every issue was speculative; MERGE_READY %d -> 4\n", int(readiness))
-			return draft[:start] + strings.Join(lines, "\n")
-		}
-	}
-	return draft
+	summary := fmt.Sprintf("No defect survived review: %d concern(s) raised needed a change nobody has made to trigger, so none is reported.", len(speculative))
+	return rcAssembleReview(nil, nil, speculative, nil, match, readiness, summary), true
 }
