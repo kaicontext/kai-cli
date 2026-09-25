@@ -246,9 +246,9 @@ func TestAddedURLHosts(t *testing.T) {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
-func TestNewHostClaims(t *testing.T) {
-	// kai.dev appears only in the changed file → flagged; the partner IdP host
-	// is mentioned by an untouched file → not flagged.
+func TestNewHosts(t *testing.T) {
+	// kai.dev appears only in the changed file → listed; the partner IdP host
+	// is mentioned by an untouched file → not listed.
 	mention := func(_ string, host string) []string {
 		switch host {
 		case "kai.dev":
@@ -258,16 +258,73 @@ func TestNewHostClaims(t *testing.T) {
 		}
 		return nil
 	}
-	claims := rcNewHostClaims("01b3cf323d89eed7", rcHostDiff, []string{"internal/cfg/config.go", "README.md", "internal/api/oauth.go"}, mention)
-	if len(claims) != 1 {
-		t.Fatalf("want 1 claim, got %d: %+v", len(claims), claims)
+	hosts := rcNewHosts("01b3cf323d89eed7", rcHostDiff, []string{"internal/cfg/config.go", "README.md", "internal/api/oauth.go"}, mention)
+	if len(hosts) != 1 || hosts[0].Host != "kai.dev" || hosts[0].Path != "internal/cfg/config.go" || hosts[0].Line != 363 {
+		t.Fatalf("hosts = %+v, want only kai.dev at internal/cfg/config.go:363", hosts)
 	}
-	c := claims[0]
-	if !strings.HasPrefix(c.Statement, "internal/cfg/config.go:363 — ") || !strings.Contains(c.Statement, "kai.dev") {
-		t.Errorf("statement = %q", c.Statement)
+}
+
+// The benchmark's three bogus findings (2026-09-24): a test fixture, a
+// developer script and an OAuth authority, each a host no other file
+// mentioned. They reach the reviewer as context with the bar for reporting
+// them — never as findings of their own.
+func TestNewHostsAreContextNotFindings(t *testing.T) {
+	diff := `diff --git a/services/tests/src/test/java/RedirectTest.java b/services/tests/src/test/java/RedirectTest.java
+--- a/services/tests/src/test/java/RedirectTest.java
++++ b/services/tests/src/test/java/RedirectTest.java
+@@ -40,2 +40,3 @@
+ 	@Test
++	String evil = "https://malicious.com/steal";
+ 	void redirect() {}
+diff --git a/scripts/dev-tunnel.sh b/scripts/dev-tunnel.sh
+--- a/scripts/dev-tunnel.sh
++++ b/scripts/dev-tunnel.sh
+@@ -1,1 +1,2 @@
+ set -e
++open "https://dashboard.tunnelmole.com"
+diff --git a/packages/app-store/office365/api/add.ts b/packages/app-store/office365/api/add.ts
+--- a/packages/app-store/office365/api/add.ts
++++ b/packages/app-store/office365/api/add.ts
+@@ -5,1 +5,2 @@
+ const scopes = ["Calendars.ReadWrite"];
++const authority = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+`
+	nobodyElse := func(string, string) []string { return nil }
+	hosts := rcNewHosts("abc1234", diff, nil, nobodyElse)
+	block := rcNewHostsBlock(hosts)
+	for _, want := range []string{
+		"HOSTS THIS CHANGE INTRODUCES (context, not findings",
+		"services/tests/src/test/java/RedirectTest.java:41 malicious.com",
+		"scripts/dev-tunnel.sh:2 dashboard.tunnelmole.com",
+		"packages/app-store/office365/api/add.ts:6 login.microsoftonline.com",
+		"A host being new to the repository is not a defect.",
+		"concrete incorrect URL or a code path that fails",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block is missing %q:\n%s", want, block)
+		}
 	}
-	if !c.Resolved || !c.Verified || c.Tag != finding.TagRisk || !strings.Contains(c.Lookup, "git grep") {
-		t.Errorf("claim must be a grounded risk with the grep as lookup: %+v", c)
+	if rcNewHostsBlock(nil) != "" {
+		t.Error("no new hosts must add nothing to the reviewer's input")
+	}
+}
+
+// The reviewer is told the same bar, and no longer told the pipeline files
+// new hosts as risks on its behalf.
+func TestReviewPromptRequiresEvidenceForHosts(t *testing.T) {
+	for _, want := range []string{
+		"a host being new to the repository is NOT a defect by itself",
+		"concrete incorrect URL",
+		"a code path that fails because of it",
+		"test fixture",
+		"it is context, not a finding list",
+	} {
+		if !strings.Contains(rcReviewSystem, want) {
+			t.Errorf("review prompt is missing %q", want)
+		}
+	}
+	if strings.Contains(rcReviewSystem, "files them as risks") {
+		t.Error("the prompt still says the pipeline files new hosts as risks")
 	}
 }
 

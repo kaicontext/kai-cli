@@ -408,32 +408,49 @@ func rcFilesMentioningHost(hash, host string) []string {
 	return files
 }
 
-// rcNewHostClaims flags every URL host the change introduces that no file
-// outside the change mentions at the reviewed revision. It is a grounded risk
-// with the grep as its lookup: the host may be fine, but nobody has said so.
-func rcNewHostClaims(hash, diff string, changedPaths []string, filesMentioning func(hash, host string) []string) []finding.Claim {
+// rcNewHosts returns the URL hosts the change introduces that no file outside
+// the change mentions at the reviewed revision.
+//
+// These used to be published straight away as grounded risks, one per host,
+// with the grep as their lookup. A host being new to the repository is not a
+// defect, and the claim said nothing about whether it was wrong: the
+// 2026-09-24 benchmark shows it flagging malicious.com in a Keycloak test
+// fixture, dashboard.tunnelmole.com in a developer script and
+// login.microsoftonline.com in an OAuth integration. The list now goes to the
+// reviewer as context (rcNewHostsBlock), and a host becomes a finding only
+// when the reviewer can show a concrete incorrect URL or a failing code path.
+func rcNewHosts(hash, diff string, changedPaths []string, filesMentioning func(hash, host string) []string) []rcAddedURLHost {
 	changed := map[string]bool{}
 	for _, p := range changedPaths {
 		changed[p] = true
 	}
-	var claims []finding.Claim
+	var out []rcAddedURLHost
 	for _, h := range rcAddedURLHosts(diff) {
-		var elsewhere []string
+		elsewhere := false
 		for _, f := range filesMentioning(hash, h.Host) {
 			if !changed[f] {
-				elsewhere = append(elsewhere, f)
+				elsewhere = true
+				break
 			}
 		}
-		if len(elsewhere) > 0 {
-			continue
+		if !elsewhere {
+			out = append(out, h)
 		}
-		claims = append(claims, finding.Claim{
-			Statement: fmt.Sprintf("%s:%d — this change introduces the host %s, which no file outside the change mentions; confirm something actually serves it before a default that points there ships to users", h.Path, h.Line, h.Host),
-			Lookup:    fmt.Sprintf("git grep -i -F %q %s → only the changed files", h.Host, rcShort(hash)),
-			Tag:       finding.TagRisk,
-			Resolved:  true,
-			Verified:  true,
-		})
 	}
-	return claims
+	return out
+}
+
+// rcNewHostsBlock renders rcNewHosts for the reviewer's input. It is context:
+// the block says so, and names the bar a host has to clear to be reported.
+func rcNewHostsBlock(hosts []rcAddedURLHost) string {
+	if len(hosts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("HOSTS THIS CHANGE INTRODUCES (context, not findings: no file outside the change mentions them at this revision):\n")
+	for _, h := range hosts {
+		fmt.Fprintf(&b, "- %s:%d %s\n", h.Path, h.Line, h.Host)
+	}
+	b.WriteString("A host being new to the repository is not a defect. Report one only with a concrete incorrect URL or a code path that fails because of it (see NEW DEFAULTS POINT SOMEWHERE).\n\n")
+	return b.String()
 }
