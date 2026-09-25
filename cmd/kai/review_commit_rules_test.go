@@ -42,7 +42,7 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 			// Missing tests, intent and consistency points took over the
 			// defect list on the 2026-09-24 benchmark.
 			name:  "tests, intent and consistency are not defects by themselves",
-			needs: []string{"TESTS, INTENT AND CONSISTENCY ARE NOT DEFECTS BY THEMSELVES", "specific missing requirement", "concrete regression risk", "#36880", "presents a test as the proof of its fix"},
+			needs: []string{"TESTS, INTENT AND CONSISTENCY ARE NOT DEFECTS BY THEMSELVES", "specific missing requirement", "concrete regression risk", "#36880", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
 		},
 		{
 			name:  "environment assumptions get named",
