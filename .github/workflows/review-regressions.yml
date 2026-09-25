@@ -1,0 +1,166 @@
+name: review-regressions
+
+# Replays `kai review-commit` on the six benchmark PRs in
+# cmd/kai/testdata/review-regressions/cases.json and grades what it publishes
+# against their golden comments (scripts/review-regressions.sh).
+#
+# Two modes:
+#   - NIGHTLY (schedule, or a manual run without pin_pr): tests kai-cli main,
+#     appends the result to the history kept in the pinned "Review regressions"
+#     issue, and re-renders that issue. The reviewer's behaviour can drift with
+#     no merge at all (its model is served through OpenRouter), and one run is
+#     noisy; the trend is the signal. It alerts only on a sustained regression.
+#   - PIN (dispatched by build-kai-ci with pin_pr): runs the kai-cli the new
+#     image carries AND the one production pins today, and posts the
+#     before/after on the kai-server pin PR, so repinning is a measured decision.
+#
+# Every review spends LLM credit through KAI_REGRESSION_TOKEN (a Kai personal
+# access token with only the "llm" scope). About $0.50 per mode-run.
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      kai_ref:
+        description: 'kai-cli ref to test (default: main)'
+        default: ''
+      baseline_ref:
+        description: 'kai-cli ref to compare against (PIN mode)'
+        default: ''
+      pin_pr:
+        description: 'kai-server PR number to post the before/after on (PIN mode)'
+        default: ''
+
+concurrency:
+  group: review-regressions-${{ inputs.pin_pr || 'nightly' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GOPRIVATE: github.com/kaicontext/*
+  REGRESSION_CASES: cmd/kai/testdata/review-regressions/cases.json
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+      - name: Mint short-lived module read token
+        uses: actions/create-github-app-token@v3
+        id: core-token
+        with:
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-core,kai-engine
+      # Scoped to kaicontext/: the six forks under review are public repos of
+      # another owner, and must clone anonymously.
+      - name: Authenticate to the private modules
+        run: git config --global url."https://x-access-token:${{ steps.core-token.outputs.token }}@github.com/kaicontext/".insteadOf "https://github.com/kaicontext/"
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y gcc jq
+      - name: Kai credentials
+        env:
+          KAI_TOKEN: ${{ secrets.KAI_REGRESSION_TOKEN }}
+          KAI_URL: ${{ vars.KAI_REGRESSION_SERVER_URL || 'https://atlas.kaicontext.com' }}
+        run: |
+          test -n "$KAI_TOKEN" || { echo "::error::KAI_REGRESSION_TOKEN is not set"; exit 1; }
+          mkdir -p ~/.kai
+          jq -n --arg t "$KAI_TOKEN" --arg u "$KAI_URL" '{access_token:$t, server_url:$u}' > ~/.kai/credentials.json
+          chmod 600 ~/.kai/credentials.json
+
+      - name: Build the kai binaries under test
+        id: build
+        env:
+          KAI_REF: ${{ inputs.kai_ref || 'main' }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+        run: |
+          set -euo pipefail
+          build() { # ref, out
+            rm -rf "$RUNNER_TEMP/src" && git worktree add -q --detach "$RUNNER_TEMP/src" "$1"
+            (cd "$RUNNER_TEMP/src" && CGO_ENABLED=1 go build -o "$2" ./cmd/kai)
+            git -C "$RUNNER_TEMP/src" rev-parse HEAD
+            git worktree remove --force "$RUNNER_TEMP/src"
+          }
+          echo "sha=$(build "origin/${KAI_REF#origin/}" "$RUNNER_TEMP/kai-under-test" 2>/dev/null || build "$KAI_REF" "$RUNNER_TEMP/kai-under-test")" >> "$GITHUB_OUTPUT"
+          if [ -n "$BASELINE_REF" ]; then
+            build "$BASELINE_REF" "$RUNNER_TEMP/kai-baseline" >/dev/null
+          fi
+
+      # The corpus and script come from the checked-out main, so both binaries
+      # are graded against the same cases.
+      - name: Replay the corpus
+        continue-on-error: true
+        run: |
+          KAI_BIN="$RUNNER_TEMP/kai-under-test" REGRESSION_DIR="$RUNNER_TEMP/rr" PARALLEL=3 \
+            scripts/review-regressions.sh | tee "$RUNNER_TEMP/under-test.txt"
+      - name: Replay the corpus on the baseline
+        if: ${{ inputs.baseline_ref != '' }}
+        continue-on-error: true
+        run: |
+          KAI_BIN="$RUNNER_TEMP/kai-baseline" REGRESSION_DIR="$RUNNER_TEMP/rr-base" PARALLEL=3 \
+            scripts/review-regressions.sh | tee "$RUNNER_TEMP/baseline.txt"
+
+      - name: Report
+        id: report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PIN_PR: ${{ inputs.pin_pr }}
+          KAI_REF: ${{ inputs.kai_ref || 'main' }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          SHA: ${{ steps.build.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          run_dir() { ls -d "$1"/runs/* 2>/dev/null | tail -1; }
+          args=(--run "$(run_dir "$RUNNER_TEMP/rr")" --cases "$REGRESSION_CASES" --ref "$KAI_REF" --sha "$SHA"
+                --run-url "$RUN_URL" --out-comment "$RUNNER_TEMP/comment.md")
+          if [ -n "$BASELINE_REF" ]; then
+            args+=(--baseline-run "$(run_dir "$RUNNER_TEMP/rr-base")" --baseline-ref "$BASELINE_REF")
+          fi
+          if [ -z "$PIN_PR" ]; then
+            gh label create review-regressions --color 5319e7 --description "Nightly review-regressions dashboard" 2>/dev/null || true
+            ISSUE=$(gh issue list --label review-regressions --state open --json number --jq '.[0].number // empty')
+            if [ -z "$ISSUE" ]; then
+              ISSUE=$(gh issue create --title "Review regressions (nightly)" --label review-regressions \
+                        --body "Created by the review-regressions workflow." | grep -oE '[0-9]+$')
+              gh issue pin "$ISSUE" || echo "::warning::could not pin issue #$ISSUE"
+            fi
+            gh issue view "$ISSUE" --json body --jq .body > "$RUNNER_TEMP/old-body.md"
+            args+=(--record --issue-body "$RUNNER_TEMP/old-body.md" --out-body "$RUNNER_TEMP/body.md" --out-alert "$RUNNER_TEMP/alert.txt")
+          fi
+          python3 scripts/review_regressions_report.py "${args[@]}"
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$PIN_PR" ]; then
+            gh issue edit "$ISSUE" --body-file "$RUNNER_TEMP/body.md"
+            # A comment only when there is something to act on, so the issue's
+            # notifications stay worth reading.
+            if [ -s "$RUNNER_TEMP/alert.txt" ]; then
+              gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/comment.md"
+            fi
+          fi
+
+      - name: Mint App token for kai-server
+        if: ${{ inputs.pin_pr != '' }}
+        uses: actions/create-github-app-token@v3
+        id: server-token
+        with:
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-server
+      - name: Post the before/after on the pin PR
+        if: ${{ inputs.pin_pr != '' }}
+        env:
+          GH_TOKEN: ${{ steps.server-token.outputs.token }}
+          PIN_PR: ${{ inputs.pin_pr }}
+        run: gh pr comment "$PIN_PR" --repo kaicontext/kai-server --body-file "$RUNNER_TEMP/comment.md"
