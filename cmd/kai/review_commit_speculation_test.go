@@ -126,6 +126,20 @@ func TestAllSpeculativeDraftPublishesNoTraceOfTheRefutedConcerns(t *testing.T) {
 	}
 }
 
+// A draft the reviewer scored 5 over speculative concerns is not published
+// as 5 either: nothing re-examined the change once they were gone.
+func TestAllSpeculativeDraftScoredFiveIsPublishedAsFour(t *testing.T) {
+	draft := strings.Replace(rcTestReview(rcSpeculativeBenchmarkIssues[0]), "MERGE_READY: 3", "MERGE_READY: 5", 1)
+	out, spec := rcWithoutSpeculativeIssues(draft)
+	review, ok := rcReviewWithoutSpeculation(out, spec)
+	if !ok {
+		t.Fatal("not assembled")
+	}
+	if _, _, _, _, r, _ := rcParseReviewOutput(review); int(r) != 4 {
+		t.Errorf("readiness = %d, want 4", int(r))
+	}
+}
+
 // A draft that keeps a real issue goes through the gate with the reviewer's
 // own prose and score.
 func TestDraftWithARealIssueStillGoesToTheGate(t *testing.T) {

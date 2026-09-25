@@ -125,9 +125,10 @@ func rcReviewWithoutSpeculation(draft string, speculative []rcAllegationResult) 
 	if len(speculative) == 0 || len(issues) > 0 || len(decisions) > 0 {
 		return "", false
 	}
-	if readiness == finding.ReadinessUnknown || int(readiness) < 4 {
-		readiness = finding.Readiness(4)
-	}
+	// Always 4: the draft's own score was given with the refuted concerns in
+	// it, so neither a lower one nor a "merge it" 5 describes this review.
+	_ = readiness
+	readiness = finding.Readiness(4)
 	summary := fmt.Sprintf("No defect survived review: %d concern(s) raised needed a change nobody has made to trigger, so none is reported.", len(speculative))
 	return rcAssembleReview(nil, nil, speculative, nil, match, readiness, summary), true
 }
