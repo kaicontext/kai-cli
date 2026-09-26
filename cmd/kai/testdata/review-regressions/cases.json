@@ -8,7 +8,7 @@
       "base": "917c7b0764f4c6bfdca95db2c5f73dbfdbe11757",
       "head": "c790227e0cda780e6fea9bb03af27948d9e286b9",
       "expect": [
-        {"issue": "P1-concurrency", "file": "scheduleSMSReminders.ts", "any": ["atomic", "concurren", "race condition", "lost update", "lose increments", "stale value", "two requests", "simultaneous"],
+        {"issue": "P1-concurrency", "file": "scheduleSMSReminders.ts", "any": ["atomic", "concurren", "race condition", "lost update", "lose increments", "lose an increment", "lost increment", "stale value", "two requests", "simultaneous", "overlapping", "read-then-write", "read-modify-write"],
          "golden": "retryCount: reminder.retryCount + 1 reads a possibly stale value and can lose increments under concurrency; use an atomic increment."}
       ],
       "forbid": [

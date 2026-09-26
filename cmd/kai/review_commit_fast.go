@@ -159,6 +159,9 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 			user.WriteString("\n")
 		}
 	}
+	// The same review hints the grounded pass gets (review_commit_hints.go):
+	// the lines shaped like the races and contract mismatches reviews miss.
+	user.WriteString(rcReviewHints(diff))
 	// The paths, spelled out. The model has them in the diff headers and still
 	// wrote bare line numbers on the first live run (kai-desktop 94dbbe8:
 	// both of its real defects came back "2152 — ..." and "2649-2652 — ...",
