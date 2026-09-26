@@ -790,6 +790,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			len(src), len(unresolved), time.Since(phase).Round(time.Millisecond))
 	}
 	user.WriteString(hosts)
+	user.WriteString(rcReviewHints(diff))
 	user.WriteString("INTENT:\n")
 	user.WriteString(strings.TrimSpace(intent))
 	user.WriteString("\n\nDIFF:\n")

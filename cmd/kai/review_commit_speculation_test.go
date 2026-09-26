@@ -148,3 +148,23 @@ func TestDraftWithARealIssueStillGoesToTheGate(t *testing.T) {
 		t.Error("a draft with a real issue left was assembled without the gate")
 	}
 }
+
+// The gate and the fast pass carry the trigger-today bar — and the gate the
+// one exception to it: a race's trigger is concurrent callers, which exist
+// whenever a request, scheduler or queue can invoke the handler (Cal.com
+// #14943: the gate refuted a real lost update because the cron dispatcher was
+// not in view).
+func TestGateAndFastPassRefuteFutureTriggers(t *testing.T) {
+	for _, want := range []string{
+		"REFUTE one whose failure needs a future change", "trigger is hypothetical", "supported only when a source establishes",
+		"two concurrent calls to a handler that requests, a scheduler or a queue can invoke ARE a reachable trigger",
+		"refute it only when a source shows something that serializes them",
+	} {
+		if !strings.Contains(rcChallengeSystemHead, want) {
+			t.Errorf("challenge prompt is missing %q", want)
+		}
+	}
+	if !strings.Contains(rcFastReviewSystem, "The trigger must exist today") {
+		t.Error("fast-pass prompt is missing the trigger-today rule")
+	}
+}
