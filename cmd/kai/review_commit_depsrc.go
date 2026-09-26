@@ -33,8 +33,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -60,6 +62,7 @@ type rcDepSource struct {
 	Module string
 	Pkg    string
 	Path   string // path within the repo, e.g. kaipath/user.go
+	Ref    string // resolved commit used for this fetch
 	Body   string
 }
 
@@ -162,7 +165,7 @@ func rcFetchPkg(ctx context.Context, token, owner, repo, pkg, ref string, budget
 			}
 			body = string(dec)
 		}
-		if body == "" {
+		if body == "" || len(body) > *budget {
 			continue
 		}
 		*budget -= len(body)
@@ -186,10 +189,17 @@ func rcFetchDepSources(ctx context.Context, deps []rcDepChange) (got []rcDepSour
 	fetched := 0
 	for _, d := range deps {
 		owner, repo, ok := rcGitHubRepo(d.Module)
-		// Without a commit there is no exact source to ask for: a version tag
-		// may not exist on the default branch, and reading the wrong revision
-		// of a contract is worse than reading none.
-		if !ok || d.Commit == "" || len(d.Pkgs) == 0 || token == "" {
+		// Resolve ordinary release tags to a commit before fetching source.
+		// Never substitute the default branch for a missing version.
+		if !ok || len(d.Pkgs) == 0 || token == "" {
+			unresolved = append(unresolved, d)
+			continue
+		}
+		ref := d.Commit
+		if ref == "" {
+			ref = rcResolveDepTag(ctx, token, owner, repo, d.To)
+		}
+		if ref == "" {
 			unresolved = append(unresolved, d)
 			continue
 		}
@@ -198,13 +208,14 @@ func rcFetchDepSources(ctx context.Context, deps []rcDepChange) (got []rcDepSour
 			if fetched >= rcDepMaxPkgFetch || budget <= 0 {
 				break
 			}
-			src := rcFetchPkg(ctx, token, owner, repo, pkg, d.Commit, &budget)
+			fetched++
+			src := rcFetchPkg(ctx, token, owner, repo, pkg, ref, &budget)
 			if len(src) == 0 {
 				continue
 			}
-			fetched++
 			for i := range src {
 				src[i].Module = d.Module
+				src[i].Ref = ref
 			}
 			forDep = append(forDep, src...)
 		}
@@ -225,13 +236,43 @@ func rcDepSourceBlock(got []rcDepSource) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("SOURCE FROM THE DEPENDENCIES THIS DIFF MOVES (fetched at the pinned commit before\n")
+	b.WriteString("SOURCE FROM DEPENDENCIES USED BY THIS CHANGE (fetched at the pinned commit before\n")
 	b.WriteString("this review started — treat as already read; do not go looking for it, and do not\n")
-	b.WriteString("say you could not verify these contracts, because they are printed here):\n\n")
+	b.WriteString("claim the whole package was read: only the files printed here were fetched):\n\n")
 	for _, s := range got {
-		fmt.Fprintf(&b, "--- %s/%s (package %s) ---\n", s.Module, path.Base(s.Path), s.Pkg)
+		fmt.Fprintf(&b, "--- %s/%s (package %s, commit %s) ---\n", s.Module, path.Base(s.Path), s.Pkg, s.Ref)
 		b.WriteString(strings.TrimRight(s.Body, "\n"))
 		b.WriteString("\n\n")
 	}
 	return b.String()
+}
+
+var rcReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
+var rcCommitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+func rcResolveDepTag(ctx context.Context, token, owner, repo, version string) string {
+	if !rcReleaseTag.MatchString(version) {
+		return ""
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+owner+"/"+repo+"/commits/"+url.PathEscape(version), nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var commit struct {
+		SHA string `json:"sha"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&commit) != nil || !rcCommitSHA.MatchString(commit.SHA) {
+		return ""
+	}
+	return commit.SHA
 }

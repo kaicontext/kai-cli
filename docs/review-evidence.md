@@ -25,9 +25,11 @@ cannot disagree:
   proposal is kept in the bundle's record as withheld, never as advice);
 - an **unverified** allegation or decision is listed as unresolved, with its
   reason and without repair advice. Supported findings are still published
-  beside it, but the review is marked **incomplete**: the bundle carries
-  `incomplete: true`, the text says so, and the command exits non-zero, so a
-  partial review is never read as a completed one. A draft decision the
+  beside it. The outcome is **completed_with_unresolved** and the command exits
+  successfully: the assessment finished, with explicit unresolved questions.
+  The legacy `incomplete: true` flag remains for older consumers, so they cannot
+  mistake unresolved questions for a clean review. New consumers use `outcome`
+  and display a neutral check, never an all-clear. A draft decision the
   challenger did not assess, or a supported verdict with no finding text, is
   unresolved in the same way rather than sinking the whole review;
 - readiness is only ever **capped** from what the challenger proposed — at
@@ -163,3 +165,28 @@ multiline allegation while retaining the real escaping defect. Use
 Review CI runs a pinned Kai image. Merging this CLI change alone does not update
 the production reviewer: rebuild the CI image and update the server's workflow
 image pin as a separate rollout, after the live evaluation passes.
+
+## Execution outcomes and rollout
+
+Bundles now carry `outcome`: `completed`, `completed_with_unresolved`, or
+`interrupted`. A failure before a bundle exists still exits non-zero. Actual
+interruption continues to emit its coverage first and then fail. Confirmed
+findings, unresolved reasons, withheld remedies and readiness caps are unchanged.
+Deploy the server reader before pinning the CLI image; older readers continue to
+show the conservative incomplete state. Do not infer an improved completion rate
+from relabeling unresolved questions.
+
+Dependency preflight now considers unchanged root-module requirements imported
+by changed Go files, not only go.mod changes. Ordinary GitHub release tags are
+resolved to a commit and subsequent source requests use that commit. There is no
+fallback to main. Existing limits remain: ten seconds, three package attempts,
+48 KiB total source, six source files per package. Source headers record the
+commit; a partial source listing never establishes that the whole package was
+read. Replaced modules, nested modules, non-GitHub modules and unresolvable tags
+remain outside this fetch path. This is bounded evidence retrieval, not a claim
+that every dependency question can now be settled.
+
+The draft prompt asks for a demonstrated trigger before raising an allegation
+(e.g. a concurrent caller for a suspected race). Unavailable evidence belongs in
+limitations; the challenge still retains any unresolved allegation already made.
+This prompt change needs live evaluation, not just unit-test assertions.
