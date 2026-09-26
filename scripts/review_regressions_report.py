@@ -142,7 +142,7 @@ def main():
 
     # The run's own comment: this run in full, and the baseline beside it.
     lines = [f"### Review regressions — {a.ref} @ `{a.sha[:12]}` ({now})", "",
-             f"**{fmt_totals(t)}** · [run]({a.run_url})", ""]
+             f"**{fmt_totals(t)}** · [run]({a.run_url}) · per-case reviews and logs are the run's artifact", ""]
     if a.baseline_run:
         bt = totals(load_run(a.baseline_run, cases))
         lines += ["| | " + (a.baseline_ref or "baseline") + " | " + a.ref + " |", "|---|---|---|",

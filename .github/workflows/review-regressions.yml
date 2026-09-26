@@ -110,6 +110,20 @@ jobs:
           KAI_BIN="$RUNNER_TEMP/kai-baseline" REGRESSION_DIR="$RUNNER_TEMP/rr-base" PARALLEL=3 \
             scripts/review-regressions.sh | tee "$RUNNER_TEMP/baseline.txt"
 
+      # Every case's review bundle, review log and init log, so a miss or an
+      # unfinished review can be read after the fact. The runner's temp dir is
+      # gone when the job ends; without this the summary is all there is.
+      - name: Keep the per-case reviews
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-regressions-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/rr/runs/
+            ${{ runner.temp }}/rr-base/runs/
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Report
         id: report
         env:
