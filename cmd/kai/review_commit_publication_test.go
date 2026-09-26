@@ -36,7 +36,7 @@ func findingsSection(review string) string {
 		return ""
 	}
 	rest := review[i:]
-	for _, end := range []string{"\n**This review is incomplete.**", "\n## Limitations", "\n## Decisions", "\n" + rcReviewDataMarker} {
+	for _, end := range []string{"\n**Unresolved questions.**", "\n## Limitations", "\n## Decisions", "\n" + rcReviewDataMarker} {
 		if j := strings.Index(rest, end); j >= 0 {
 			rest = rest[:j]
 		}
@@ -84,7 +84,7 @@ func TestPublicationSupportedSurvivesUnresolved(t *testing.T) {
 	if f := findingsSection(res.Review); !strings.Contains(f, rcEscapeIssue) || !strings.Contains(f, rcEscapeRemedy) || strings.Contains(f, rcFalseCDIssue) {
 		t.Fatalf("findings section wrong:\n%s", res.Review)
 	}
-	if !strings.Contains(res.Review, "**This review is incomplete.**") || !strings.Contains(res.Review, "- "+rcFalseCDIssue+" — needs a shell to settle") {
+	if !strings.Contains(res.Review, "**Unresolved questions.**") || !strings.Contains(res.Review, "- "+rcFalseCDIssue+" — needs a shell to settle") {
 		t.Fatalf("unresolved allegation not listed with its reason:\n%s", res.Review)
 	}
 	if strings.Contains(res.Review, rcFalseCDRemedy) {
@@ -209,7 +209,7 @@ func TestPublicationSummaryFindingsAndCodaAgree(t *testing.T) {
 					t.Fatalf("allegation %q status=%s but published-as-finding=%v", r.Issue, r.Status, inFindings)
 				}
 			}
-			if res.Incomplete != (unresolved > 0) || strings.Contains(summary, "Review incomplete") != res.Incomplete {
+			if res.Incomplete != (unresolved > 0) || strings.Contains(summary, "Review completed with unresolved questions") != res.Incomplete {
 				t.Fatalf("incomplete=%v unresolved=%d summary=%q", res.Incomplete, unresolved, summary)
 			}
 			if len(supported) == 0 && !res.Incomplete && !strings.Contains(prose, "No proposed defect was confirmed") {
@@ -283,7 +283,7 @@ func TestFastReviewReportsUnresolved(t *testing.T) {
 	if res == nil || !res.Incomplete || len(res.unresolved()) != 1 {
 		t.Fatalf("fast review did not report the unresolved allegation: %+v", res)
 	}
-	if !strings.Contains(got, "This review is incomplete") || strings.Contains(got, "## Findings") {
+	if !strings.Contains(got, "Unresolved questions") || strings.Contains(got, "## Findings") {
 		t.Fatalf("fast review body: %s", got)
 	}
 }

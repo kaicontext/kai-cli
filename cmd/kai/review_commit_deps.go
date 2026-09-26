@@ -204,7 +204,7 @@ func rcDepLimitsBlock(deps []rcDepChange) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("DEPENDENCIES THIS DIFF MOVES (resolved from the diff before this review started).\n")
+	b.WriteString("DEPENDENCIES USED BY THIS CHANGE (resolved before this review started).\n")
 	b.WriteString("You cannot read these. They are other modules, this checkout holds none of their\n")
 	b.WriteString("source, and no tool you have will open them — do not spend a turn trying.\n")
 	for _, d := range deps {
@@ -213,7 +213,7 @@ func rcDepLimitsBlock(deps []rcDepChange) string {
 		if d.From != "" {
 			fmt.Fprintf(&b, "  %s -> %s", d.From, d.To)
 		} else {
-			fmt.Fprintf(&b, "  added at %s", d.To)
+			fmt.Fprintf(&b, "  pinned at %s", d.To)
 		}
 		if d.Commit != "" {
 			fmt.Fprintf(&b, " (commit %s)", d.Commit)
