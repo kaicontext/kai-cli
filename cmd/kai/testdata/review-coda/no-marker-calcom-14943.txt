@@ -1,0 +1,25 @@
+**Overall take:** The schema/migration are clean and the threshold/increment are internally consistent (fail once → 1, fail twice → 2, cleaned on the next run; existing rows start at 0 so the arithmetic is well-defined). There is one real defect — the retry-count increment is a non-atomic read-modify-write — and one cleanup-query shape worth flagging.
+
+**Concerns:**
+
+`packages/features/ee/workflows/api/scheduleSMSReminders.ts:184` and `:195` — the increment `retryCount: reminder.retryCount + 1` is a read-then-write that loses updates if two runs overlap on the same reminder. `reminder.retryCount` is read at the top of the run (line 48–60) and written back later inside the loop. The SMS endpoint is a cron-triggered POST with no locking visible in this repo; if the scheduler fires again before a previous run finishes (a slow Twilio call, a run still iterating the list), both runs read `retryCount = 0`, both write `1`, and the reminder survives an extra cycle instead of being retired when it should be. The failure mode is mild here — it delays retirement by one run rather than corrupting data — but it's a real lost-update on shared state. Fix it with an atomic increment: `data: { retryCount: { increment: 1 } }`. That removes the dependency on the stale in-memory value entirely and is the Prisma-idiomatic form for counters.
+
+**Not a defect, but worth a human's eye:**
+
+- The new cleanup branch `OR: [{ retryCount: { gt: 1 } }]` at `scheduleSMSReminders.ts:38–42` has no `method: SMS` filter, unlike the sibling branch right above it. Today this is harmless: `retryCount` is only ever written by this SMS handler, so no EMAIL or WHATSAPP reminder can have `retryCount > 0`. But the moment retry-counting is added to the email or whatsapp path (the natural next change, and the pattern this PR establishes), that unfiltered branch will start deleting the other methods' reminders on the SMS cron's schedule. The sibling WhatsApp handler (`scheduleWhatsappReminders.ts:23–30`) and Email handler (`scheduleEmailReminders.ts:64–71`) still do plain past-date cleanup with no retry logic, so the asymmetry is real. I'm not scoring this as a defect because its trigger is a change nobody has made — but scoping the `retryCount` branch to `method: SMS` now would make it safe-by-construction and costs nothing. As a minor performance note, there's also no index on `retryCount`, so that `OR` branch does an unscoped scan; `WorkflowReminder` isn't high-volume and this runs once per cron tick, so it's not worth an index unless the table grows.
+
+- This is a behavior change that affects which customer reminders get silently dropped. A reminder that fails to schedule twice (e.g., a transient Twilio outage, an invalid recipient number) is now deleted outright rather than retried until it ages out — the customer never receives that SMS and there's no signal beyond the `console.log` on the error path. That's the intent ("preventing indefinite retry loops"), and the threshold is generous enough (two failures), but it does mean a booking attendee silently misses a reminder that previously would have kept trying. Flagging so the decision is conscious; no code change needed unless you want a higher cap or a dead-letter/audit record for retired reminders.
+
+I couldn't verify the cron cadence for this endpoint (it's configured outside this repo), which is what determines how realistic the concurrent-run scenario above is; if runs are guaranteed non-overlapping, the lost-update is purely theoretical, but the atomic `{ increment: 1 }` fix is still strictly better and removes the question.
+
+**Merge-ready:** One small, local fix (swap `retryCount: reminder.retryCount + 1` for `{ increment: 1 }` in both spots) and this is sound to merge.
+
+---
+
+INTENT_MATCH: verified
+MERGE_READY: 3
+SUMMARY: Retry-count mechanism is coherent and the schema/migration agree with a safe backfill, but the increment is a non-atomic read-modify-write that loses updates under overlapping cron runs — swap to `{ increment: 1 }` and it's ready.
+ISSUES:
+- packages/features/ee/workflows/api/scheduleSMSReminders.ts:184 — `retryCount: reminder.retryCount + 1` is a read-modify-write that loses an increment when two runs overlap on the same reminder, delaying retirement; use `data: { retryCount: { increment: 1 } }` (also: scheduleSMSReminders.ts:195).
+DECISIONS:
+- Reminders that fail SMS scheduling twice are now deleted outright rather than retried until they age out; affected booking attendees silently miss that reminder with only a `console.log` as a signal — confirm that's the intended tradeoff.
