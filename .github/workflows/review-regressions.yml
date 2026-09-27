@@ -7,7 +7,8 @@ name: review-regressions
 # Two modes:
 #   - NIGHTLY (schedule, or a manual run without pin_pr): tests kai-cli main,
 #     appends the result to the history kept in the pinned "Review regressions"
-#     issue, and re-renders that issue. The reviewer's behaviour can drift with
+#     issue, and re-renders that issue. PIN runs are appended too, labelled
+#     with their pin PR. The reviewer's behaviour can drift with
 #     no merge at all (its model is served through OpenRouter), and one run is
 #     noisy; the trend is the signal. It alerts only on a sustained regression.
 #   - PIN (dispatched by build-kai-ci with pin_pr): runs the kai-cli the new
@@ -18,7 +19,9 @@ name: review-regressions
 # access token with only the "llm" scope). About $0.50 per mode-run.
 on:
   schedule:
-    - cron: '0 4 * * *'
+    # Off the top of the hour: GitHub delays, and under load drops, scheduled
+    # runs queued at :00 (the first one started five hours late).
+    - cron: '17 4 * * *'
   workflow_dispatch:
     inputs:
       kai_ref:
@@ -136,31 +139,46 @@ jobs:
         run: |
           set -euo pipefail
           run_dir() { ls -d "$1"/runs/* 2>/dev/null | tail -1; }
-          args=(--run "$(run_dir "$RUNNER_TEMP/rr")" --cases "$REGRESSION_CASES" --ref "$KAI_REF" --sha "$SHA"
-                --run-url "$RUN_URL" --out-comment "$RUNNER_TEMP/comment.md")
+          # Every run goes into the dashboard's trend, pin runs included: a pin
+          # run tests the release about to go live, which is exactly what the
+          # trend should show. It is labelled with its pin PR. (Only the tested
+          # binary is recorded; a pin run's baseline is last release's code.)
+          LABEL="$KAI_REF"
+          [ -n "$PIN_PR" ] && LABEL="$KAI_REF · pin kai-server#$PIN_PR"
+
+          gh label create review-regressions --color 5319e7 --description "Nightly review-regressions dashboard" 2>/dev/null || true
+          ISSUE=$(gh issue list --label review-regressions --state open --json number --jq '.[0].number // empty')
+          if [ -z "$ISSUE" ]; then
+            ISSUE=$(gh issue create --title "Review regressions (nightly)" --label review-regressions \
+                      --body "Created by the review-regressions workflow." | grep -oE '[0-9]+$')
+            gh issue pin "$ISSUE" || echo "::warning::could not pin issue #$ISSUE"
+          fi
+          args=(--run "$(run_dir "$RUNNER_TEMP/rr")" --cases "$REGRESSION_CASES" --ref "$LABEL" --sha "$SHA"
+                --run-url "$RUN_URL" --out-comment "$RUNNER_TEMP/comment.md"
+                --record --issue-body "$RUNNER_TEMP/old-body.md" --out-body "$RUNNER_TEMP/body.md" --out-alert "$RUNNER_TEMP/alert.txt")
           if [ -n "$BASELINE_REF" ]; then
             args+=(--baseline-run "$(run_dir "$RUNNER_TEMP/rr-base")" --baseline-ref "$BASELINE_REF")
           fi
-          if [ -z "$PIN_PR" ]; then
-            gh label create review-regressions --color 5319e7 --description "Nightly review-regressions dashboard" 2>/dev/null || true
-            ISSUE=$(gh issue list --label review-regressions --state open --json number --jq '.[0].number // empty')
-            if [ -z "$ISSUE" ]; then
-              ISSUE=$(gh issue create --title "Review regressions (nightly)" --label review-regressions \
-                        --body "Created by the review-regressions workflow." | grep -oE '[0-9]+$')
-              gh issue pin "$ISSUE" || echo "::warning::could not pin issue #$ISSUE"
-            fi
+          # The history lives in the issue body, and a nightly and a pin run
+          # can finish together: read, append, write, then check this run's
+          # entry survived; if another run's write replaced it, do it again
+          # on top of that one.
+          for attempt in 1 2 3 4 5; do
             gh issue view "$ISSUE" --json body --jq .body > "$RUNNER_TEMP/old-body.md"
-            args+=(--record --issue-body "$RUNNER_TEMP/old-body.md" --out-body "$RUNNER_TEMP/body.md" --out-alert "$RUNNER_TEMP/alert.txt")
-          fi
-          python3 scripts/review_regressions_report.py "${args[@]}"
-          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
-          if [ -z "$PIN_PR" ]; then
+            python3 scripts/review_regressions_report.py "${args[@]}"
             gh issue edit "$ISSUE" --body-file "$RUNNER_TEMP/body.md"
-            # A comment only when there is something to act on, so the issue's
-            # notifications stay worth reading.
-            if [ -s "$RUNNER_TEMP/alert.txt" ]; then
-              gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/comment.md"
+            sleep 5
+            if gh issue view "$ISSUE" --json body --jq .body | grep -qF "$RUN_URL"; then
+              break
             fi
+            echo "::warning::another run rewrote the dashboard at the same time; retrying ($attempt)"
+            sleep $((attempt * 7))
+          done
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+          # A comment only when there is something to act on, so the issue's
+          # notifications stay worth reading.
+          if [ -s "$RUNNER_TEMP/alert.txt" ]; then
+            gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/comment.md"
           fi
 
       - name: Mint App token for kai-server
