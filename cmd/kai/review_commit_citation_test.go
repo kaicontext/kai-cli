@@ -17,8 +17,9 @@ import (
 // declared coordinates — an unknown source number, a range starting before the
 // first line, reversed, or past the last line — is reported precisely (item,
 // citation, source, range, reason) so ONE correction can be requested, and it
-// makes the item it belongs to unresolved. It no longer withholds the review:
-// the other item stays published and the review is marked incomplete.
+// makes the item it belongs to unresolved. It withholds neither the review nor
+// its verdict: the other item stays published, and the unresolved one is listed
+// under "Could not verify" without marking the review incomplete.
 func TestReviewCitationDiagnostics(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -44,8 +45,11 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 			if got := res.Allegations[0]; got.Status != rcStatusUnresolved || !strings.Contains(got.Reason, "citation 1 could not be resolved") || got.Remedy != "" || got.WithheldRemedy != rcFalseCDRemedy {
 				t.Fatalf("item with an unresolvable citation not degraded: %+v", got)
 			}
-			if !res.Incomplete || res.Allegations[1].Status != rcStatusSupported || !strings.Contains(res.Review, rcEscapeIssue) {
-				t.Fatalf("the other finding was lost or the review not marked incomplete: %+v", res)
+			if res.Incomplete || len(res.unresolved()) != 1 || res.Allegations[1].Status != rcStatusSupported || !strings.Contains(res.Review, rcEscapeIssue) {
+				t.Fatalf("the other finding was lost, or the open item was not reported as unresolved: %+v", res)
+			}
+			if !strings.Contains(couldNotVerifySection(res.Review), "- "+rcFalseCDIssue+" — citation 1 could not be resolved") {
+				t.Fatalf("unresolved item not listed under Could not verify:\n%s", res.Review)
 			}
 		})
 	}
@@ -185,14 +189,14 @@ func TestReviewCitationCorrection(t *testing.T) {
 						t.Fatalf("correction not applied: %+v", got.Allegations[0])
 					}
 				case "unverified":
-					if !got.Incomplete || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "shell state") {
+					if got.Incomplete || len(got.unresolved()) != 1 || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "shell state") {
 						t.Fatalf("unverified resubmission not published as unresolved: %+v", got.Allegations[0])
 					}
 				default:
 					// Still invalid, or no usable correction at all: the first
 					// answer's validated verdicts stand and the affected item is
 					// unresolved with the citation reason.
-					if !got.Incomplete || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "could not be resolved") {
+					if got.Incomplete || len(got.unresolved()) != 1 || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "could not be resolved") {
 						t.Fatalf("item with an unresolvable citation not degraded: %+v", got.Allegations[0])
 					}
 					if strings.Contains(got.Review, rcFalseCDRemedy) {
@@ -220,9 +224,10 @@ func TestReviewCitationDoesNotRetrySemanticUncertainty(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestAnswer(t, a)}}}, nil
 	}}
 	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
-	// Not retried — and no longer withheld: the item is unresolved, the
-	// supported finding is kept, and the review is marked incomplete.
-	if calls != 1 || err != nil || !got.Incomplete || !strings.Contains(got.Review, rcEscapeIssue) || strings.Contains(got.Review, "## Findings\n\n### "+rcFalseCDIssue) {
+	// Not retried — and not withheld: the item is unresolved and listed under
+	// "Could not verify", the supported finding is kept, and the review is not
+	// marked incomplete for one open item.
+	if calls != 1 || err != nil || got.Incomplete || len(got.unresolved()) != 1 || !strings.Contains(got.Review, rcEscapeIssue) || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) || strings.Contains(got.Review, "## Findings\n\n### "+rcFalseCDIssue) {
 		t.Fatalf("uncertainty retried, withheld, or published as a finding: calls=%d %+v %v", calls, got, err)
 	}
 }

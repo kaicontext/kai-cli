@@ -954,10 +954,14 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 			r.Status, r.Reason = rcStatusUnresolved, fmt.Sprintf("citation %d could not be resolved (%s); the verdict %q was not published on evidence that does not exist", bad[0].Citation, bad[0].Reason, status)
 		}
 		if r.Status == rcStatusSupported && findingText == "" {
-			// Nothing publishable was written for it. Do not invent a
-			// description and do not sink the other findings: leave this one
-			// unresolved, with the reason.
-			r.Status, r.Reason = rcStatusUnresolved, "the challenge supported this allegation but wrote no finding description to publish"
+			// The check confirmed the allegation, with evidence, but wrote no
+			// separate description. The allegation is the reviewer's own
+			// description of the defect — the exact text that was just
+			// confirmed — so it is published as written. Nothing is invented,
+			// and a confirmed defect no longer turns into an "unresolved" item
+			// that marks the whole review unfinished (2 of the first 3
+			// benchmark reviews, 2026-09-27).
+			findingText = check.Issue
 		}
 		if r.Status == rcStatusSupported {
 			r.Finding, r.Remedy = findingText, remedy
@@ -1033,7 +1037,14 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 			unresolvedDecisions++
 		}
 	}
-	res.Incomplete = unresolved+unresolvedDecisions > 0
+	// An item the check could neither confirm nor refute is withheld, never
+	// published as a finding, and caps readiness at "your call" below. It no
+	// longer marks the whole review unfinished: that threw away every
+	// confirmed finding and the verdict whenever one item stayed open, so a
+	// benchmark PR with two confirmed bugs and one unverifiable claim was
+	// reported as "Not reviewed" (cal.com #8087, 2026-09-27). The open items
+	// are listed in the review under "Could not verify" instead.
+	open := unresolved+unresolvedDecisions > 0
 
 	// Readiness is only ever CAPPED from what the challenger proposed: a
 	// confirmed defect is never near-merge, and an open or unsettled item is
@@ -1043,7 +1054,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	if supported > 0 && readiness > finding.ReadinessSmallFixes {
 		readiness = finding.ReadinessSmallFixes
 	}
-	if (keptDecisions > 0 || res.Incomplete) && readiness > finding.ReadinessDecideThenMerge {
+	if (keptDecisions > 0 || open) && readiness > finding.ReadinessDecideThenMerge {
 		readiness = finding.ReadinessDecideThenMerge
 	}
 	if readiness != proposed {
@@ -1095,8 +1106,8 @@ func rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions int, ma
 		fmt.Fprintf(&b, ", %d decision%s unresolved", unresolvedDecisions, plural(unresolvedDecisions))
 	}
 	b.WriteString(".")
-	if unresolved+unresolvedDecisions > 0 {
-		b.WriteString(" Review incomplete: not every item could be confirmed or cleared.")
+	if n := unresolved + unresolvedDecisions; n > 0 {
+		fmt.Fprintf(&b, " %d item%s could not be verified and %s withheld.", n, plural(n), map[bool]string{true: "is", false: "are"}[n == 1])
 	}
 	fmt.Fprintf(&b, " Intent %s; readiness %d/5.", string(match), int(readiness))
 	return b.String()
@@ -1147,7 +1158,7 @@ func rcAssembleReview(scope, limitations []string, results []rcAllegationResult,
 		b.WriteString("No proposed defect was confirmed by this check within the reviewed scope.\n")
 	}
 	if len(unresolved)+len(unresolvedDecisions) > 0 {
-		b.WriteString("\n**This review is incomplete.** The following could not be confirmed or cleared, for the reason given. No fix is proposed for them:\n")
+		b.WriteString("\n## Could not verify\nThe check could neither confirm nor rule these out, for the reason given. They are not findings and no fix is proposed; worth a look:\n")
 		for _, r := range unresolved {
 			fmt.Fprintf(&b, "- %s — %s\n", r.Issue, r.Reason)
 		}

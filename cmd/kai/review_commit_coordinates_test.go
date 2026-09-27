@@ -243,7 +243,7 @@ func TestPR119CitationsResolveInFileCoordinates(t *testing.T) {
 	if err != nil || len(problems) != 1 || !strings.Contains(problems[0].Reason, "lines 396-595") {
 		t.Fatalf("past-range citation: err=%v problems=%+v", err, problems)
 	}
-	if res.Allegations[0].Status != rcStatusUnresolved || res.Allegations[0].Remedy != "" || !res.Incomplete {
+	if res.Allegations[0].Status != rcStatusUnresolved || res.Allegations[0].Remedy != "" || res.Incomplete || len(res.unresolved()) != 1 {
 		t.Fatalf("not degraded: %+v", res.Allegations[0])
 	}
 }

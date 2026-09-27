@@ -36,7 +36,23 @@ func findingsSection(review string) string {
 		return ""
 	}
 	rest := review[i:]
-	for _, end := range []string{"\n**This review is incomplete.**", "\n## Limitations", "\n## Decisions", "\n" + rcReviewDataMarker} {
+	for _, end := range []string{"\n## Could not verify", "\n## Limitations", "\n## Decisions", "\n" + rcReviewDataMarker} {
+		if j := strings.Index(rest, end); j >= 0 {
+			rest = rest[:j]
+		}
+	}
+	return rest
+}
+
+// couldNotVerifySection is the part of the assembled review that lists the
+// items the check could neither confirm nor rule out.
+func couldNotVerifySection(review string) string {
+	i := strings.Index(review, "\n## Could not verify\n")
+	if i < 0 {
+		return ""
+	}
+	rest := review[i+1:]
+	for _, end := range []string{"\n## Limitations", "\n## Decisions", "\n" + rcReviewDataMarker} {
 		if j := strings.Index(rest, end); j >= 0 {
 			rest = rest[:j]
 		}
@@ -72,19 +88,23 @@ func TestPublicationSupportedSurvivesRefuted(t *testing.T) {
 }
 
 // A supported finding survives alongside an unresolved one; the review is
-// published, marked incomplete, and proposes no fix for the unresolved item.
+// published and complete, lists the unresolved item under "Could not verify",
+// and proposes no fix for it. One open item does not discard the verdict.
 func TestPublicationSupportedSurvivesUnresolved(t *testing.T) {
 	a := rcCDChecks()
 	a.MergeReady = 5
 	a.Checks[0].Verdict, a.Checks[0].Reason, a.Checks[0].Evidence = "unverified", "needs a shell to settle", nil
 	res := rcMustValidate(t, a, nil)
-	if !res.Incomplete {
-		t.Fatal("an unresolved allegation produced a complete review")
+	if res.Incomplete {
+		t.Fatal("one unresolved allegation marked the whole review incomplete")
+	}
+	if _, _, _, _, readiness, _ := rcParseReviewOutput(res.Review); readiness > finding.ReadinessDecideThenMerge {
+		t.Fatalf("readiness %d with an open item", readiness)
 	}
 	if f := findingsSection(res.Review); !strings.Contains(f, rcEscapeIssue) || !strings.Contains(f, rcEscapeRemedy) || strings.Contains(f, rcFalseCDIssue) {
 		t.Fatalf("findings section wrong:\n%s", res.Review)
 	}
-	if !strings.Contains(res.Review, "**This review is incomplete.**") || !strings.Contains(res.Review, "- "+rcFalseCDIssue+" — needs a shell to settle") {
+	if !strings.Contains(res.Review, "\n## Could not verify\n") || !strings.Contains(res.Review, "- "+rcFalseCDIssue+" — needs a shell to settle") {
 		t.Fatalf("unresolved allegation not listed with its reason:\n%s", res.Review)
 	}
 	if strings.Contains(res.Review, rcFalseCDRemedy) {
@@ -103,7 +123,10 @@ func TestPublicationSupportedSurvivesUnresolved(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(out)
-	for _, want := range []string{`"incomplete":true`, `"status":"supported"`, `"status":"unresolved"`, `"remedy":"` + rcEscapeRemedy + `"`, `"withheldRemedy":"` + rcFalseCDRemedy + `"`} {
+	if strings.Contains(s, `"incomplete"`) {
+		t.Fatalf("an open item marked the emitted bundle incomplete:\n%s", s)
+	}
+	for _, want := range []string{`"status":"supported"`, `"status":"unresolved"`, `"remedy":"` + rcEscapeRemedy + `"`, `"withheldRemedy":"` + rcFalseCDRemedy + `"`} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("emitted bundle missing %s:\n%s", want, s)
 		}
@@ -113,14 +136,16 @@ func TestPublicationSupportedSurvivesUnresolved(t *testing.T) {
 	}
 }
 
-// An unresolved decision cannot silently produce a completed review — whether
-// the challenger marked it unverified or never assessed it at all.
-func TestPublicationUnresolvedDecisionIsIncomplete(t *testing.T) {
+// An unresolved decision cannot silently disappear — whether the challenger
+// marked it unverified or never assessed it at all. It is withheld from the
+// published decisions, listed under "Could not verify" with its reason, and
+// caps readiness, without marking the whole review incomplete.
+func TestPublicationUnresolvedDecisionIsWithheld(t *testing.T) {
 	ev := []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}
 	for _, tc := range []struct {
 		name           string
 		decisions      []rcDecisionCheck
-		wantIncomplete bool
+		wantUnresolved bool
 		wantPublished  bool
 		wantReason     string
 	}{
@@ -135,15 +160,18 @@ func TestPublicationUnresolvedDecisionIsIncomplete(t *testing.T) {
 			a.Checks[1].Verdict, a.Checks[1].Finding = "refuted", "" // no confirmed defect: only the decision is in play
 			a.Decisions = tc.decisions
 			res := rcMustValidate(t, a, []string{rcTestDecision})
-			if res.Incomplete != tc.wantIncomplete {
-				t.Fatalf("incomplete=%v, want %v:\n%s", res.Incomplete, tc.wantIncomplete, res.Review)
+			if res.Incomplete {
+				t.Fatalf("an open decision marked the review incomplete:\n%s", res.Review)
+			}
+			if (len(res.unresolved()) > 0) != tc.wantUnresolved {
+				t.Fatalf("unresolved()=%v, want open=%v:\n%s", res.unresolved(), tc.wantUnresolved, res.Review)
 			}
 			published := strings.Contains(res.Review, "## Decisions (need your call)\n- "+rcTestDecision)
 			if published != tc.wantPublished {
 				t.Fatalf("decision published=%v, want %v:\n%s", published, tc.wantPublished, res.Review)
 			}
-			if tc.wantIncomplete {
-				if !strings.Contains(res.Review, "- Decision: "+rcTestDecision+" — "+tc.wantReason) {
+			if tc.wantUnresolved {
+				if !strings.Contains(res.Review, "\n## Could not verify\n") || !strings.Contains(res.Review, "- Decision: "+rcTestDecision+" — "+tc.wantReason) {
 					t.Fatalf("unresolved decision not listed with its reason:\n%s", res.Review)
 				}
 				if got := res.unresolved(); len(got) != 1 || got[0] != "decision: "+rcTestDecision {
@@ -155,7 +183,7 @@ func TestPublicationUnresolvedDecisionIsIncomplete(t *testing.T) {
 				t.Fatalf("coda DECISIONS=%v, want published=%v", decisions, tc.wantPublished)
 			}
 			// Proposed 5: an open or unsettled decision is never a clean merge.
-			if (tc.wantIncomplete || tc.wantPublished) && readiness > finding.ReadinessDecideThenMerge {
+			if (tc.wantUnresolved || tc.wantPublished) && readiness > finding.ReadinessDecideThenMerge {
 				t.Fatalf("readiness %d with an open or unsettled decision", readiness)
 			}
 		})
@@ -209,10 +237,10 @@ func TestPublicationSummaryFindingsAndCodaAgree(t *testing.T) {
 					t.Fatalf("allegation %q status=%s but published-as-finding=%v", r.Issue, r.Status, inFindings)
 				}
 			}
-			if res.Incomplete != (unresolved > 0) || strings.Contains(summary, "Review incomplete") != res.Incomplete {
+			if res.Incomplete || len(res.unresolved()) != unresolved || strings.Contains(summary, "could not be verified") != (unresolved > 0) || strings.Contains(prose, "\n## Could not verify\n") != (unresolved > 0) {
 				t.Fatalf("incomplete=%v unresolved=%d summary=%q", res.Incomplete, unresolved, summary)
 			}
-			if len(supported) == 0 && !res.Incomplete && !strings.Contains(prose, "No proposed defect was confirmed") {
+			if len(supported) == 0 && unresolved == 0 && !strings.Contains(prose, "No proposed defect was confirmed") {
 				t.Fatalf("an all-refuted review does not say so:\n%s", prose)
 			}
 		})
@@ -248,23 +276,26 @@ func TestPublicationReadinessIsOnlyCapped(t *testing.T) {
 	}
 }
 
-// A supported verdict with nothing publishable written for it degrades to
-// unresolved instead of sinking the other findings or inventing a description.
-func TestPublicationSupportedWithoutFindingIsUnresolved(t *testing.T) {
+// A supported verdict with no separate description publishes the allegation
+// itself as the finding: it is the reviewer's own text, the exact claim the
+// check confirmed with evidence, so nothing is invented and a confirmed defect
+// is not demoted to an open item.
+func TestPublicationSupportedWithoutFindingPublishesTheAllegation(t *testing.T) {
 	a := rcCDChecks()
 	a.Checks = append([]rcIssueCheck(nil), a.Checks...)
 	a.Checks[0] = rcIssueCheck{Issue: rcFalseCDIssue, Verdict: "supported", Reason: "real", Remedy: rcFalseCDRemedy, Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}}
 	res := rcMustValidate(t, a, nil)
-	if got := res.Allegations[0]; got.Status != rcStatusUnresolved || got.Remedy != "" || got.WithheldRemedy != rcFalseCDRemedy {
+	if got := res.Allegations[0]; got.Status != rcStatusSupported || got.Finding != rcFalseCDIssue || got.Remedy != rcFalseCDRemedy || got.WithheldRemedy != "" {
 		t.Fatalf("supported-without-finding: %+v", got)
 	}
-	if !res.Incomplete || !strings.Contains(findingsSection(res.Review), rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDRemedy) {
-		t.Fatalf("other finding lost, or withheld remedy published:\n%s", res.Review)
+	f := findingsSection(res.Review)
+	if res.Incomplete || len(res.unresolved()) != 0 || !strings.Contains(f, "### "+rcFalseCDIssue) || !strings.Contains(f, "**Remedy:** "+rcFalseCDRemedy) || !strings.Contains(f, rcEscapeIssue) {
+		t.Fatalf("allegation not published as a finding, or the other finding lost:\n%s", res.Review)
 	}
 }
 
-// The fast path publishes a partial result with its status instead of
-// returning an error and nothing.
+// The fast path publishes a partial result, with the open item listed under
+// "Could not verify", instead of returning an error and nothing.
 func TestFastReviewReportsUnresolved(t *testing.T) {
 	calls := 0
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
@@ -280,10 +311,10 @@ func TestFastReviewReportsUnresolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fast review withheld a publishable-but-incomplete result: %v", err)
 	}
-	if res == nil || !res.Incomplete || len(res.unresolved()) != 1 {
+	if res == nil || res.Incomplete || len(res.unresolved()) != 1 {
 		t.Fatalf("fast review did not report the unresolved allegation: %+v", res)
 	}
-	if !strings.Contains(got, "This review is incomplete") || strings.Contains(got, "## Findings") {
+	if !strings.Contains(couldNotVerifySection(got), "- "+rcFalseCDIssue) || strings.Contains(got, "## Findings") {
 		t.Fatalf("fast review body: %s", got)
 	}
 }

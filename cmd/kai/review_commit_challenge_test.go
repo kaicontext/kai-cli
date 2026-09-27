@@ -74,6 +74,37 @@ func TestReviewChallengeDropsRefutedIssueAndKeepsSupportedIssue(t *testing.T) {
 	}
 }
 
+// A check that confirms an allegation with evidence but leaves its finding
+// description empty publishes the allegation as written, instead of turning a
+// confirmed defect into an unresolved item that marks the whole review
+// unfinished (2026-09-27, cal.com #10600 and #8087 in the benchmark rerun).
+func TestReviewChallengePublishesASupportedAllegationWithoutADescription(t *testing.T) {
+	a := rcCDChecks()
+	for i := range a.Checks {
+		if a.Checks[i].Issue == rcEscapeIssue {
+			a.Checks[i].Finding = ""
+		}
+	}
+	res, _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Review, rcEscapeIssue) {
+		t.Fatalf("the confirmed allegation was not published: %s", res.Review)
+	}
+	if res.Incomplete {
+		t.Fatal("the review was marked incomplete")
+	}
+	for _, r := range res.Allegations {
+		if r.Issue == rcEscapeIssue && (r.Status != rcStatusSupported || r.Finding != rcEscapeIssue) {
+			t.Fatalf("result = %+v, want supported with the allegation as its finding", r)
+		}
+		if r.Status == rcStatusUnresolved {
+			t.Fatalf("no item should be unresolved: %+v", r)
+		}
+	}
+}
+
 func TestReviewChallengeFailsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
