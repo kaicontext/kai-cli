@@ -115,6 +115,7 @@ def main():
     ap.add_argument("--baseline-run", default="")
     ap.add_argument("--baseline-ref", default="")
     ap.add_argument("--record", action="store_true", help="append this run to the nightly history")
+    ap.add_argument("--date", default="", help="when the run happened (backfills); default now")
     ap.add_argument("--out-body", default="")
     ap.add_argument("--out-comment", required=True)
     ap.add_argument("--out-alert", default="")
@@ -124,7 +125,7 @@ def main():
     ids = [c["id"] for c in cases]
     run = load_run(a.run, cases)
     t = totals(run)
-    now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = a.date or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     history = []
     old = open(a.issue_body).read() if a.issue_body and os.path.exists(a.issue_body) else ""
