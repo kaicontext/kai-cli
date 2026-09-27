@@ -881,7 +881,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		Turns:        rcTurns(res.Transcript),
 		FilesRead:    rcFilesRead(res.Transcript, primary.Path),
 	}
-	raw := strings.TrimSpace(res.FinalText)
+	raw := rcRestoreCodaMarker(strings.TrimSpace(res.FinalText))
 
 	// COVERAGE GATE. A review that never opened a changed file is not a
 	// verdict on it, and until now the only consequence was a line in the
@@ -993,7 +993,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	if rcNeedsConclusion(raw) {
 		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", inc.FinishReason)
 		if concluded := rcConcludeFromTranscript(publicationCtx, prov, model, transcript); concluded != "" {
-			raw = concluded
+			raw = rcRestoreCodaMarker(concluded)
 		}
 	}
 	if rcUsableCoda(raw) {
@@ -1200,7 +1200,7 @@ func rcGateHeadroom(started time.Time) time.Duration {
 // Reverting either rule now fails a test instead of nothing.
 func rcMergeGate(firstRaw, secondRaw, secondFinish string) (raw, finish string, adopted bool) {
 	raw, finish = firstRaw, secondFinish
-	if s := strings.TrimSpace(secondRaw); rcUsableCoda(s) {
+	if s := rcRestoreCodaMarker(strings.TrimSpace(secondRaw)); rcUsableCoda(s) {
 		return s, secondFinish, true
 	}
 	return raw, finish, false
@@ -1215,6 +1215,43 @@ func rcMergeGate(firstRaw, secondRaw, secondFinish string) (raw, finish string, 
 // that timed out has no usable coda by construction, so this covers the case
 // the timeout clause was there for and not the one it should not.
 func rcNeedsConclusion(raw string) bool { return !rcUsableCoda(raw) }
+
+// rcRestoreCodaMarker puts back the marker line when the answer carries the
+// coda's fields without it. The reviewer model drops that line far more often
+// than it keeps it — 78 of 84 finished answers across seven regression runs
+// ended in a complete INTENT_MATCH / MERGE_READY / SUMMARY / ISSUES block with
+// no marker above it — and every one of them was then treated as a review
+// that never concluded: thrown away, the coverage gate's rewrite thrown away
+// with it, and replaced by a tool-less conclusion written from the transcript.
+//
+// The coda starts at the LAST line that opens with INTENT_MATCH: and is
+// followed by MERGE_READY: or SUMMARY:, so prose that merely mentions the
+// field, or quotes an example block earlier on, is left alone. A horizontal
+// rule the model put between prose and coda goes with the marker it stood in
+// for.
+func rcRestoreCodaMarker(raw string) string {
+	if strings.Contains(raw, rcReviewDataMarker) {
+		return raw
+	}
+	lines := strings.Split(raw, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(strings.TrimSpace(lines[i]), "INTENT_MATCH:") {
+			continue
+		}
+		tail := strings.Join(lines[i+1:], "\n")
+		if !strings.Contains(tail, "MERGE_READY:") && !strings.Contains(tail, "SUMMARY:") {
+			return raw
+		}
+		prose := strings.TrimSpace(strings.Join(lines[:i], "\n"))
+		prose = strings.TrimSpace(strings.TrimSuffix(prose, "---"))
+		coda := strings.Join(lines[i:], "\n")
+		if prose == "" {
+			return rcReviewDataMarker + "\n" + coda
+		}
+		return prose + "\n\n" + rcReviewDataMarker + "\n" + coda
+	}
+	return raw
+}
 
 // rcUsableCoda reports whether a raw answer carries a machine coda the
 // pipeline can actually read, rather than just the line that introduces one.
