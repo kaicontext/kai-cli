@@ -153,17 +153,28 @@ jobs:
                       --body "Created by the review-regressions workflow." | grep -oE '[0-9]+$')
             gh issue pin "$ISSUE" || echo "::warning::could not pin issue #$ISSUE"
           fi
-          gh issue view "$ISSUE" --json body --jq .body > "$RUNNER_TEMP/old-body.md"
-
           args=(--run "$(run_dir "$RUNNER_TEMP/rr")" --cases "$REGRESSION_CASES" --ref "$LABEL" --sha "$SHA"
                 --run-url "$RUN_URL" --out-comment "$RUNNER_TEMP/comment.md"
                 --record --issue-body "$RUNNER_TEMP/old-body.md" --out-body "$RUNNER_TEMP/body.md" --out-alert "$RUNNER_TEMP/alert.txt")
           if [ -n "$BASELINE_REF" ]; then
             args+=(--baseline-run "$(run_dir "$RUNNER_TEMP/rr-base")" --baseline-ref "$BASELINE_REF")
           fi
-          python3 scripts/review_regressions_report.py "${args[@]}"
+          # The history lives in the issue body, and a nightly and a pin run
+          # can finish together: read, append, write, then check this run's
+          # entry survived; if another run's write replaced it, do it again
+          # on top of that one.
+          for attempt in 1 2 3 4 5; do
+            gh issue view "$ISSUE" --json body --jq .body > "$RUNNER_TEMP/old-body.md"
+            python3 scripts/review_regressions_report.py "${args[@]}"
+            gh issue edit "$ISSUE" --body-file "$RUNNER_TEMP/body.md"
+            sleep 5
+            if gh issue view "$ISSUE" --json body --jq .body | grep -qF "$RUN_URL"; then
+              break
+            fi
+            echo "::warning::another run rewrote the dashboard at the same time; retrying ($attempt)"
+            sleep $((attempt * 7))
+          done
           cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
-          gh issue edit "$ISSUE" --body-file "$RUNNER_TEMP/body.md"
           # A comment only when there is something to act on, so the issue's
           # notifications stay worth reading.
           if [ -s "$RUNNER_TEMP/alert.txt" ]; then
