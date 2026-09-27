@@ -92,9 +92,6 @@ func TestReviewChallengePublishesASupportedAllegationWithoutADescription(t *test
 	if !strings.Contains(res.Review, rcEscapeIssue) {
 		t.Fatalf("the confirmed allegation was not published: %s", res.Review)
 	}
-	if res.Incomplete {
-		t.Fatal("the review was marked incomplete")
-	}
 	for _, r := range res.Allegations {
 		if r.Issue == rcEscapeIssue && (r.Status != rcStatusSupported || r.Finding != rcEscapeIssue) {
 			t.Fatalf("result = %+v, want supported with the allegation as its finding", r)
@@ -479,7 +476,7 @@ func TestReviewChallengeTruncationThenCitationCorrection(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s2", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
 	}}
 	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
-	if err != nil || calls != 3 || res.Incomplete || !strings.Contains(res.Review, rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDIssue) {
+	if err != nil || calls != 3 || !strings.Contains(res.Review, rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDIssue) {
 		t.Fatalf("review did not finish after truncation and correction: calls=%d %+v %v", calls, res, err)
 	}
 }
@@ -505,7 +502,7 @@ func TestReviewChallengeSkipsDraftWithoutIssues(t *testing.T) {
 		t.Fatal("a draft without allegations does not need this pass")
 		return provider.Response{}, nil
 	}}
-	if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || got.Review != rcTestReview() || got.Incomplete {
+	if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || got.Review != rcTestReview() {
 		t.Fatalf("changed issue-free draft: %+v %v", got, err)
 	}
 }

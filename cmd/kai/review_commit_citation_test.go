@@ -45,7 +45,7 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 			if got := res.Allegations[0]; got.Status != rcStatusUnresolved || !strings.Contains(got.Reason, "citation 1 could not be resolved") || got.Remedy != "" || got.WithheldRemedy != rcFalseCDRemedy {
 				t.Fatalf("item with an unresolvable citation not degraded: %+v", got)
 			}
-			if res.Incomplete || len(res.unresolved()) != 1 || res.Allegations[1].Status != rcStatusSupported || !strings.Contains(res.Review, rcEscapeIssue) {
+			if len(res.unresolved()) != 1 || res.Allegations[1].Status != rcStatusSupported || !strings.Contains(res.Review, rcEscapeIssue) {
 				t.Fatalf("the other finding was lost, or the open item was not reported as unresolved: %+v", res)
 			}
 			if !strings.Contains(couldNotVerifySection(res.Review), "- "+rcFalseCDIssue+" — citation 1 could not be resolved") {
@@ -185,18 +185,18 @@ func TestReviewCitationCorrection(t *testing.T) {
 				switch outcome {
 				case "corrected":
 					// Refuted with a valid citation: clean, complete review.
-					if got.Incomplete || got.Allegations[0].Status != rcStatusRefuted {
+					if got.Allegations[0].Status != rcStatusRefuted {
 						t.Fatalf("correction not applied: %+v", got.Allegations[0])
 					}
 				case "unverified":
-					if got.Incomplete || len(got.unresolved()) != 1 || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "shell state") {
+					if len(got.unresolved()) != 1 || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "shell state") {
 						t.Fatalf("unverified resubmission not published as unresolved: %+v", got.Allegations[0])
 					}
 				default:
 					// Still invalid, or no usable correction at all: the first
 					// answer's validated verdicts stand and the affected item is
 					// unresolved with the citation reason.
-					if got.Incomplete || len(got.unresolved()) != 1 || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "could not be resolved") {
+					if len(got.unresolved()) != 1 || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "could not be resolved") {
 						t.Fatalf("item with an unresolvable citation not degraded: %+v", got.Allegations[0])
 					}
 					if strings.Contains(got.Review, rcFalseCDRemedy) {
@@ -227,7 +227,7 @@ func TestReviewCitationDoesNotRetrySemanticUncertainty(t *testing.T) {
 	// Not retried — and not withheld: the item is unresolved and listed under
 	// "Could not verify", the supported finding is kept, and the review is not
 	// marked incomplete for one open item.
-	if calls != 1 || err != nil || got.Incomplete || len(got.unresolved()) != 1 || !strings.Contains(got.Review, rcEscapeIssue) || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) || strings.Contains(got.Review, "## Findings\n\n### "+rcFalseCDIssue) {
+	if calls != 1 || err != nil || len(got.unresolved()) != 1 || !strings.Contains(got.Review, rcEscapeIssue) || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) || strings.Contains(got.Review, "## Findings\n\n### "+rcFalseCDIssue) {
 		t.Fatalf("uncertainty retried, withheld, or published as a finding: calls=%d %+v %v", calls, got, err)
 	}
 }

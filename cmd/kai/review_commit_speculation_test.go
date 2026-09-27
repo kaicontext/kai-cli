@@ -88,7 +88,7 @@ func TestSpeculativeIssuesAreNeverPublished(t *testing.T) {
 	if _, issues, _, _, _, _ := rcParseReviewOutput(res.Review); len(issues) != 0 {
 		t.Errorf("published issues = %q, want none", issues)
 	}
-	if len(res.Allegations) != len(rcSpeculativeBenchmarkIssues) || res.Incomplete {
+	if len(res.Allegations) != len(rcSpeculativeBenchmarkIssues) {
 		t.Fatalf("result = %+v, want every speculative issue recorded as refuted and the review complete", res)
 	}
 	for i, a := range res.Allegations {

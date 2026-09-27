@@ -188,8 +188,8 @@ func TestReviewMalformedRepairWithBadCitationPublishesDegraded(t *testing.T) {
 	if s := got.Allegations[1].Status; s != rcStatusSupported {
 		t.Errorf("the independently supported finding was lost: %v", s)
 	}
-	if got.Incomplete || len(got.unresolved()) != 1 || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) {
-		t.Errorf("the unresolved item must be listed under Could not verify, without marking the review incomplete: incomplete=%v unresolved=%v", got.Incomplete, got.unresolved())
+	if len(got.unresolved()) != 1 || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) {
+		t.Errorf("the unresolved item must be listed under Could not verify, unresolved=%v", got.unresolved())
 	}
 	if !strings.Contains(got.Review, rcEscapeIssue) {
 		t.Error("the supported finding is missing from the published review")

@@ -190,15 +190,13 @@ type rcDecisionResult struct {
 }
 
 // rcChallengeResult is everything the challenge decided. Review is the text to
-// publish, assembled from Allegations and Decisions; Incomplete is set when any
-// allegation OR decision is unresolved, and the caller then marks the bundle
-// incomplete and exits non-zero, so a partial review is never read as a
-// completed one.
+// publish, assembled from Allegations and Decisions. An allegation or decision
+// it could not settle is withheld and listed under "Could not verify"; it does
+// not make the review incomplete (see rcValidateChallenge).
 type rcChallengeResult struct {
 	Review      string               `json:"-"`
 	Allegations []rcAllegationResult `json:"allegations,omitempty"`
 	Decisions   []rcDecisionResult   `json:"decisions,omitempty"`
-	Incomplete  bool                 `json:"incomplete,omitempty"`
 }
 
 // unresolved lists what could not be settled, allegations first, for logs and
@@ -512,8 +510,8 @@ func rcResponseText(resp provider.Response) string {
 // is returned as is. Structural failures (a malformed answer, a missing check,
 // an invalid intent or readiness value) return an error and the caller
 // withholds the draft. An unresolved allegation or decision is NOT an error:
-// every supported finding is still published, and Incomplete tells the caller
-// to mark the bundle incomplete and exit non-zero. A citation whose location
+// every supported finding is still published and the open item is listed
+// under "Could not verify". A citation whose location
 // does not exist gets ONE correction round; whatever is still unresolvable
 // afterwards makes its allegation unresolved — it never withholds the review.
 func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {

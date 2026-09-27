@@ -64,9 +64,6 @@ func couldNotVerifySection(review string) string {
 // allegation, its description and its remedy are not published.
 func TestPublicationSupportedSurvivesRefuted(t *testing.T) {
 	res := rcMustValidate(t, rcCDChecks(), nil)
-	if res.Incomplete {
-		t.Fatalf("nothing is unresolved, yet the review is incomplete: %+v", res)
-	}
 	f := findingsSection(res.Review)
 	for _, want := range []string{"### " + rcEscapeIssue, rcEscapeFinding, "**Remedy:** " + rcEscapeRemedy} {
 		if !strings.Contains(f, want) {
@@ -95,9 +92,6 @@ func TestPublicationSupportedSurvivesUnresolved(t *testing.T) {
 	a.MergeReady = 5
 	a.Checks[0].Verdict, a.Checks[0].Reason, a.Checks[0].Evidence = "unverified", "needs a shell to settle", nil
 	res := rcMustValidate(t, a, nil)
-	if res.Incomplete {
-		t.Fatal("one unresolved allegation marked the whole review incomplete")
-	}
 	if _, _, _, _, readiness, _ := rcParseReviewOutput(res.Review); readiness > finding.ReadinessDecideThenMerge {
 		t.Fatalf("readiness %d with an open item", readiness)
 	}
@@ -118,7 +112,7 @@ func TestPublicationSupportedSurvivesUnresolved(t *testing.T) {
 		Review     string             `json:"review,omitempty"`
 		Incomplete bool               `json:"incomplete,omitempty"`
 		Challenge  *rcChallengeResult `json:"challenge,omitempty"`
-	}{res.Review, res.Incomplete, res})
+	}{res.Review, false, res})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,9 +154,6 @@ func TestPublicationUnresolvedDecisionIsWithheld(t *testing.T) {
 			a.Checks[1].Verdict, a.Checks[1].Finding = "refuted", "" // no confirmed defect: only the decision is in play
 			a.Decisions = tc.decisions
 			res := rcMustValidate(t, a, []string{rcTestDecision})
-			if res.Incomplete {
-				t.Fatalf("an open decision marked the review incomplete:\n%s", res.Review)
-			}
 			if (len(res.unresolved()) > 0) != tc.wantUnresolved {
 				t.Fatalf("unresolved()=%v, want open=%v:\n%s", res.unresolved(), tc.wantUnresolved, res.Review)
 			}
@@ -237,8 +228,8 @@ func TestPublicationSummaryFindingsAndCodaAgree(t *testing.T) {
 					t.Fatalf("allegation %q status=%s but published-as-finding=%v", r.Issue, r.Status, inFindings)
 				}
 			}
-			if res.Incomplete || len(res.unresolved()) != unresolved || strings.Contains(summary, "could not be verified") != (unresolved > 0) || strings.Contains(prose, "\n## Could not verify\n") != (unresolved > 0) {
-				t.Fatalf("incomplete=%v unresolved=%d summary=%q", res.Incomplete, unresolved, summary)
+			if len(res.unresolved()) != unresolved || strings.Contains(summary, "could not be verified") != (unresolved > 0) || strings.Contains(prose, "\n## Could not verify\n") != (unresolved > 0) {
+				t.Fatalf("unresolved=%d summary=%q", unresolved, summary)
 			}
 			if len(supported) == 0 && unresolved == 0 && !strings.Contains(prose, "No proposed defect was confirmed") {
 				t.Fatalf("an all-refuted review does not say so:\n%s", prose)
@@ -289,7 +280,7 @@ func TestPublicationSupportedWithoutFindingPublishesTheAllegation(t *testing.T) 
 		t.Fatalf("supported-without-finding: %+v", got)
 	}
 	f := findingsSection(res.Review)
-	if res.Incomplete || len(res.unresolved()) != 0 || !strings.Contains(f, "### "+rcFalseCDIssue) || !strings.Contains(f, "**Remedy:** "+rcFalseCDRemedy) || !strings.Contains(f, rcEscapeIssue) {
+	if len(res.unresolved()) != 0 || !strings.Contains(f, "### "+rcFalseCDIssue) || !strings.Contains(f, "**Remedy:** "+rcFalseCDRemedy) || !strings.Contains(f, rcEscapeIssue) {
 		t.Fatalf("allegation not published as a finding, or the other finding lost:\n%s", res.Review)
 	}
 }
@@ -311,7 +302,7 @@ func TestFastReviewReportsUnresolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fast review withheld a publishable-but-incomplete result: %v", err)
 	}
-	if res == nil || res.Incomplete || len(res.unresolved()) != 1 {
+	if res == nil || len(res.unresolved()) != 1 {
 		t.Fatalf("fast review did not report the unresolved allegation: %+v", res)
 	}
 	if !strings.Contains(couldNotVerifySection(got), "- "+rcFalseCDIssue) || strings.Contains(got, "## Findings") {
@@ -400,7 +391,7 @@ func TestPublicationReplaysCapturedRewriteInconsistency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the captured judgments no longer publish: %v", err)
 	}
-	if res.Incomplete || len(res.Allegations) != 1 || res.Allegations[0].Status != rcStatusRefuted || len(res.Allegations[0].Evidence) != 2 {
+	if len(res.Allegations) != 1 || res.Allegations[0].Status != rcStatusRefuted || len(res.Allegations[0].Evidence) != 2 {
 		t.Fatalf("result: %+v", res)
 	}
 	_, issues, _, _, got, summary := rcParseReviewOutput(res.Review)
