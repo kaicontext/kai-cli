@@ -349,8 +349,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// — see rcIncomplete. Used solely when the review produced nothing to parse.
 	var inc *rcIncomplete
 	// challenge is the publication gate's structured record from whichever path
-	// ran: each allegation's and decision's final status. Its Incomplete flag
-	// means the review is incomplete even though it has a body.
+	// ran: each allegation's and decision's final status.
 	var challenge *rcChallengeResult
 	if fast {
 		// The fast pass may substitute a non-reasoning model for the DRAFT. The
@@ -419,14 +418,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		incomplete = true
 		fmt.Fprintf(os.Stderr, "  review produced no conclusion — emitting an incomplete-review finding, then failing\n")
 	}
-	// A published review that could not settle every allegation or decision is
-	// incomplete too. Its body is real — it carries the supported findings —
-	// but the bundle must say so and the run must exit non-zero, or Atlas and
-	// CI would read a partial review as a completed one.
-	if challenge != nil && challenge.Incomplete {
-		incomplete = true
-		open := challenge.unresolved()
-		fmt.Fprintf(os.Stderr, "  review incomplete: %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
+	// Items the challenge could not settle are withheld and listed under
+	// "Could not verify" in the review; they no longer make it incomplete
+	// (rcValidateChallenge).
+	if open := challenge.unresolved(); len(open) > 0 {
+		fmt.Fprintf(os.Stderr, "  review published with %d item(s) it could not verify: %s\n", len(open), strings.Join(open, "; "))
 	}
 	// An empty record (the draft had nothing to challenge) is omitted from the
 	// bundle rather than published as a hollow block.
@@ -578,11 +574,6 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Println(prose)
 		if note != "" {
 			fmt.Printf("\nBottom line: %s\n", note)
-		}
-		// The status is part of the text a human reads, not only the exit code.
-		if challenge != nil && challenge.Incomplete {
-			open := challenge.unresolved()
-			fmt.Printf("\nStatus: INCOMPLETE — %d item(s) unresolved: %s\n", len(open), strings.Join(open, "; "))
 		}
 		if incomplete {
 			return rcErrIncompleteReview
@@ -1342,9 +1333,8 @@ type rcIncomplete struct {
 	Turns            int
 	FilesRead        []string
 	// Challenge is the gate's structured record when it PUBLISHED a review.
-	// Unlike ChallengeFailure, the review body is real and kept; when
-	// Challenge.Incomplete is set the caller marks the bundle incomplete and
-	// exits non-zero so a partial review is never read as a completed one.
+	// Unlike ChallengeFailure, the review body is real and kept; items it
+	// could not settle are listed in it under "Could not verify".
 	Challenge *rcChallengeResult
 }
 

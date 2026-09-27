@@ -156,7 +156,8 @@ func TestReviewWellFormedSubmissionIsNotRetried(t *testing.T) {
 // It publishes, degraded. That is not a new policy invented here — it is the
 // policy rcValidateChallenge already applies to any answer that decodes: the
 // item whose citation points nowhere becomes unresolved, the items that stand
-// on their own are published, and the review is marked incomplete. What is
+// on their own are published, and the open item is listed under "Could not
+// verify" (withheld, readiness capped) without marking the review incomplete. What is
 // new is only that a structurally malformed first attempt can now reach it.
 // Withholding instead would discard verdicts that validated, which is the
 // behaviour this whole change exists to stop.
@@ -187,8 +188,8 @@ func TestReviewMalformedRepairWithBadCitationPublishesDegraded(t *testing.T) {
 	if s := got.Allegations[1].Status; s != rcStatusSupported {
 		t.Errorf("the independently supported finding was lost: %v", s)
 	}
-	if !got.Incomplete {
-		t.Error("a review with an unresolved item must be marked incomplete")
+	if len(got.unresolved()) != 1 || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) {
+		t.Errorf("the unresolved item must be listed under Could not verify, unresolved=%v", got.unresolved())
 	}
 	if !strings.Contains(got.Review, rcEscapeIssue) {
 		t.Error("the supported finding is missing from the published review")

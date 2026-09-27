@@ -243,7 +243,7 @@ func TestPR119CitationsResolveInFileCoordinates(t *testing.T) {
 	if err != nil || len(problems) != 1 || !strings.Contains(problems[0].Reason, "lines 396-595") {
 		t.Fatalf("past-range citation: err=%v problems=%+v", err, problems)
 	}
-	if res.Allegations[0].Status != rcStatusUnresolved || res.Allegations[0].Remedy != "" || !res.Incomplete {
+	if res.Allegations[0].Status != rcStatusUnresolved || res.Allegations[0].Remedy != "" || len(res.unresolved()) != 1 {
 		t.Fatalf("not degraded: %+v", res.Allegations[0])
 	}
 }
@@ -275,7 +275,7 @@ func TestCitationCorrectionReportsEveryInvalidLocation(t *testing.T) {
 			t.Fatalf("feedback lacks %q:\n%s", want, feedback)
 		}
 	}
-	if res.Incomplete || res.Allegations[1].Status != rcStatusSupported || res.Decisions[0].Status != rcStatusSupported {
+	if res.Allegations[1].Status != rcStatusSupported || res.Decisions[0].Status != rcStatusSupported {
 		t.Fatalf("corrected answer not published clean: %+v", res)
 	}
 }

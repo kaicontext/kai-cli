@@ -74,6 +74,34 @@ func TestReviewChallengeDropsRefutedIssueAndKeepsSupportedIssue(t *testing.T) {
 	}
 }
 
+// A check that confirms an allegation with evidence but leaves its finding
+// description empty publishes the allegation as written, instead of turning a
+// confirmed defect into an unresolved item that marks the whole review
+// unfinished (2026-09-27, cal.com #10600 and #8087 in the benchmark rerun).
+func TestReviewChallengePublishesASupportedAllegationWithoutADescription(t *testing.T) {
+	a := rcCDChecks()
+	for i := range a.Checks {
+		if a.Checks[i].Issue == rcEscapeIssue {
+			a.Checks[i].Finding = ""
+		}
+	}
+	res, _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Review, rcEscapeIssue) {
+		t.Fatalf("the confirmed allegation was not published: %s", res.Review)
+	}
+	for _, r := range res.Allegations {
+		if r.Issue == rcEscapeIssue && (r.Status != rcStatusSupported || r.Finding != rcEscapeIssue) {
+			t.Fatalf("result = %+v, want supported with the allegation as its finding", r)
+		}
+		if r.Status == rcStatusUnresolved {
+			t.Fatalf("no item should be unresolved: %+v", r)
+		}
+	}
+}
+
 func TestReviewChallengeFailsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -448,7 +476,7 @@ func TestReviewChallengeTruncationThenCitationCorrection(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s2", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
 	}}
 	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
-	if err != nil || calls != 3 || res.Incomplete || !strings.Contains(res.Review, rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDIssue) {
+	if err != nil || calls != 3 || !strings.Contains(res.Review, rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDIssue) {
 		t.Fatalf("review did not finish after truncation and correction: calls=%d %+v %v", calls, res, err)
 	}
 }
@@ -474,7 +502,7 @@ func TestReviewChallengeSkipsDraftWithoutIssues(t *testing.T) {
 		t.Fatal("a draft without allegations does not need this pass")
 		return provider.Response{}, nil
 	}}
-	if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || got.Review != rcTestReview() || got.Incomplete {
+	if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || got.Review != rcTestReview() {
 		t.Fatalf("changed issue-free draft: %+v %v", got, err)
 	}
 }
