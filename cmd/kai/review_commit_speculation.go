@@ -28,7 +28,6 @@ import (
 // against ordinary defect sentences in TestSpeculativePhraseLeavesRealDefectsAlone.
 var rcSpeculativePhrases = []string{
 	"dormant today", "dormant for now", "dormant until",
-	"latent footgun", "footgun for future", "footgun if",
 	"is ever added", "are ever added", "is ever introduced", "are ever introduced",
 	"is ever reordered", "are ever reordered", "is ever changed to", "is ever refactored",
 	"if someone later", "if someone ever", "should anyone later",

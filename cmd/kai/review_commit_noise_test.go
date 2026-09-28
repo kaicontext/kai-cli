@@ -5,11 +5,13 @@ import (
 	"testing"
 )
 
-// The gate and the fast pass apply the same bar as the deep review: a missing
-// test, a consistency point or an intended change is published only with a
-// named requirement or regression.
+// The gate and the fast pass apply the same bar as the deep review: generic
+// test or consistency advice, or an intended change, is published only with a
+// named requirement or regression — while a concrete defect in a test, a doc
+// or a string is supported like any other (the 2026-09-27 rerun missed every
+// one of those).
 func TestGateAndFastPassDoNotPublishTestAndIntentNoise(t *testing.T) {
-	for _, want := range []string{"REFUTE an allegation that is only a missing or weak test", "describes as intended", "concrete regression (what breaks, for whom, on which input)"} {
+	for _, want := range []string{"REFUTE an allegation that is only generic advice", "describes as intended", "concrete regression (what breaks, for whom, on which input)", "SUPPORT concrete defects wherever they are, test and doc files included", "Small is not the same as wrong"} {
 		if !strings.Contains(rcChallengeSystemHead, want) {
 			t.Errorf("challenge prompt is missing %q", want)
 		}

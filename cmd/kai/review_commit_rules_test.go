@@ -40,9 +40,12 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 		},
 		{
 			// Missing tests, intent and consistency points took over the
-			// defect list on the 2026-09-24 benchmark.
-			name:  "tests, intent and consistency are not defects by themselves",
-			needs: []string{"TESTS, INTENT AND CONSISTENCY ARE NOT DEFECTS BY THEMSELVES", "specific missing requirement", "concrete regression risk", "#36880", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
+			// defect list on the 2026-09-24 benchmark; the 2026-09-27 rerun
+			// then showed the opposite failure — one theme per PR and every
+			// concrete test, doc and typo defect unreported — so the rule
+			// separates generic advice from concrete defects.
+			name:  "generic advice is not a defect, and every concrete defect is reported",
+			needs: []string{"GENERIC ADVICE IS NOT A DEFECT", "REPORT EVERY DEFECT, NOT ONLY THE HEADLINE ONE", "test files and docs included", "specific missing requirement", "concrete regression risk", "#36880", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
 		},
 		{
 			// Contract mismatches missed in files the review opened
