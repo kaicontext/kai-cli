@@ -203,6 +203,8 @@ type rcChallengeResult struct {
 	scope, limitations []string
 	match              finding.Match
 	proposed           finding.Readiness
+	// unassessed holds the allegations (by index) the answer gave no check for.
+	unassessed map[int]bool
 }
 
 // unresolved lists what could not be settled, allegations first, for logs and
@@ -567,8 +569,16 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 	// draft. Bound the extra call, and propagate cancellation from the caller.
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
+	// Sources first, then the claims. The sources are the same for every
+	// batch of one review and the claims differ, so with the sources leading
+	// the prompt, batches after the first reuse them from the provider's
+	// prompt cache instead of paying for the review's whole evidence again.
 	var b strings.Builder
-	fmt.Fprintf(&b, "DRAFT (claims to challenge):\n%s\n\nISSUES TO CHECK:\n", draft)
+	b.WriteString("SOURCES (the evidence; cite by source number and line range):\n")
+	for i, source := range sources {
+		fmt.Fprintf(&b, "\n%s", rcRenderSource(i+1, source))
+	}
+	fmt.Fprintf(&b, "\n\nDRAFT (claims to challenge):\n%s\n\nISSUES TO CHECK:\n", draft)
 	for _, issue := range issues {
 		fmt.Fprintf(&b, "- %s\n", issue)
 	}
@@ -577,9 +587,6 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 		for _, d := range decisions {
 			fmt.Fprintf(&b, "- %s\n", d)
 		}
-	}
-	for i, source := range sources {
-		fmt.Fprintf(&b, "\n%s", rcRenderSource(i+1, source))
 	}
 	if b.Len() > rcEvidenceLimit {
 		return nil, fmt.Errorf("challenge evidence exceeds %d bytes; refusing to discard evidence", rcEvidenceLimit)
@@ -759,6 +766,18 @@ func rcValidateOrRepair(ctx context.Context, prov provider.Provider, model, syst
 	if err != nil {
 		return degraded("corrected answer rejected: " + err.Error())
 	}
+	dropped := 0
+	for i := range corrected.unassessed {
+		if !res.unassessed[i] {
+			dropped++
+		}
+	}
+	if dropped > 0 {
+		// A correction may not drop a check the first answer gave: that
+		// would throw its validated verdict away, so the first answer stands,
+		// degraded. Skipping one the first answer also skipped loses nothing.
+		return degraded(fmt.Sprintf("corrected answer dropped %d check(s) the first answer gave", dropped))
+	}
 	if len(remaining) > 0 {
 		var still []string
 		for _, p := range remaining {
@@ -884,6 +903,12 @@ func rcResolveEvidence(item int, evidence []rcCheckEvidence, sources []rcSource)
 	var refs []rcCitationRef
 	var problems []rcCitationProblem
 	for citationIndex, ev := range evidence {
+		// A range written end-first ("155-153") names the same lines as its
+		// start-first form; it is a slip, not a location that does not exist.
+		// Every third citation from openai/gpt-5.4-mini was one (2026-09-28).
+		if ev.LineEnd > 0 && ev.LineStart > ev.LineEnd {
+			ev.LineStart, ev.LineEnd = ev.LineEnd, ev.LineStart
+		}
 		// The system extracts the cited lines; only a location that does not
 		// exist fails. Whether the lines support the claim is not checked.
 		if _, reason, ok := rcExtractCitation(sources, ev); !ok {
@@ -933,17 +958,37 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	}
 
 	index := map[string]int{}
+	keys := map[string][]int{}
 	for i, issue := range issues {
 		index[issue] = i
+		keys[rcIssueKey(issue)] = append(keys[rcIssueKey(issue)], i)
 	}
-	seen := map[string]bool{}
+	// A cosmetic key stands in for its bullet only when no other bullet
+	// shares it; an ambiguous key could file one bullet's verdict under
+	// another, so such a check must echo its bullet exactly.
+	cosmetic := map[string]int{}
+	for k, ids := range keys {
+		if len(ids) == 1 {
+			cosmetic[k] = ids[0]
+		}
+	}
+	seen := map[int]bool{}
 	results := make([]rcAllegationResult, len(issues))
 	for checkIndex, check := range answer.Checks {
 		id, known := index[check.Issue]
-		if !known || seen[check.Issue] || strings.TrimSpace(check.Reason) == "" {
+		if !known {
+			// A model that re-quotes the bullet with other backticks, quotes,
+			// spacing or trailing punctuation is still checking that bullet.
+			// Exact echo was the only accepted form, and one cosmetic
+			// difference rejected a whole batch (openai/gpt-5.4-mini,
+			// 2026-09-28).
+			id, known = cosmetic[rcIssueKey(check.Issue)]
+		}
+		if !known || seen[id] || strings.TrimSpace(check.Reason) == "" {
 			return nil, nil, fmt.Errorf("challenge omitted reasoning, duplicated a check, or checked an unknown issue")
 		}
-		seen[check.Issue] = true
+		seen[id] = true
+		check.Issue = issues[id]
 		status, reason := check.Verdict, strings.TrimSpace(check.Reason)
 		switch status {
 		case rcStatusSupported, rcStatusRefuted:
@@ -959,10 +1004,17 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 		problems = append(problems, bad...)
 		r := rcAllegationResult{ID: id + 1, Issue: check.Issue, Status: status, Reason: reason, Evidence: refs}
 		findingText, remedy := strings.TrimSpace(check.Finding), strings.TrimSpace(check.Remedy)
-		if len(bad) > 0 && status != rcStatusUnresolved {
+		if len(bad) > 0 && status == rcStatusSupported {
 			// A verdict cannot rest on evidence that points nowhere. The item
 			// is unresolved with the exact reason; the others are untouched.
 			r.Status, r.Reason = rcStatusUnresolved, fmt.Sprintf("citation %d could not be resolved (%s); the verdict %q was not published on evidence that does not exist", bad[0].Citation, bad[0].Reason, status)
+		} else if len(bad) > 0 && status == rcStatusRefuted {
+			// A refutation withholds the allegation, and so does an
+			// unresolved verdict — but an unresolved one is then listed under
+			// "Could not verify", which publishes it as a doubt. A bad
+			// citation must not turn a claim the check rejected into a
+			// published one; it stays refuted, with the citation noted.
+			r.Reason = fmt.Sprintf("%s (citation %d could not be resolved: %s)", reason, bad[0].Citation, bad[0].Reason)
 		}
 		if r.Status == rcStatusSupported && findingText == "" {
 			// The check confirmed the allegation, with evidence, but wrote no
@@ -981,8 +1033,15 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 		}
 		results[id] = r
 	}
-	if len(seen) != len(issues) {
-		return nil, nil, fmt.Errorf("challenge did not check every allegation")
+	// An allegation the answer skipped is unresolved, not a reason to reject
+	// every verdict the answer did give: one skipped check used to fail its
+	// whole batch (openai/gpt-5.4-mini, 2026-09-28).
+	unassessed := map[int]bool{}
+	for i, issue := range issues {
+		if !seen[i] {
+			unassessed[i] = true
+			results[i] = rcAllegationResult{ID: i + 1, Issue: issue, Status: rcStatusUnresolved, Reason: "the challenge did not assess this allegation"}
+		}
 	}
 
 	// Decisions come from the draft and are assessed like anything else. The
@@ -1027,7 +1086,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 		dresults[id] = dr
 	}
 
-	res := &rcChallengeResult{Allegations: results, Decisions: dresults}
+	res := &rcChallengeResult{Allegations: results, Decisions: dresults, unassessed: unassessed}
 	supported, refuted, unresolved := 0, 0, 0
 	for _, r := range results {
 		switch r.Status {
@@ -1205,4 +1264,15 @@ func rcAssembleReview(scope, limitations []string, results []rcAllegationResult,
 		}
 	}
 	return b.String()
+}
+
+// rcIssueKey normalizes an ISSUES bullet for matching a check back to it:
+// lower case, no markdown quoting, collapsed whitespace, no trailing
+// punctuation. Two bullets that differ only cosmetically share a key; the
+// first one keeps it.
+func rcIssueKey(issue string) string {
+	s := strings.ToLower(issue)
+	s = strings.NewReplacer("`", "", "\u201c", "\"", "\u201d", "\"", "\u2018", "'", "\u2019", "'", "**", "", "\u2014", "-", "\u2013", "-").Replace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	return strings.TrimRight(s, " .;:")
 }

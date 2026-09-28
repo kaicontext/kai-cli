@@ -182,6 +182,14 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 		// favourable one.
 		merged.match = rcWorstMatch(ok)
 	}
+	rcFinalize(merged)
+	return merged, nil
+}
+
+// rcFinalize recomputes a result's readiness, summary and published review
+// from its allegations and decisions, with the caps rcValidateChallenge
+// applies. Used after batches are merged and after allegations change status.
+func rcFinalize(merged *rcChallengeResult) {
 	supported, refuted, unresolved := 0, 0, 0
 	for _, a := range merged.Allegations {
 		switch a.Status {
@@ -212,7 +220,6 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 	}
 	summary := rcDeriveSummary(supported, refuted, unresolved, openDecisions, merged.match, readiness)
 	merged.Review = rcAssembleReview(merged.scope, merged.limitations, merged.Allegations, merged.Decisions, merged.match, readiness, summary)
-	return merged, nil
 }
 
 // rcWorstMatch is the least favourable intent verdict among results:
@@ -226,4 +233,48 @@ func rcWorstMatch(results []*rcChallengeResult) finding.Match {
 		}
 	}
 	return worst
+}
+
+// rcChallengeModel is the model the publication gate runs on: KAI_CHALLENGE_MODEL
+// when set, else the review model.
+//
+// The gate is where GLM's format failures cost whole reviews — a malformed
+// submission, rejected twice, withholds the draft — and where false positives
+// get through, while it is a small share of a review's tokens. So it is the
+// stage worth moving to a model chosen for reliable structured output, apart
+// from the model that investigates. The review job sets it; unset, nothing
+// changes.
+func rcChallengeModel(reviewModel string) string {
+	if m := strings.TrimSpace(os.Getenv("KAI_CHALLENGE_MODEL")); m != "" {
+		return m
+	}
+	return reviewModel
+}
+
+// rcWithholdUnsettledSweep withholds the sweep's proposals that the gate could
+// not settle. The sweep is a candidate generator: a proposal it made and the
+// check neither confirmed nor refuted is a guess, and listing it under "Could
+// not verify" would publish that guess as a doubt — an unmatched finding on
+// the benchmark and noise on a real PR. The reviewer's own unsettled points
+// are still listed, as before. Reports how many were withheld.
+func rcWithholdUnsettledSweep(res *rcChallengeResult, sweep []string) int {
+	if res == nil || len(sweep) == 0 {
+		return 0
+	}
+	fromSweep := map[string]bool{}
+	for _, is := range sweep {
+		fromSweep[rcIssueKey(is)] = true
+	}
+	n := 0
+	for i, a := range res.Allegations {
+		if a.Status == rcStatusUnresolved && fromSweep[rcIssueKey(a.Issue)] {
+			res.Allegations[i].Status = rcStatusRefuted
+			res.Allegations[i].Reason = "withheld: a sweep proposal the check could not settle (" + a.Reason + ")"
+			n++
+		}
+	}
+	if n > 0 && res.match != "" {
+		rcFinalize(res)
+	}
+	return n
 }
