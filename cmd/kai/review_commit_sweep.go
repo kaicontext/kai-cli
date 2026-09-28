@@ -56,6 +56,7 @@ Rules:
 - Do not report a problem that depends on a future code change.
 - One defect per line of output. If the same mistake repeats, write it once and add "(also: path:line, …)".
 - It is fine to report nothing for a chunk that is correct. Do not pad.
+- Never write a bullet for a line you checked and found correct. Think it through before writing; a bullet is a defect, not a note.
 
 Output ONLY this, nothing before or after:
 ISSUES:
@@ -66,14 +67,18 @@ ISSUES:
 
 // Sweep budgets. The sweep runs beside the grounded review, so its deadline
 // is its own; what it has not finished by then is simply not merged.
+//
+// The output budget is generous on purpose: on a reasoning model the hidden
+// chain of thought is drawn from the same max_tokens, and a budget sized for
+// the visible answer alone comes back empty.
 var (
-	rcSweepDeadline     = 8 * time.Minute
+	rcSweepDeadline     = 10 * time.Minute
 	rcSweepChunkBytes   = 48 * 1024
 	rcSweepMaxChunks    = 12
-	rcSweepParallel     = 4
+	rcSweepParallel     = 6
 	rcSweepContextLines = 20
 	rcSweepMaxFileBytes = 64 * 1024
-	rcSweepMaxTokens    = 6000
+	rcSweepMaxTokens    = 16000
 )
 
 // rcSweepSkip reports files whose diff is not code anyone reviews line by
@@ -245,6 +250,9 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 				outs[i] = out{err: err}
 				return
 			}
+			if resp.FinishReason == message.FinishReasonMaxTokens {
+				fmt.Fprintf(os.Stderr, "  sweep: a chunk hit the %d-token output limit; keeping the issues it finished\n", rcSweepMaxTokens)
+			}
 			var text strings.Builder
 			for _, part := range resp.Parts {
 				if t, ok := part.(message.TextContent); ok {
@@ -276,6 +284,12 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 }
 
 var rcSweepBullet = regexp.MustCompile(`^\s*[-*]\s+(.+)$`)
+
+// rcSweepRetracted matches a bullet the model wrote and then took back in the
+// same sentence. On the first live chunks the reviewer model reasoned in the
+// list itself — "…so this line is fine — no defect here. (Correction: no
+// defect.)" — and a retraction handed to the gate only spends its budget.
+var rcSweepRetracted = regexp.MustCompile(`(?i)\bno defect\b|\(correction|\bnot a defect\b|\bthis (line|code) is (fine|correct)\b|\bwhich is correct\b|\bso (this|it) is fine\b`)
 
 // rcSweepIssues parses the sweep's ISSUES list, keeping only bullets that
 // begin with a changed path and a line number — the shape the gate and the
@@ -311,6 +325,9 @@ func rcSweepIssues(text string, changed map[string]bool) []string {
 			continue
 		}
 		if !changed[path] {
+			continue
+		}
+		if rcSweepRetracted.MatchString(item) {
 			continue
 		}
 		issues = append(issues, item)
@@ -427,6 +444,11 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 	if os.Getenv("KAI_REVIEW_SWEEP") == "0" {
 		ch <- rcSweepResult{}
 		return ch
+	}
+	// KAI_SWEEP_MODEL overrides the model for the sweep alone, so the pass
+	// can be tried on a cheaper or faster model without changing the review's.
+	if m := strings.TrimSpace(os.Getenv("KAI_SWEEP_MODEL")); m != "" {
+		model = m
 	}
 	go func() {
 		order, patches := rcSweepPatches(base, ref)

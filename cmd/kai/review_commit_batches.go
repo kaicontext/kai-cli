@@ -176,6 +176,11 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 		for i, d := range decisions {
 			merged.Decisions = append(merged.Decisions, rcDecisionResult{ID: i + 1, Decision: d, Status: rcStatusUnresolved, Reason: "the check for this decision's batch did not complete"})
 		}
+		// The first batch carries the decisions, so its intent verdict is the
+		// one that saw the whole change. Without it, no surviving batch's
+		// verdict can stand in for it optimistically: take the least
+		// favourable one.
+		merged.match = rcWorstMatch(ok)
 	}
 	supported, refuted, unresolved := 0, 0, 0
 	for _, a := range merged.Allegations {
@@ -208,4 +213,17 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 	summary := rcDeriveSummary(supported, refuted, unresolved, openDecisions, merged.match, readiness)
 	merged.Review = rcAssembleReview(merged.scope, merged.limitations, merged.Allegations, merged.Decisions, merged.match, readiness, summary)
 	return merged, nil
+}
+
+// rcWorstMatch is the least favourable intent verdict among results:
+// diverges over partial over verified.
+func rcWorstMatch(results []*rcChallengeResult) finding.Match {
+	rank := map[finding.Match]int{finding.MatchVerified: 1, finding.MatchPartial: 2, finding.MatchDiverges: 3}
+	worst := results[0].match
+	for _, r := range results[1:] {
+		if rank[r.match] > rank[worst] {
+			worst = r.match
+		}
+	}
+	return worst
 }

@@ -16,6 +16,7 @@ ISSUES:
 - t/b_test.go:40 — the test asserts 6 for group_2 but the data packet sends 10
 - other.go:3 — not a file in this change
 - a/b.go — no line number
+- a/b.go:52 — the error is only logged on the error path, so this line is fine — no defect here. (Correction: no defect.)
 - (none)`
 	got := rcSweepIssues(out, changed)
 	if len(got) != 2 || !strings.HasPrefix(got[0], "a/b.go:12") || !strings.HasPrefix(got[1], "t/b_test.go:40") {
@@ -101,5 +102,23 @@ func TestSplitDiffKeysPatchesByNewPath(t *testing.T) {
 	order, patches := rcSplitDiff(diff)
 	if strings.Join(order, ",") != "x.go,gone.go" || !strings.Contains(patches["x.go"], "+b") || !strings.Contains(patches["gone.go"], "-c") {
 		t.Fatalf("order=%v patches=%v", order, patches)
+	}
+}
+
+// Without the first batch — the one that saw the decisions — the intent
+// verdict must not be the most optimistic survivor's.
+func TestMergeBatchesTakesTheWorstIntentWhenTheFirstBatchFails(t *testing.T) {
+	batches := [][]string{{"a.go:1 — one"}, {"b.go:1 — two"}, {"c.go:1 — three"}}
+	verified := &rcChallengeResult{Allegations: []rcAllegationResult{{Issue: "b.go:1 — two", Status: rcStatusRefuted}}, match: finding.MatchVerified, proposed: finding.ReadinessMerge}
+	partial := &rcChallengeResult{Allegations: []rcAllegationResult{{Issue: "c.go:1 — three", Status: rcStatusRefuted}}, match: finding.MatchPartial, proposed: finding.ReadinessMerge}
+	res, err := rcMergeBatches(batches, []string{"d"}, []*rcChallengeResult{nil, verified, partial}, []error{errors.New("timeout"), nil, nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.match != finding.MatchPartial {
+		t.Fatalf("match = %q, want the least favourable surviving verdict", res.match)
+	}
+	if len(res.Decisions) != 1 || res.Decisions[0].Status != rcStatusUnresolved {
+		t.Fatalf("decisions = %+v", res.Decisions)
 	}
 }
