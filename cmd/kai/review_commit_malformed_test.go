@@ -172,7 +172,11 @@ func TestReviewMalformedRepairWithBadCitationPublishesDegraded(t *testing.T) {
 			t.Fatal("unbounded retry: a structural repair must not chain into a citation repair")
 		}
 		a := rcCDChecks()
-		a.Checks[0].Evidence[0].LineEnd = 99 // decodes, but points nowhere
+		// Decodes, but points nowhere — on a SUPPORTED verdict, the case
+		// that must be degraded (a refutation on a bad citation just stays
+		// refuted; see TestRefutationOnABadCitationStaysWithheld).
+		a.Checks[0].Verdict, a.Checks[0].Finding = rcStatusSupported, "the cd does not apply to later lines"
+		a.Checks[0].Evidence[0].LineEnd = 99
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "fixed", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
 	}}
 	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)

@@ -122,3 +122,37 @@ func TestMergeBatchesTakesTheWorstIntentWhenTheFirstBatchFails(t *testing.T) {
 		t.Fatalf("decisions = %+v", res.Decisions)
 	}
 }
+
+func TestChallengeModelOverride(t *testing.T) {
+	t.Setenv("KAI_CHALLENGE_MODEL", "")
+	if got := rcChallengeModel("z-ai/glm-5.2"); got != "z-ai/glm-5.2" {
+		t.Fatalf("unset: %q, want the review model", got)
+	}
+	t.Setenv("KAI_CHALLENGE_MODEL", " openai/gpt-5.4-mini ")
+	if got := rcChallengeModel("z-ai/glm-5.2"); got != "openai/gpt-5.4-mini" {
+		t.Fatalf("set: %q", got)
+	}
+}
+
+// An unsettled sweep proposal is withheld; the reviewer's own unsettled point
+// is still listed under "Could not verify".
+func TestUnsettledSweepProposalsAreWithheld(t *testing.T) {
+	res := &rcChallengeResult{
+		Allegations: []rcAllegationResult{
+			{ID: 1, Issue: "a.go:1 — reviewer's own doubt", Status: rcStatusUnresolved, Reason: "no source"},
+			{ID: 2, Issue: "b.go:2 — sweep guess", Status: rcStatusUnresolved, Reason: "the challenge did not assess this allegation"},
+			{ID: 3, Issue: "c.go:3 — sweep hit", Status: rcStatusSupported, Finding: "c is wrong"},
+		},
+		match: finding.MatchPartial, proposed: finding.ReadinessSmallFixes,
+	}
+	if n := rcWithholdUnsettledSweep(res, []string{"`b.go:2 — sweep guess`", "c.go:3 — sweep hit"}); n != 1 {
+		t.Fatalf("withheld %d, want 1", n)
+	}
+	cnv := couldNotVerifySection(res.Review)
+	if !strings.Contains(cnv, "reviewer's own doubt") || strings.Contains(res.Review, "sweep guess") {
+		t.Fatalf("review:\n%s", res.Review)
+	}
+	if !strings.Contains(res.Review, "c.go:3 — sweep hit") {
+		t.Fatalf("the supported sweep finding was lost:\n%s", res.Review)
+	}
+}

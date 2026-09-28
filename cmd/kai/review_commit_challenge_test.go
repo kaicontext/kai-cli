@@ -107,7 +107,6 @@ func TestReviewChallengeFailsClosed(t *testing.T) {
 		name   string
 		mutate func(*rcChallengeAnswer)
 	}{
-		{"missing check", func(a *rcChallengeAnswer) { a.Checks = a.Checks[:1] }},
 		{"duplicate check", func(a *rcChallengeAnswer) { a.Checks[1] = a.Checks[0] }},
 		{"no evidence", func(a *rcChallengeAnswer) { a.Checks[0].Evidence = nil }},
 		{"check for an issue the draft never raised", func(a *rcChallengeAnswer) {
@@ -541,5 +540,18 @@ const input = full.replace(/\r?\n/g, "\r") + "\r";
 	_, issues, _, _, _, _ := rcParseReviewOutput(res.Review)
 	if len(issues) != 1 || issues[0] != rcEscapeIssue {
 		t.Fatalf("expected only the genuine escaping defect: %v", issues)
+	}
+}
+
+// A skipped allegation is unresolved; the verdicts the answer did give stand.
+func TestReviewChallengeSkippedCheckIsUnresolvedNotFatal(t *testing.T) {
+	a := rcCDChecks()
+	a.Checks = a.Checks[:1]
+	res, _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
+	if err != nil {
+		t.Fatalf("one skipped check rejected the answer: %v", err)
+	}
+	if res.unassessed != 1 || res.Allegations[1].Status != rcStatusUnresolved || res.Allegations[0].Status != rcStatusRefuted {
+		t.Fatalf("allegations = %+v (unassessed %d)", res.Allegations, res.unassessed)
 	}
 }

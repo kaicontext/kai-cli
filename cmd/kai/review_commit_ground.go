@@ -161,6 +161,14 @@ func rcIsEmptyListItem(item string) bool {
 	case "none", "n/a", "na", "nothing", "no issues", "no concerns", "no decisions", "empty", "-", "":
 		return true
 	}
+	// "(none — the one concern I traced has no trigger today…)": an empty
+	// list with the reviewer's explanation attached. It is not a finding; the
+	// gate once spent a check on one and listed it under "Could not verify".
+	for _, lead := range []string{"none —", "none -", "none:", "none;", "none,", "none –"} {
+		if strings.HasPrefix(s, lead) {
+			return true
+		}
+	}
 	return false
 }
 

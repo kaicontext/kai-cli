@@ -29,11 +29,13 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 	}{
 		{"source", 99, 1, 1, "source number is out of range"},
 		{"start before 1", 1, 0, 1, "row range is out of bounds (source has 2 row(s))"},
-		{"reversed", 1, 2, 1, "row range is out of bounds"},
 		{"past the end", 1, 1, 3, "row range is out of bounds (source has 2 row(s))"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// A SUPPORTED verdict on a bad citation: it would publish a
+			// finding on evidence that does not exist, so it is degraded.
 			a := rcCDChecks()
+			a.Checks[0].Verdict, a.Checks[0].Finding = rcStatusSupported, "the cd does not apply to later lines"
 			a.Checks[0].Evidence[0] = rcCheckEvidence{Source: tc.source, LineStart: tc.start, LineEnd: tc.end}
 			res, problems, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
 			if err != nil {
@@ -42,7 +44,7 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 			if len(problems) != 1 || !strings.Contains(problems[0].String(), tc.want) || !strings.HasPrefix(problems[0].String(), "check 1, citation 1, source "+strconv.Itoa(tc.source)) {
 				t.Fatalf("imprecise problem report: %+v", problems)
 			}
-			if got := res.Allegations[0]; got.Status != rcStatusUnresolved || !strings.Contains(got.Reason, "citation 1 could not be resolved") || got.Remedy != "" || got.WithheldRemedy != rcFalseCDRemedy {
+			if got := res.Allegations[0]; got.Status != rcStatusUnresolved || !strings.Contains(got.Reason, "citation 1 could not be resolved") || got.Remedy != "" || got.WithheldRemedy != rcFalseCDRemedy || got.Finding != "" {
 				t.Fatalf("item with an unresolvable citation not degraded: %+v", got)
 			}
 			if len(res.unresolved()) != 1 || res.Allegations[1].Status != rcStatusSupported || !strings.Contains(res.Review, rcEscapeIssue) {
@@ -194,9 +196,11 @@ func TestReviewCitationCorrection(t *testing.T) {
 					}
 				default:
 					// Still invalid, or no usable correction at all: the first
-					// answer's validated verdicts stand and the affected item is
-					// unresolved with the citation reason.
-					if len(got.unresolved()) != 1 || got.Allegations[0].Status != rcStatusUnresolved || !strings.Contains(got.Allegations[0].Reason, "could not be resolved") {
+					// answer's validated verdicts stand. Its verdict on the
+					// affected item was a REFUTATION, which withholds the item
+					// either way, so it stays refuted with the citation noted —
+					// never listed under "Could not verify" as a doubt.
+					if len(got.unresolved()) != 0 || got.Allegations[0].Status != rcStatusRefuted || !strings.Contains(got.Allegations[0].Reason, "could not be resolved") {
 						t.Fatalf("item with an unresolvable citation not degraded: %+v", got.Allegations[0])
 					}
 					if strings.Contains(got.Review, rcFalseCDRemedy) {
@@ -229,5 +233,60 @@ func TestReviewCitationDoesNotRetrySemanticUncertainty(t *testing.T) {
 	// marked incomplete for one open item.
 	if calls != 1 || err != nil || len(got.unresolved()) != 1 || !strings.Contains(got.Review, rcEscapeIssue) || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) || strings.Contains(got.Review, "## Findings\n\n### "+rcFalseCDIssue) {
 		t.Fatalf("uncertainty retried, withheld, or published as a finding: calls=%d %+v %v", calls, got, err)
+	}
+}
+
+// A REFUTED verdict on a bad citation withholds the allegation exactly as a
+// refutation does. Degrading it to unresolved used to list it under "Could not
+// verify" — publishing, as a doubt, a claim the check had rejected (8 of 10
+// such items in a live run with openai/gpt-5.4-mini as the gate).
+func TestRefutationOnABadCitationStaysWithheld(t *testing.T) {
+	a := rcCDChecks()
+	a.Checks[0].Evidence[0] = rcCheckEvidence{Source: 1, LineStart: 1, LineEnd: 99}
+	res, _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Allegations[0]; got.Status != rcStatusRefuted || !strings.Contains(got.Reason, "could not be resolved") {
+		t.Fatalf("allegation = %+v, want refuted with the citation noted", got)
+	}
+	if strings.Contains(res.Review, rcFalseCDIssue) {
+		t.Fatalf("a refuted claim was published:\n%s", res.Review)
+	}
+}
+
+// A check that re-quotes its bullet with other backticks, spacing or trailing
+// punctuation is still a check of that bullet.
+func TestCheckMatchesItsBulletDespiteCosmeticDifferences(t *testing.T) {
+	a := rcCDChecks()
+	a.Checks[0].Issue = "  " + strings.ReplaceAll(rcFalseCDIssue, " ", "  ") + "."
+	if _, _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources); err != nil {
+		t.Fatalf("a cosmetically different echo was rejected: %v", err)
+	}
+	a = rcCDChecks()
+	a.Checks[1].Issue = a.Checks[0].Issue // two checks of one bullet
+	if _, _, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources); err == nil {
+		t.Fatal("a duplicated check was accepted")
+	}
+}
+
+func TestEmptyListItemWithAnExplanation(t *testing.T) {
+	for _, s := range []string{"(none — the one concern has no trigger today)", "none: nothing found", "(none)"} {
+		if !rcIsEmptyListItem(s) {
+			t.Errorf("%q should be an empty list item", s)
+		}
+	}
+	if rcIsEmptyListItem("nonempty.go:3 — none of the callers check the error") {
+		t.Error("a real finding was taken for an empty list")
+	}
+}
+
+// A range written end-first names the same lines and resolves.
+func TestReversedCitationRangeResolves(t *testing.T) {
+	a := rcCDChecks()
+	a.Checks[0].Evidence[0] = rcCheckEvidence{Source: 1, LineStart: 2, LineEnd: 1}
+	_, problems, err := rcValidateChallenge(rcTestAnswer(t, a), rcCDIssues, nil, rcCDSources)
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("reversed range not accepted: %v %+v", err, problems)
 	}
 }

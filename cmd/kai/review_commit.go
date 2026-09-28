@@ -355,13 +355,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	var challenge *rcChallengeResult
 	if fast {
 		// The fast pass may substitute a non-reasoning model for the DRAFT. The
-		// CHALLENGE — the publication gate — uses the configured review model;
-		// the substitution must never silently reach it.
+		// CHALLENGE — the publication gate — uses the configured challenge
+		// model (KAI_CHALLENGE_MODEL, else the review model); the draft's
+		// substitution must never silently reach it.
 		fastModel := rcFastModel(model, provKind)
 		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (draft model %s, challenge model %s, budget %s)…\n",
-			fastModel, model, rcFastHardDeadline)
+			fastModel, rcChallengeModel(model), rcFastHardDeadline)
 		phase := time.Now()
-		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, model, repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, rcChallengeModel(model), repoRoot, authorContext, stated, intentBody, diff, changedPaths)
 		if err != nil {
 			return err
 		}
@@ -999,7 +1000,16 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				len(sw.Issues), sw.Chunks, len(rcIssuesOf(raw))-before, before)
 		}
 		fmt.Fprintln(os.Stderr, "  challenging proposed defects before publication…")
-		res, err := rcChallengeReviewWith(publicationCtx, prov, model, raw, rcChallengeSources(transcript), sw.Sources, rcConfiguredSandbox())
+		gateModel := rcChallengeModel(model)
+		if gateModel != model {
+			fmt.Fprintf(os.Stderr, "  challenge model: %s (review model %s)\n", gateModel, model)
+		}
+		res, err := rcChallengeReviewWith(publicationCtx, prov, gateModel, raw, rcChallengeSources(transcript), sw.Sources, rcConfiguredSandbox())
+		if err == nil {
+			if n := rcWithholdUnsettledSweep(res, sw.Issues); n > 0 {
+				fmt.Fprintf(os.Stderr, "  sweep: %d proposal(s) the check could not settle were withheld\n", n)
+			}
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  review challenge incomplete: %v\n", err)
 			inc.ChallengeFailure = err.Error()
