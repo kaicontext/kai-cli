@@ -569,8 +569,16 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 	// draft. Bound the extra call, and propagate cancellation from the caller.
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
+	// Sources first, then the claims. The sources are the same for every
+	// batch of one review and the claims differ, so with the sources leading
+	// the prompt, batches after the first reuse them from the provider's
+	// prompt cache instead of paying for the review's whole evidence again.
 	var b strings.Builder
-	fmt.Fprintf(&b, "DRAFT (claims to challenge):\n%s\n\nISSUES TO CHECK:\n", draft)
+	b.WriteString("SOURCES (the evidence; cite by source number and line range):\n")
+	for i, source := range sources {
+		fmt.Fprintf(&b, "\n%s", rcRenderSource(i+1, source))
+	}
+	fmt.Fprintf(&b, "\n\nDRAFT (claims to challenge):\n%s\n\nISSUES TO CHECK:\n", draft)
 	for _, issue := range issues {
 		fmt.Fprintf(&b, "- %s\n", issue)
 	}
@@ -579,9 +587,6 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 		for _, d := range decisions {
 			fmt.Fprintf(&b, "- %s\n", d)
 		}
-	}
-	for i, source := range sources {
-		fmt.Fprintf(&b, "\n%s", rcRenderSource(i+1, source))
 	}
 	if b.Len() > rcEvidenceLimit {
 		return nil, fmt.Errorf("challenge evidence exceeds %d bytes; refusing to discard evidence", rcEvidenceLimit)
