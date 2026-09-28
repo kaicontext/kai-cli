@@ -290,3 +290,17 @@ func TestReversedCitationRangeResolves(t *testing.T) {
 		t.Fatalf("reversed range not accepted: %v %+v", err, problems)
 	}
 }
+
+// Two bullets that differ only cosmetically share a key; a check that echoes
+// one of them cosmetically is ambiguous and must not be filed under either.
+func TestAmbiguousCosmeticKeyIsNotUsed(t *testing.T) {
+	issues := []string{"a.go:1 — `x` is nil", "a.go:1 — x is nil"}
+	a := rcChallengeAnswer{IntentMatch: "verified", MergeReady: 4, Checks: []rcIssueCheck{
+		{Issue: issues[0], Verdict: "refuted", Reason: "r", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}},
+		{Issue: "a.go:1 — x is nil.", Verdict: "refuted", Reason: "r", Evidence: []rcCheckEvidence{{Source: 1, LineStart: 1, LineEnd: 1}}},
+	}}
+	res, _, err := rcValidateChallenge(rcTestAnswer(t, a), issues, nil, rcCDSources)
+	if err == nil {
+		t.Fatalf("an ambiguous cosmetic echo was filed under a bullet: %+v", res.Allegations)
+	}
+}

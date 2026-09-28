@@ -551,7 +551,7 @@ func TestReviewChallengeSkippedCheckIsUnresolvedNotFatal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one skipped check rejected the answer: %v", err)
 	}
-	if res.unassessed != 1 || res.Allegations[1].Status != rcStatusUnresolved || res.Allegations[0].Status != rcStatusRefuted {
-		t.Fatalf("allegations = %+v (unassessed %d)", res.Allegations, res.unassessed)
+	if len(res.unassessed) != 1 || res.Allegations[1].Status != rcStatusUnresolved || res.Allegations[0].Status != rcStatusRefuted {
+		t.Fatalf("allegations = %+v (unassessed %v)", res.Allegations, res.unassessed)
 	}
 }

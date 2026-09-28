@@ -203,8 +203,8 @@ type rcChallengeResult struct {
 	scope, limitations []string
 	match              finding.Match
 	proposed           finding.Readiness
-	// unassessed counts allegations the answer gave no check for.
-	unassessed int
+	// unassessed holds the allegations (by index) the answer gave no check for.
+	unassessed map[int]bool
 }
 
 // unresolved lists what could not be settled, allegations first, for logs and
@@ -766,11 +766,17 @@ func rcValidateOrRepair(ctx context.Context, prov provider.Provider, model, syst
 	if err != nil {
 		return degraded("corrected answer rejected: " + err.Error())
 	}
-	if corrected.unassessed > 0 {
-		// A correction must be the COMPLETE answer. One that drops checks the
-		// first answer gave would throw their validated verdicts away, so the
-		// first answer stands, degraded.
-		return degraded(fmt.Sprintf("corrected answer skipped %d allegation(s)", corrected.unassessed))
+	dropped := 0
+	for i := range corrected.unassessed {
+		if !res.unassessed[i] {
+			dropped++
+		}
+	}
+	if dropped > 0 {
+		// A correction may not drop a check the first answer gave: that
+		// would throw its validated verdict away, so the first answer stands,
+		// degraded. Skipping one the first answer also skipped loses nothing.
+		return degraded(fmt.Sprintf("corrected answer dropped %d check(s) the first answer gave", dropped))
 	}
 	if len(remaining) > 0 {
 		var still []string
@@ -952,10 +958,18 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	}
 
 	index := map[string]int{}
+	keys := map[string][]int{}
 	for i, issue := range issues {
 		index[issue] = i
-		if _, taken := index[rcIssueKey(issue)]; !taken {
-			index[rcIssueKey(issue)] = i
+		keys[rcIssueKey(issue)] = append(keys[rcIssueKey(issue)], i)
+	}
+	// A cosmetic key stands in for its bullet only when no other bullet
+	// shares it; an ambiguous key could file one bullet's verdict under
+	// another, so such a check must echo its bullet exactly.
+	cosmetic := map[string]int{}
+	for k, ids := range keys {
+		if len(ids) == 1 {
+			cosmetic[k] = ids[0]
 		}
 	}
 	seen := map[int]bool{}
@@ -968,7 +982,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 			// Exact echo was the only accepted form, and one cosmetic
 			// difference rejected a whole batch (openai/gpt-5.4-mini,
 			// 2026-09-28).
-			id, known = index[rcIssueKey(check.Issue)]
+			id, known = cosmetic[rcIssueKey(check.Issue)]
 		}
 		if !known || seen[id] || strings.TrimSpace(check.Reason) == "" {
 			return nil, nil, fmt.Errorf("challenge omitted reasoning, duplicated a check, or checked an unknown issue")
@@ -1022,10 +1036,10 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	// An allegation the answer skipped is unresolved, not a reason to reject
 	// every verdict the answer did give: one skipped check used to fail its
 	// whole batch (openai/gpt-5.4-mini, 2026-09-28).
-	unassessed := 0
+	unassessed := map[int]bool{}
 	for i, issue := range issues {
 		if !seen[i] {
-			unassessed++
+			unassessed[i] = true
 			results[i] = rcAllegationResult{ID: i + 1, Issue: issue, Status: rcStatusUnresolved, Reason: "the challenge did not assess this allegation"}
 		}
 	}
