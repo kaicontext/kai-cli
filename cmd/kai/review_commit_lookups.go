@@ -29,11 +29,14 @@ package main
 // nothing it did not already assume.
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -197,6 +200,12 @@ func rcLookupCandidates(diff string, skip map[string]bool) []string {
 //
 // git grep cannot say which -e matched a line, so attribution is a substring
 // check afterwards — cheap, and exact for word-boundary matches.
+// The identifier search's bounds; see rcGrepIdentifiers.
+var (
+	rcLookupGrepTimeout        = 15 * time.Second
+	rcLookupGrepMaxBytes int64 = 4 << 20
+)
+
 func rcGrepIdentifiers(idents []string, root string) map[string][]string {
 	if len(idents) == 0 {
 		return nil
@@ -205,14 +214,38 @@ func rcGrepIdentifiers(idents []string, root string) map[string][]string {
 	for _, id := range idents {
 		args = append(args, "-e", id)
 	}
-	cmd := exec.Command("git", args...)
+	// Bounded in time and in output. Unbounded, this one search was the
+	// slowest thing in a review: on Sentry, identifiers like event_data and
+	// group_key match an enormous number of lines, and the grep ran for tens of
+	// minutes (49 minutes of CPU reproduced locally) before the model was ever
+	// called — the "fast" pass took 17-35 minutes and three reviews hit the
+	// 60-minute job limit (2026-09-27 benchmark rerun). The lookups only save
+	// the reviewer a few searches, so a partial answer is fine: whatever was
+	// read before the deadline or the cap is used.
+	ctx, cancel := context.WithTimeout(context.Background(), rcLookupGrepTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = 2 * time.Second
 	if root != "" {
 		cmd.Dir = root
 	}
-	// Exit 1 simply means no matches; only stdout is read either way.
-	out, _ := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil
+	}
+	if err := cmd.Start(); err != nil {
+		return nil
+	}
+	out, _ := io.ReadAll(io.LimitReader(stdout, rcLookupGrepMaxBytes))
+	cancel() // stop git once the cap is reached; exit 1 simply means no matches
+	_ = cmd.Wait()
 	if len(out) == 0 {
 		return nil
+	}
+	if int64(len(out)) == rcLookupGrepMaxBytes {
+		if i := strings.LastIndexByte(string(out), '\n'); i > 0 {
+			out = out[:i]
+		}
 	}
 	hits := map[string][]string{}
 	for _, line := range strings.Split(string(out), "\n") {
