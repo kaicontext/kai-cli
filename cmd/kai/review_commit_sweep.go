@@ -55,6 +55,7 @@ Rules:
 - Be concrete: say what is wrong and what it should be. No hedging ("might", "could potentially", "consider"), no general advice, no "add a test" without a specific wrong behaviour it would catch, no praise.
 - Do not report a problem that depends on a future code change.
 - One defect per line of output. If the same mistake repeats, write it once and add "(also: path:line, …)".
+- A line can carry more than one defect. After you find one, keep checking the same lines for a DIFFERENT one — a second wrong value, a missing check beside the wrong one, a test that also asserts the wrong thing — and list each on its own bullet. Stopping at the first plausible problem is how real defects are missed.
 - It is fine to report nothing for a chunk that is correct. Do not pad.
 - Never write a bullet for a line you checked and found correct. Think it through before writing; a bullet is a defect, not a note.
 
@@ -241,10 +242,11 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 			}
 			b.WriteString(src.String())
 			resp, err := prov.Send(ctx, provider.Request{
-				Model:     model,
-				System:    rcSweepSystem,
-				MaxTokens: rcSweepMaxTokens,
-				Messages:  []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
+				Model:           model,
+				System:          rcSweepSystem,
+				MaxTokens:       rcSweepMaxTokens,
+				ReasoningEffort: rcReasoningEffort(),
+				Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
 			})
 			if err != nil {
 				outs[i] = out{err: err}
@@ -340,6 +342,63 @@ func rcSweepIssues(text string, changed map[string]bool) []string {
 // a location the reviewer already raised is left for rcMergeDuplicateIssues
 // to fold. A draft without a coda gets none: there is nothing to merge into,
 // and the conclusion path will write one.
+// rcSameDefectThere reports whether a sweep bullet restates one of the
+// reviewer's bullets at the same location. A location alone used to decide
+// that, which dropped a DIFFERENT defect on a line the reviewer had flagged
+// for something else — the sweep's second finding on a line never reached the
+// gate. Now the wording decides: a bullet that shares most of its substantive
+// words with one already there is the same defect; otherwise both go to the
+// gate, which folds genuine repeats (rcMergeDuplicateIssues) and checks the
+// rest.
+func rcSameDefectThere(bullet string, there []string) bool {
+	if len(there) == 0 {
+		return false
+	}
+	words := rcDefectWords(bullet)
+	for _, other := range there {
+		if rcWordOverlap(words, rcDefectWords(other)) >= rcSameDefectOverlap {
+			return true
+		}
+	}
+	return false
+}
+
+// rcSameDefectOverlap is the share of the smaller bullet's substantive words
+// the two must have in common to count as one defect.
+const rcSameDefectOverlap = 0.5
+
+var rcDefectWordRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
+
+// rcDefectWords is a bullet's substantive words: identifiers and words of four
+// or more letters, lowercased, after its location.
+func rcDefectWords(bullet string) map[string]bool {
+	if i := strings.Index(bullet, " — "); i >= 0 {
+		bullet = bullet[i+len(" — "):]
+	}
+	out := map[string]bool{}
+	for _, w := range rcDefectWordRe.FindAllString(bullet, -1) {
+		out[strings.ToLower(w)] = true
+	}
+	return out
+}
+
+func rcWordOverlap(a, b map[string]bool) float64 {
+	small, large := a, b
+	if len(b) < len(a) {
+		small, large = b, a
+	}
+	if len(small) == 0 {
+		return 0
+	}
+	n := 0
+	for w := range small {
+		if large[w] {
+			n++
+		}
+	}
+	return float64(n) / float64(len(small))
+}
+
 func rcDraftWithSweep(draft string, extra []string) string {
 	if len(extra) == 0 {
 		return draft
@@ -350,7 +409,7 @@ func rcDraftWithSweep(draft string, extra []string) string {
 	}
 	head, coda := draft[:i+len(rcReviewDataMarker)], draft[i+len(rcReviewDataMarker):]
 	lines := strings.Split(coda, "\n")
-	have := map[string]bool{}
+	have := map[string][]string{} // location → the reviewer's bullets there
 	issuesAt, decisionsAt := -1, -1
 	for j, ln := range lines {
 		key, _, labelled := rcMachineLine(strings.TrimSpace(ln))
@@ -361,12 +420,13 @@ func rcDraftWithSweep(draft string, extra []string) string {
 			decisionsAt = j
 		}
 		if m := rcSweepBullet.FindStringSubmatch(ln); m != nil {
-			have[rcSweepLocation(m[1])] = true
+			loc := rcSweepLocation(m[1])
+			have[loc] = append(have[loc], m[1])
 		}
 	}
 	var add []string
 	for _, is := range extra {
-		if loc := rcSweepLocation(is); loc != "" && have[loc] {
+		if rcSameDefectThere(is, have[rcSweepLocation(is)]) {
 			continue
 		}
 		add = append(add, "- "+is)

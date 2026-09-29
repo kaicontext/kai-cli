@@ -82,6 +82,9 @@ func TestReviewMalformedSubmissionRepaired(t *testing.T) {
 // When the correction cannot be obtained or is itself malformed, the ORIGINAL
 // decode error propagates: there is nothing to degrade to, since no verdict
 // ever decoded. This is the property that keeps an unchecked draft unpublished.
+// It is a property of one gate call (rcChallengeDraft); rcChallengeBatches then
+// re-checks a failed call's allegations one at a time
+// (TestFailedCheckIsRetriedOneAllegationAtATime).
 func TestReviewMalformedSubmissionFailsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -112,7 +115,7 @@ func TestReviewMalformedSubmissionFailsClosed(t *testing.T) {
 				}
 				return tc.second()
 			}}
-			got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+			got, err := rcChallengeDraft(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
 			if err == nil {
 				t.Fatalf("an unchecked draft was published: %+v", got)
 			}
@@ -269,7 +272,7 @@ func TestReviewProtocolRejectionFailsClosedWithItsOwnCause(t *testing.T) {
 		a.Checks[0].Reason = "" // a protocol break, not a decode failure
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "submission", Name: "submit_review", Input: rcTestAnswer(t, a)}}}, nil
 	}}
-	got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
+	got, err := rcChallengeDraft(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
 	if err == nil || got != nil {
 		t.Fatalf("an unchecked draft was published: %+v %v", got, err)
 	}
