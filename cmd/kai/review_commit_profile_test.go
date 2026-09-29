@@ -55,21 +55,63 @@ func TestParseProfileReadsEveryStage(t *testing.T) {
 // under a configuration it never ran.
 func TestParseProfileRejectsWhatItCannotHonor(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown stage":         `{"stages": {"mian": {"model": "z-ai/glm-5.3"}}}`,
-		"unknown field":         `{"stages": {"main": {"modle": "z-ai/glm-5.3"}}}`,
-		"bad effort":            `{"stages": {"main": {"effort": "extreme"}}}`,
-		"not a model id":        `{"stages": {"main": {"model": "glm; rm -rf /"}}}`,
-		"effort on bare claude": `{"stages": {"quick_draft": {"model": "claude-haiku-4-5-20251001", "effort": "low"}}}`,
-		"inherited bare claude": `{"stages": {"main": {"model": "claude-sonnet-4-6"}, "intent": {"effort": "low"}}}`,
-		"not json":              `{"stages": `,
+		"unknown stage":  `{"stages": {"mian": {"model": "z-ai/glm-5.3"}}}`,
+		"unknown field":  `{"stages": {"main": {"modle": "z-ai/glm-5.3"}}}`,
+		"bad effort":     `{"stages": {"main": {"effort": "extreme"}}}`,
+		"not a model id": `{"stages": {"main": {"model": "glm; rm -rf /"}}}`,
+		"not json":       `{"stages": `,
 	} {
 		if _, err := rcParseProfile([]byte(body), "t"); err == nil {
 			t.Errorf("%s: parsed without error", name)
 		}
 	}
-	// The vendor-prefixed spelling is the one that carries an effort.
-	if _, err := rcParseProfile([]byte(`{"stages": {"quick_draft": {"model": "anthropic/claude-haiku-4-5", "effort": "low"}}}`), "t"); err != nil {
-		t.Errorf("anthropic/claude-haiku-4-5 with an effort: %v", err)
+}
+
+// An effort that would be dropped is refused on the model each stage resolves
+// to, wherever that model came from: the file, main (intent, conclusion), or
+// the job's fallback for a stage the file gives only an effort.
+func TestProfileEffortOnABareClaudeModelIsRefused(t *testing.T) {
+	clearReviewEnv(t)
+	for name, tc := range map[string]struct {
+		stages map[string]rcStageSetting
+		models map[string]string
+		ok     bool
+	}{
+		"named in the file": {
+			stages: map[string]rcStageSetting{rcStageQuickDraft: {Model: "claude-haiku-4-5-20251001", Effort: "low"}},
+			models: map[string]string{rcStageQuickDraft: "claude-haiku-4-5-20251001"},
+		},
+		"inherited from main": {
+			stages: map[string]rcStageSetting{rcStageMain: {Model: "claude-sonnet-4-6", Effort: "low"}},
+			models: map[string]string{rcStageMain: "claude-sonnet-4-6", rcStageIntent: "claude-sonnet-4-6"},
+		},
+		"the job's fallback model": {
+			stages: map[string]rcStageSetting{rcStageSweep: {Effort: "high"}},
+			models: map[string]string{rcStageSweep: "claude-sonnet-4-6"},
+		},
+		"vendor-prefixed carries it": {
+			stages: map[string]rcStageSetting{rcStageQuickDraft: {Effort: "low"}},
+			models: map[string]string{rcStageQuickDraft: "anthropic/claude-haiku-4-5"},
+			ok:     true,
+		},
+		"effort off": {
+			stages: map[string]rcStageSetting{rcStageSweep: {Effort: rcEffortOff}},
+			models: map[string]string{rcStageSweep: "claude-sonnet-4-6"},
+			ok:     true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			useProfile(t, tc.stages)
+			if err := rcCheckProfileEfforts(tc.models); (err == nil) != tc.ok {
+				t.Errorf("err = %v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+	// Without a profile the job's own effort is not policed here.
+	rcActiveProfile = nil
+	t.Setenv("KAI_REVIEW_REASONING_EFFORT", "low")
+	if err := rcCheckProfileEfforts(map[string]string{rcStageMain: "claude-sonnet-4-6"}); err != nil {
+		t.Errorf("no profile: %v", err)
 	}
 }
 

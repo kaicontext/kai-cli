@@ -130,24 +130,46 @@ func rcParseProfile(data []byte, source string) (*rcReviewProfile, error) {
 		}
 		p.Stages[name] = s
 	}
-	// An effort only reaches the model on the OpenAI-shaped path
-	// (provider/openai.go). A bare claude-* id goes out on the Anthropic
-	// Messages shape, which carries no effort, so the setting would be
-	// silently dropped; anthropic/claude-* is the spelling that carries it.
-	for _, name := range rcProfileStages {
-		s, ok := p.Stages[name]
-		if !ok {
+	return p, nil
+}
+
+// rcCheckProfileEfforts refuses a profile effort that would be dropped. An
+// effort only reaches the model on the OpenAI-shaped path (provider/openai.go);
+// a bare claude-* id goes out on the Anthropic Messages shape, which carries
+// none, and anthropic/claude-* is the spelling that carries it. It runs on the
+// models every stage RESOLVED to, not the ones the file names: a stage the
+// profile gives only an effort runs on whatever its fallback is (the job's
+// KAI_SWEEP_MODEL, the review model, ...), and that can be a bare claude-*
+// id as well. An effort that comes from the job alone
+// (KAI_REVIEW_REASONING_EFFORT) is not the profile's to police.
+func rcCheckProfileEfforts(models map[string]string) error {
+	if rcActiveProfile == nil {
+		return nil
+	}
+	for _, stage := range rcProfileStages {
+		if !rcProfileSetsEffort(stage) || rcStageEffort(stage) == "" {
 			continue
 		}
-		model := s.Model
-		if model == "" && (name == rcStageIntent || name == rcStageConclusion) {
-			model = p.Stages[rcStageMain].Model
-		}
-		if strings.HasPrefix(strings.ToLower(model), "claude-") && s.Effort != "" && s.Effort != rcEffortOff {
-			return nil, fmt.Errorf("review profile %s: stage %s: %s cannot take a reasoning effort on its bare id; use anthropic/%s", source, name, model, model)
+		if m := models[stage]; strings.HasPrefix(strings.ToLower(m), "claude-") {
+			return fmt.Errorf("review profile %s: stage %s runs on %s, whose bare id carries no reasoning effort; use anthropic/%s or effort off",
+				rcActiveProfile.Source, stage, m, m)
 		}
 	}
-	return p, nil
+	return nil
+}
+
+// rcProfileSetsEffort reports whether the stage's effort comes from the
+// profile: its own entry, or main's for intent and conclusion.
+func rcProfileSetsEffort(stage string) bool {
+	if s, ok := rcProfileStage(stage); ok && s.Effort != "" {
+		return true
+	}
+	if stage == rcStageIntent || stage == rcStageConclusion {
+		if s, ok := rcProfileStage(rcStageMain); ok && s.Effort != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // rcLoadProfileFor finds the profile for a review of base...ref and makes it
@@ -156,7 +178,8 @@ func rcParseProfile(data []byte, source string) (*rcReviewProfile, error) {
 // file is read from the base branch, and only in a benchmark-org repository.
 // No file is no profile. A file that is present but broken is an error: a
 // benchmark run that quietly fell back to the defaults would report numbers
-// for a configuration it never ran.
+// for a configuration it never ran. (Whether each stage's effort can reach its
+// model is checked once the models resolve: rcCheckProfileEfforts.)
 func rcLoadProfileFor(base string) error {
 	rcActiveProfile = nil
 	if path := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE")); path != "" {

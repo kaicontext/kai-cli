@@ -351,7 +351,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no LLM provider available (run `kai login`)")
 	}
 	model = rcStageModel(rcStageMain, model)
-	if line := rcDescribeProfile(map[string]string{
+	stageModels := map[string]string{
 		rcStageQuickDraft:     rcFastModel(model, provKind),
 		rcStageQuickFactcheck: rcFastChallengeModel(model),
 		rcStageIntent:         rcStageModel(rcStageIntent, model),
@@ -359,7 +359,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		rcStageSweep:          rcSweepModel(model),
 		rcStageFactcheck:      rcChallengeModel(model),
 		rcStageConclusion:     rcStageModel(rcStageConclusion, model),
-	}); line != "" {
+	}
+	if err := rcCheckProfileEfforts(stageModels); err != nil {
+		return err
+	}
+	if line := rcDescribeProfile(stageModels); line != "" {
 		fmt.Fprintln(os.Stderr, line)
 	}
 
