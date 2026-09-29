@@ -365,12 +365,13 @@ func rcReasoningEffort() string {
 	return ""
 }
 
-// rcGateEffort is the effort for a publication-gate call: the review's, on the
-// grounded path only. The fast pass shares a 100-second budget with its draft
-// and never carries the repository (rcWithRepo), so it keeps no effort.
+// rcGateEffort is the effort for a publication-gate call. The fast pass never
+// carries the repository (rcWithRepo), which is how its fact-check is told
+// apart; it shares a 100-second budget with its draft, so it keeps no effort
+// unless a review profile sets one (rcStageEffort).
 func rcGateEffort(ctx context.Context) string {
 	if rcRepoFrom(ctx) == nil {
-		return ""
+		return rcStageEffort(rcStageQuickFactcheck)
 	}
-	return rcReasoningEffort()
+	return rcStageEffort(rcStageFactcheck)
 }
