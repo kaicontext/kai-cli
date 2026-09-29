@@ -271,6 +271,24 @@ func rcStageEffort(stage string) string {
 	return rcReasoningEffort()
 }
 
+// rcReasoningMinTokens is the output limit a call gets when it asks for a
+// reasoning effort. Hidden reasoning counts against max_tokens, and the calls
+// with small limits were sized for a model that does not think: the fast
+// pass's draft (2000), intent (600) and the conclusion (2500). The proxy
+// floors GLM-family calls at 4096 on its own, but not Claude's. The first
+// smoke run with the draft on anthropic/claude-haiku-4-5 at effort low spent
+// all 2000 tokens and posted no quick pass.
+const rcReasoningMinTokens = 8000
+
+// rcTokensFor is maxTokens, raised to rcReasoningMinTokens when the call
+// carries an effort. Without one nothing changes.
+func rcTokensFor(maxTokens int, effort string) int {
+	if effort != "" && maxTokens < rcReasoningMinTokens {
+		return rcReasoningMinTokens
+	}
+	return maxTokens
+}
+
 // rcFastChallengeModel is the fast pass's fact-check model: the profile's
 // quick_factcheck, else the grounded fact-check's (rcChallengeModel), which is
 // what it has always shared.

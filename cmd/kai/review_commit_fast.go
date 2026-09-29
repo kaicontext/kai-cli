@@ -188,7 +188,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	resp, err := prov.Send(cctx, provider.Request{
 		Model:           model,
 		System:          rcFastReviewSystem,
-		MaxTokens:       rcFastMaxTokens,
+		MaxTokens:       rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)),
 		ReasoningEffort: rcStageEffort(rcStageQuickDraft),
 		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}}},
 	})

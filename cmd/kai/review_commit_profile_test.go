@@ -334,3 +334,34 @@ func TestLoadProfileFromALocalFile(t *testing.T) {
 		t.Errorf("sweep effort = %q, want high", got)
 	}
 }
+
+// A call that reasons gets room to: hidden reasoning counts against the output
+// limit, and the fast draft's 2000 tokens were spent entirely on it in the
+// first smoke run. Without an effort the limits are unchanged.
+func TestReasoningGetsOutputRoom(t *testing.T) {
+	if got := rcTokensFor(2000, ""); got != 2000 {
+		t.Errorf("no effort: %d, want 2000", got)
+	}
+	if got := rcTokensFor(2000, "low"); got != rcReasoningMinTokens {
+		t.Errorf("effort low: %d, want %d", got, rcReasoningMinTokens)
+	}
+	if got := rcTokensFor(16000, "low"); got != 16000 {
+		t.Errorf("a larger limit is kept: %d", got)
+	}
+
+	clearReviewEnv(t)
+	for effort, want := range map[string]int{"": rcFastMaxTokens, "low": rcReasoningMinTokens} {
+		useProfile(t, map[string]rcStageSetting{rcStageQuickDraft: {Effort: effort}})
+		var draftTokens int
+		p := rcChallengeProvider{send: func(_ context.Context, req provider.Request) (provider.Response, error) {
+			if draftTokens == 0 {
+				draftTokens = req.MaxTokens
+			}
+			return provider.Response{}, context.Canceled
+		}}
+		_, _, _ = rcRunFastReview(context.Background(), p, "test", "test", "", "", "test", "", "diff", nil)
+		if draftTokens != want {
+			t.Errorf("draft with effort %q asked for %d tokens, want %d", effort, draftTokens, want)
+		}
+	}
+}

@@ -696,7 +696,7 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 	resp, err := prov.Send(ctx, provider.Request{
 		Model:           model,
 		System:          rcInferIntentSystem,
-		MaxTokens:       600,
+		MaxTokens:       rcTokensFor(600, rcStageEffort(rcStageIntent)),
 		ReasoningEffort: rcStageEffort(rcStageIntent),
 		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
 	})
@@ -1580,7 +1580,7 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 		return prov.Send(cctx, provider.Request{
 			Model:           model,
 			System:          rcReviewSystem,
-			MaxTokens:       2500,
+			MaxTokens:       rcTokensFor(2500, rcStageEffort(rcStageConclusion)),
 			Messages:        m,
 			ReasoningEffort: rcStageEffort(rcStageConclusion),
 		})
