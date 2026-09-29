@@ -714,7 +714,7 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 				}
 				lookups++
 				fmt.Fprintf(os.Stderr, "  challenge: lookup %d %s %s\n", lookups, call.Name, rcShortInput(call.Input))
-				content, err := repo.run(call.Name, call.Input)
+				content, err := repo.run(ctx, call.Name, call.Input)
 				if err != nil {
 					results = append(results, message.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "Lookup failed: " + err.Error(), IsError: true})
 					continue

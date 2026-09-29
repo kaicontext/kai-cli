@@ -224,7 +224,7 @@ func TestRepoViewIsCitableByFileLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := rcToolSource("kai_view", input, out)
-	if src.Coord != rcCoordFile || src.First != 2 || len(src.Rows) != 2 || src.Rows[1] != "three" {
+	if src.Coord != rcCoordFile || src.First != 2 || len(src.Rows) != 2 || src.Rows[0] != "two" || src.Rows[1] != "three" {
 		t.Fatalf("view is not file-addressed: %+v\n%s", src, out)
 	}
 	if !strings.Contains(out, "call again with offset 3") {
@@ -240,17 +240,17 @@ func TestRepoViewIsCitableByFileLines(t *testing.T) {
 func TestRepoGrepSearchesTheCommit(t *testing.T) {
 	hash := rcTempRepo(t, map[string]string{"pkg/a.go": "func Target() {}\n", "pkg/b.go": "Target()\n"})
 	repo := &rcRepo{hash: hash}
-	out, err := repo.grep(`{"query":"Target(","path":"pkg"}`)
+	out, err := repo.grep(context.Background(), `{"query":"Target(","path":"pkg"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out, hash) || !strings.Contains(out, "pkg/a.go:1:func Target() {}") || !strings.Contains(out, "pkg/b.go:1:Target()") {
 		t.Fatalf("grep output = %q", out)
 	}
-	if out, _ := repo.grep(`{"query":"nothing-matches-this"}`); !strings.Contains(out, "no matches") {
+	if out, _ := repo.grep(context.Background(), `{"query":"nothing-matches-this"}`); !strings.Contains(out, "no matches") {
 		t.Fatalf("empty grep = %q", out)
 	}
-	if out, err := repo.grep(`{"query":"(unclosed","regex":true}`); err == nil {
+	if out, err := repo.grep(context.Background(), `{"query":"(unclosed","regex":true}`); err == nil {
 		t.Fatalf("a failed search was reported as a result: %q", out)
 	}
 }
@@ -346,7 +346,7 @@ func TestRepoGrepMarksATimedOutSearchPartial(t *testing.T) {
 	hash := rcTempRepo(t, map[string]string{"a.go": "x\n"})
 	defer func(d time.Duration) { rcRepoGrepTimeoutVar = d }(rcRepoGrepTimeoutVar)
 	rcRepoGrepTimeoutVar = time.Nanosecond
-	out, err := (&rcRepo{hash: hash}).grep(`{"query":"x"}`)
+	out, err := (&rcRepo{hash: hash}).grep(context.Background(), `{"query":"x"}`)
 	if err == nil && !strings.Contains(out, "INCOMPLETE") {
 		t.Fatalf("a timed-out search read as complete: %q", out)
 	}

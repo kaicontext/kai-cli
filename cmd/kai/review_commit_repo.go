@@ -241,7 +241,7 @@ func (r *rcRepo) view(input string) (string, error) {
 }
 
 // grep is kai_grep over the reviewed commit, bounded in time and output.
-func (r *rcRepo) grep(input string) (string, error) {
+func (r *rcRepo) grep(ctx context.Context, input string) (string, error) {
 	var args struct {
 		Query string `json:"query"`
 		Path  string `json:"path"`
@@ -267,7 +267,7 @@ func (r *rcRepo) grep(input string) (string, error) {
 		}
 		gitArgs = append(gitArgs, "--", p)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), rcRepoGrepTimeoutVar)
+	ctx, cancel := context.WithTimeout(ctx, rcRepoGrepTimeoutVar)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.WaitDelay = 2 * time.Second
@@ -303,8 +303,12 @@ func (r *rcRepo) grep(input string) (string, error) {
 	if timedOut || full {
 		partial = "(search stopped early — these matches are INCOMPLETE; absence of a match here proves nothing)\n"
 		if full {
-			if i := strings.LastIndexByte(string(out), '\n'); i > 0 {
+			// Keep complete lines only; a cap reached inside one long line
+			// leaves nothing whole.
+			if i := strings.LastIndexByte(string(out), '\n'); i >= 0 {
 				out = out[:i]
+			} else {
+				out = nil
 			}
 		}
 	}
@@ -329,13 +333,14 @@ func (r *rcRepo) grep(input string) (string, error) {
 	return b.String() + partial, nil
 }
 
-// run executes one of the gate's repository tools.
-func (r *rcRepo) run(name, input string) (string, error) {
+// run executes one of the gate's repository tools. A search is bounded by
+// the gate call's own context as well as its timeout.
+func (r *rcRepo) run(ctx context.Context, name, input string) (string, error) {
 	switch name {
 	case "kai_view":
 		return r.view(input)
 	case "kai_grep":
-		return r.grep(input)
+		return r.grep(ctx, input)
 	}
 	return "", fmt.Errorf("unknown tool %q", name)
 }
