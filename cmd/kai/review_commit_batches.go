@@ -305,8 +305,9 @@ func rcWorstMatch(results []*rcChallengeResult) finding.Match {
 	return worst
 }
 
-// rcChallengeModel is the model the publication gate runs on: KAI_CHALLENGE_MODEL
-// when set, else the review model.
+// rcChallengeModel is the model the publication gate runs on: the review
+// profile's factcheck stage, else KAI_CHALLENGE_MODEL when set, else the
+// review model.
 //
 // The gate is where GLM's format failures cost whole reviews — a malformed
 // submission, rejected twice, withholds the draft — and where false positives
@@ -315,10 +316,11 @@ func rcWorstMatch(results []*rcChallengeResult) finding.Match {
 // from the model that investigates. The review job sets it; unset, nothing
 // changes.
 func rcChallengeModel(reviewModel string) string {
+	model := reviewModel
 	if m := strings.TrimSpace(os.Getenv("KAI_CHALLENGE_MODEL")); m != "" {
-		return m
+		model = m
 	}
-	return reviewModel
+	return rcStageModel(rcStageFactcheck, model)
 }
 
 // rcWithholdUnsettledSweep withholds the sweep's proposals that the gate could

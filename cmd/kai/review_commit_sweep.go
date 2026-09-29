@@ -245,7 +245,7 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 				Model:           model,
 				System:          rcSweepSystem,
 				MaxTokens:       rcSweepMaxTokens,
-				ReasoningEffort: rcReasoningEffort(),
+				ReasoningEffort: rcStageEffort(rcStageSweep),
 				Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
 			})
 			if err != nil {
@@ -505,11 +505,7 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 		ch <- rcSweepResult{}
 		return ch
 	}
-	// KAI_SWEEP_MODEL overrides the model for the sweep alone, so the pass
-	// can be tried on a cheaper or faster model without changing the review's.
-	if m := strings.TrimSpace(os.Getenv("KAI_SWEEP_MODEL")); m != "" {
-		model = m
-	}
+	model = rcSweepModel(model)
 	go func() {
 		order, patches := rcSweepPatches(base, ref)
 		started := time.Now()
@@ -519,6 +515,18 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 		ch <- res
 	}()
 	return ch
+}
+
+// rcSweepModel is the sweep's model: the review profile's, else
+// KAI_SWEEP_MODEL, which overrides the model for the sweep alone so the pass
+// can be tried on a cheaper or faster model without changing the review's,
+// else the review model.
+func rcSweepModel(reviewModel string) string {
+	model := reviewModel
+	if m := strings.TrimSpace(os.Getenv("KAI_SWEEP_MODEL")); m != "" {
+		model = m
+	}
+	return rcStageModel(rcStageSweep, model)
 }
 
 // rcAwaitSweep waits for the sweep. It is bounded by the sweep's own

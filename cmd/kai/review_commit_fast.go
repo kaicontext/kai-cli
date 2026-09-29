@@ -186,10 +186,11 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	defer cancel()
 
 	resp, err := prov.Send(cctx, provider.Request{
-		Model:     model,
-		System:    rcFastReviewSystem,
-		MaxTokens: rcFastMaxTokens,
-		Messages:  []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}}},
+		Model:           model,
+		System:          rcFastReviewSystem,
+		MaxTokens:       rcFastMaxTokens,
+		ReasoningEffort: rcStageEffort(rcStageQuickDraft),
+		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}}},
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("fast review call: %w", err)
@@ -255,6 +256,9 @@ const rcFastDefaultModel = "anthropic/claude-haiku-4-5"
 // this repo has been bitten by the same prefix-decides-the-route mechanism
 // before (kai-cli #63: a bare id routed DIRECT to api.anthropic.com).
 func rcFastModel(reviewModel string, kind provider.Kind) string {
+	if s, ok := rcProfileStage(rcStageQuickDraft); ok && s.Model != "" {
+		return s.Model
+	}
 	if m := strings.TrimSpace(os.Getenv("KAI_FAST_MODEL")); m != "" {
 		return m
 	}

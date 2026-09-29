@@ -339,9 +339,32 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("commit %s has an empty diff (merge commit? try a child, or pass --base)", rcShort(hash))
 	}
 
+	// The run's review profile, if the benchmark put one on the base branch
+	// (review_commit_profile.go). Loaded before any model is resolved, so
+	// every stage below sees it.
+	if err := rcLoadProfileFor(reviewCommitBase); err != nil {
+		return err
+	}
+
 	prov, model, provKind := rcReviewProvider()
 	if prov == nil {
 		return fmt.Errorf("no LLM provider available (run `kai login`)")
+	}
+	model = rcStageModel(rcStageMain, model)
+	stageModels := map[string]string{
+		rcStageQuickDraft:     rcFastModel(model, provKind),
+		rcStageQuickFactcheck: rcFastChallengeModel(model),
+		rcStageIntent:         rcStageModel(rcStageIntent, model),
+		rcStageMain:           model,
+		rcStageSweep:          rcSweepModel(model),
+		rcStageFactcheck:      rcChallengeModel(model),
+		rcStageConclusion:     rcStageModel(rcStageConclusion, model),
+	}
+	if err := rcCheckProfileEfforts(stageModels); err != nil {
+		return err
+	}
+	if line := rcDescribeProfile(stageModels); line != "" {
+		fmt.Fprintln(os.Stderr, line)
 	}
 
 	// Diff stat up front: it is pure git, and --fast hands the changed paths to
@@ -375,17 +398,18 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// substitution must never silently reach it.
 		fastModel := rcFastModel(model, provKind)
 		fmt.Fprintf(os.Stderr, "  fast pass: one call over the diff, no graph (draft model %s, challenge model %s, budget %s)…\n",
-			fastModel, rcChallengeModel(model), rcFastHardDeadline)
+			fastModel, rcFastChallengeModel(model), rcFastHardDeadline)
 		phase := time.Now()
-		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, rcChallengeModel(model), repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, rcFastChallengeModel(model), repoRoot, authorContext, stated, intentBody, diff, changedPaths)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "  timing: fast-review=%s\n", time.Since(phase).Round(time.Second))
 	} else {
-		fmt.Fprintf(os.Stderr, "  reconstructing intent (model %s)…\n", model)
+		intentModel := rcStageModel(rcStageIntent, model)
+		fmt.Fprintf(os.Stderr, "  reconstructing intent (model %s)…\n", intentModel)
 		phase := time.Now()
-		intent, ierr := rcInferIntent(ctx, prov, model, stated, intentBody, diff)
+		intent, ierr := rcInferIntent(ctx, prov, intentModel, stated, intentBody, diff)
 		if ierr != nil {
 			return fmt.Errorf("infer intent: %w", ierr)
 		}
@@ -673,7 +697,7 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 		Model:           model,
 		System:          rcInferIntentSystem,
 		MaxTokens:       600,
-		ReasoningEffort: rcReasoningEffort(),
+		ReasoningEffort: rcStageEffort(rcStageIntent),
 		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
 	})
 	if err != nil {
@@ -869,9 +893,10 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// for ReadOnly) and slow harness turns stack up to the CI step timeout.
 		SoftTimeBudget:          rcReviewSoftBudget,
 		SoftTimeBudgetExtension: rcReviewSoftExtension,
-		// Thinking, when the job asks for it (KAI_REVIEW_REASONING_EFFORT).
-		// Unset, the provider keeps GLM's reasoning off, as before.
-		ReasoningEffort: rcReasoningEffort(),
+		// Thinking, when the job asks for it (KAI_REVIEW_REASONING_EFFORT, or
+		// the review profile's main stage). Unset, the provider keeps GLM's
+		// reasoning off, as before.
+		ReasoningEffort: rcStageEffort(rcStageMain),
 		Hooks: agent.Hooks{
 			OnToolCall: func(name, inputJSON string) {
 				fmt.Fprintf(os.Stderr, "  → %s %s\n", name, rcOneLine(inputJSON, 90))
@@ -1528,6 +1553,7 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 	if len(transcript) == 0 {
 		return ""
 	}
+	model = rcStageModel(rcStageConclusion, model)
 	// Preserve the actual evidence. Prefix trimming can remove the changed
 	// function while retaining the model's allegation about it. Desktop #418's
 	// incorrect shell review went through this fallback.
@@ -1556,7 +1582,7 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 			System:          rcReviewSystem,
 			MaxTokens:       2500,
 			Messages:        m,
-			ReasoningEffort: rcReasoningEffort(),
+			ReasoningEffort: rcStageEffort(rcStageConclusion),
 		})
 	}
 	resp, err := send(msgs)
