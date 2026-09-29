@@ -54,8 +54,10 @@ var rcProfileStages = []string{
 const rcProfilePath = ".kai-bench/review-profile.json"
 
 // rcProfileOwners are the GitHub accounts whose repositories may carry a
-// profile: the benchmark org, and nothing a customer controls.
-var rcProfileOwners = map[string]bool{"kaicontextbench": true}
+// profile: the benchmark org, the account that ran the benchmark before it
+// (acetz, again since 2026-09-30 while GitHub reviews the benchmark org's
+// machine account), and nothing a customer controls.
+var rcProfileOwners = map[string]bool{"kaicontextbench": true, "acetz": true}
 
 // rcEffortOff is a profile's explicit "no reasoning": it overrides an effort
 // the job sets for every stage (KAI_REVIEW_REASONING_EFFORT), where leaving

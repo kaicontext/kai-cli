@@ -285,6 +285,12 @@ func TestLoadProfileFromTheBaseBranchOfABenchmarkRepo(t *testing.T) {
 		t.Errorf("source = %q, want the repository named", rcActiveProfile.Source)
 	}
 
+	// The benchmark's other owner reads it too.
+	t.Setenv("GITHUB_REPOSITORY_FULLNAME", "acetz/sentry__sentry__kai-run12__PR1__20260930")
+	if err := rcLoadProfileFor("main"); err != nil || rcActiveProfile == nil {
+		t.Fatalf("acetz: profile %+v, err %v; want the file", rcActiveProfile, err)
+	}
+
 	// A customer repository carrying the same file is reviewed as always.
 	t.Setenv("GITHUB_REPOSITORY_FULLNAME", "acme/api")
 	if err := rcLoadProfileFor("main"); err != nil || rcActiveProfile != nil {
