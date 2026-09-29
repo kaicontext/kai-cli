@@ -244,6 +244,9 @@ func TestRepoGrepSearchesTheCommit(t *testing.T) {
 	if out, _ := repo.grep(`{"query":"nothing-matches-this"}`); !strings.Contains(out, "no matches") {
 		t.Fatalf("empty grep = %q", out)
 	}
+	if out, err := repo.grep(`{"query":"(unclosed","regex":true}`); err == nil {
+		t.Fatalf("a failed search was reported as a result: %q", out)
+	}
 }
 
 // A lookup's result becomes a numbered source the submission can cite.

@@ -245,6 +245,8 @@ func (r *rcRepo) grep(input string) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.WaitDelay = 2 * time.Second
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -253,8 +255,21 @@ func (r *rcRepo) grep(input string) (string, error) {
 		return "", err
 	}
 	out, _ := io.ReadAll(io.LimitReader(stdout, rcRepoGrepReadLimit))
-	cancel()
-	_ = cmd.Wait()
+	full := len(out) == rcRepoGrepReadLimit
+	if full {
+		cancel() // enough read; stop git
+	}
+	waitErr := cmd.Wait()
+	// Exit 1 is "no matches". Anything else with no output — a bad regex, an
+	// unknown path — is an error, not an empty result: absence of matches
+	// must not be reported when the search never ran.
+	var exit *exec.ExitError
+	if len(out) == 0 && errors.As(waitErr, &exit) && exit.ExitCode() != 1 {
+		return "", fmt.Errorf("search failed: %s", strings.TrimSpace(stderr.String()))
+	}
+	if len(out) == 0 && ctx.Err() != nil {
+		return "", fmt.Errorf("search timed out after %s", rcRepoGrepTimeout)
+	}
 	prefix := r.hash + ":"
 	var b strings.Builder
 	n := 0
