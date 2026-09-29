@@ -1,8 +1,9 @@
 name: review-regressions
 
-# Replays `kai review-commit` on the six benchmark PRs in
-# cmd/kai/testdata/review-regressions/cases.json and grades what it publishes
-# against their golden comments (scripts/review-regressions.sh).
+# Replays `kai review-commit` on the confirmed defects in
+# cmd/kai/testdata/review-regressions/cases.json (real bugs from kai-cli's own
+# history, none from the Martian benchmark) and grades what it publishes
+# (scripts/review-regressions.sh).
 #
 # Two modes:
 #   - NIGHTLY (schedule, or a manual run without pin_pr): tests kai-cli main,

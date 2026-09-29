@@ -1,109 +1,237 @@
 {
-  "about": "Regression cases for kai review-commit, taken from Martian's Code Review Bench (github.com/withmartian/code-review-benchmark, offline/golden_comments) and Kai's own findings on the 2026-09-24 run (the jschatz1/*__kai__PR*__20260924 forks, PR #1). base/head are the fork's PR #1. 'expect' is a golden comment Kai must publish: a published claim matches when it names the file and contains one of 'any' (case-insensitive). 'forbid' is a finding Kai published and must not: any published claim that names the file and contains one of 'any' fails the case. 'at_most' caps how many published claims may match, for one root cause posted several times. Run with scripts/review-regressions.sh.",
+  "about": "Regression cases for kai review-commit: real defects from kaicontext/kai-cli's own history, each flagged by a reviewer on one push and corrected by a later fix commit, so the defect is confirmed. None comes from Martian's Code Review Bench: cases taken from the benchmark (the six this corpus held until 2026-09-30) teach the reviewer the test it is scored on. base/head are the PR's base and the buggy head; heads that never reached main are fetched by SHA (refs/pull/N/head). 'expect' is a defect Kai must publish: a published claim matches when it names the file and contains one of 'any' (case-insensitive). 'forbid' is a finding Kai must not publish; 'at_most' caps how many published claims may match, for one root cause posted several times. Run with scripts/review-regressions.sh.",
   "cases": [
     {
-      "id": "calcom-14943",
-      "upstream": "https://github.com/calcom/cal.com/pull/14943",
-      "repo": "jschatz1/cal_dot_com__cal.com__kai__PR14943__20260924",
-      "base": "917c7b0764f4c6bfdca95db2c5f73dbfdbe11757",
-      "head": "c790227e0cda780e6fea9bb03af27948d9e286b9",
+      "id": "kaicli-41-coda-reset",
+      "upstream": "https://github.com/kaicontext/kai-cli/pull/41",
+      "repo": "kaicontext/kai-cli",
+      "base": "d381a77147388ecf45501f5c59486f3c6d5e4abf",
+      "head": "c9a85b0220e4a33d5216873e0f0416dc83bf77ab",
       "expect": [
-        {"issue": "P1-concurrency", "file": "scheduleSMSReminders.ts", "any": ["atomic", "concurren", "race condition", "lost update", "lose increments", "lose an increment", "lost increment", "stale value", "two requests", "simultaneous", "overlapping", "read-then-write", "read-modify-write"],
-         "golden": "retryCount: reminder.retryCount + 1 reads a possibly stale value and can lose increments under concurrency; use an atomic increment."}
+        {
+          "issue": "P1-state-reset",
+          "file": "review_commit.go",
+          "any": [
+            "second findings",
+            "second `findings",
+            "repeated findings",
+            "repeated header",
+            "repeated `findings",
+            "quoted",
+            "not reset",
+            "never reset",
+            "doesn't reset",
+            "does not reset",
+            "carry forward",
+            "retain"
+          ],
+          "golden": "A repeated FINDINGS:/ISSUES: header in rcParseReviewOutput only switches `section` back to issues; the earlier (quoted example) block's risks, INTENT_MATCH verdict, matchConflict flag and note are not reset, so quoted bullets are published as findings and a quoted `INTENT_MATCH: diverges` above the real `verified` flips the verdict to unknown, contrary to the commit's claim that a second header supersedes the whole block."
+        }
       ],
-      "forbid": [
-        {"issue": "P1-speculation", "file": "scheduleSMSReminders.ts", "any": ["dormant", "is ever added", "ever added", "if retry-incrementing is ever"],
-         "was": "New retryCount > 1 deletion branch omits the method: SMS guard; dormant today but will silently delete email/whatsapp reminders if retry-incrementing is ever added to those paths."}
-      ]
+      "forbid": []
     },
     {
-      "id": "calcom-10600",
-      "upstream": "https://github.com/calcom/cal.com/pull/10600",
-      "repo": "jschatz1/cal_dot_com__cal.com__kai__PR10600__20260924",
-      "base": "efa6d464a38e60ceeeb88f40668c1c4ac4bfaf54",
-      "head": "54486a059cd2032042189bb565646ba4e0f6bd61",
+      "id": "kaicli-86-unbounded-grep",
+      "upstream": "https://github.com/kaicontext/kai-cli/pull/86",
+      "repo": "kaicontext/kai-cli",
+      "base": "35f7623c9f204a1f415f96651887ded4bebe14c1",
+      "head": "437c47eb922ab28b52a8ab9dfd296079401caa85",
       "expect": [
-        {"issue": "P1-concurrency", "file": "next-auth-options.ts", "any": ["concurren", "race condition", "more than once", "simultaneous", "atomic", "two requests", "twice"],
-         "golden": "backupCodes are decrypted and mutated in memory before being written back; two concurrent logins with the same code can both pass, so a one-time code is accepted more than once."}
+        {
+          "issue": "P1-unbounded-subprocess",
+          "file": "review_commit_lookups.go",
+          "any": [
+            "timeout",
+            "time out",
+            "deadline",
+            "no context",
+            "commandcontext",
+            "unbounded",
+            "hang",
+            "waitdelay",
+            "never returns",
+            "output cap",
+            "no limit",
+            "tens of minutes"
+          ],
+          "golden": "rcGrepIdentifiers runs `git grep` via exec.Command(...).Output() with no context, timeout, WaitDelay or output cap, before the review's first model turn, so a grep for common identifiers in a large repository can run for tens of minutes (or hang) and consume the whole review's time budget."
+        }
       ],
-      "forbid": [
-        {"issue": "P2-noise", "file": "BackupCode.tsx", "any": ["minLength", "maxLength"],
-         "was": "minLength/maxLength are native constraint attributes, not zod validation."},
-        {"issue": "P1-speculation", "file": "disable.ts", "any": ["a future non-terminal", "a future step"],
-         "was": "disable path relies on terminal-wipe for single-use; a future non-terminal step would break the exactly-once invariant. (baseline run 2026-09-25, v0.35.89)"}
-      ]
+      "forbid": []
     },
     {
-      "id": "calcom-11059",
-      "upstream": "https://github.com/calcom/cal.com/pull/11059",
-      "repo": "jschatz1/cal_dot_com__cal.com__kai__PR11059__20260924",
-      "base": "bc89fe00ea84d20bedcec782f0701b9711dc8201",
-      "head": "9fde0e906897cc0f4f71793f647dd629faba3317",
+      "id": "kaicli-89-ref-injection",
+      "upstream": "https://github.com/kaicontext/kai-cli/pull/89",
+      "repo": "kaicontext/kai-cli",
+      "base": "a517020dc367eba4443b93ece3b17ccbf0da25c5",
+      "head": "02831ac340939a5a083791c3d1275848103febad",
       "expect": [
-        {"issue": "P1-contracts", "file": "CalendarService.ts", "any": ["res.data", "res?.data", "Response", "refreshOAuthTokens"],
-         "golden": "refreshFunction returns the fetch Response in sync mode, but callers such as GoogleCalendarService expect res.data / an integration-specific token."},
-        {"issue": "P1-contracts", "file": "", "any": ["credentialId", "userId"],
-         "golden": "refreshOAuthTokens is passed credentialId instead of userId, breaking the credential-sync user lookup."},
-        {"issue": "P1-contracts", "file": "", "any": ["jsforce", "stale", "instance_url"],
-         "golden": "jsforce.Connection is created with the stale credentialKey.access_token/instance_url after a token refresh."}
+        {
+          "issue": "P1-shell-injection",
+          "file": "build-kai-ci.yml",
+          "any": [
+            "injection",
+            "inject",
+            "single quote",
+            "single-quote",
+            "a quote",
+            "interpolat",
+            "${{ inputs",
+            "arbitrary command",
+            "arbitrary shell",
+            "command execution",
+            "untrusted",
+            "through env"
+          ],
+          "golden": "The workflow_dispatch ref inputs are spliced into the run script as REF='${{ inputs.kai_cli_ref }}' (and the tui/engine/core refs); GitHub substitutes the expression into the script text before bash parses it, so a ref containing a single quote closes the string and runs arbitrary shell in the job that then authenticates to GCP and pushes the production image; the inputs should be passed through env."
+        }
       ],
-      "forbid": [
-        {"issue": "P1-speculation", "file": "constants.ts", "any": ["footgun", "future"],
-         "was": "APP_CREDENTIAL_SHARING_ENABLED holds the encryption-key string, not a boolean; latent footgun for future strict comparisons."},
-        {"issue": "P2-noise", "file": "app-credential.ts", "any": ["inconsistent with every other handler", "method guard"],
-         "was": "no HTTP method guard and unhandled Zod parse throw; inconsistent with every other handler."}
-      ],
-      "at_most": [
-        {"issue": "P2-duplicates", "any": ["Axios/Response mismatch", "same Axios", "returns a `fetch Response`", "fetch Response"], "max": 1,
-         "was": "HubSpot, Zoho Bigin and Zoho CRM each got their own finding for one refreshOAuthTokens return-shape mismatch."}
-      ]
+      "forbid": []
     },
     {
-      "id": "keycloak-36880",
-      "upstream": "https://github.com/keycloak/keycloak/pull/36880",
-      "repo": "jschatz1/keycloak__keycloak__kai__PR36880__20260924",
-      "base": "f257c9eb595a074ee8c3ce1dce883c008bb216eb",
-      "head": "1950a511026d520a7329c7b6b9ee60a4af8f8b55",
+      "id": "kaicli-106-gate-turns",
+      "upstream": "https://github.com/kaicontext/kai-cli/pull/106",
+      "repo": "kaicontext/kai-cli",
+      "base": "c781ad88d63bcaf013646ce31cc7131b42235670",
+      "head": "01153f1be244797085fe0061d3b142ee48c50273",
       "expect": [
-        {"issue": "P1-contracts", "file": "ClientPermissionsV2.java", "any": ["findByName", "getClientId", "owner"],
-         "golden": "hasPermission looks the per-client resource up with findByName(server, client.getId(), ...) but getOrCreateResource creates it with the owner set to resourceServer.getClientId(), so the lookup never finds it."},
-        {"issue": "P1-contracts", "file": "ClientPermissionsV2.java", "any": ["getName", "getClientById", "client id", "client IDs"],
-         "golden": "getClientsWithPermission returns resource.getName() of the type-level resource, while getRoleIdsWithPermissions expects client IDs for realm.getClientById."}
+        {
+          "issue": "P1-contracts",
+          "file": "review_commit.go",
+          "any": [
+            "twice",
+            "double",
+            "overcount",
+            "over-count",
+            "inflat",
+            "inc.turns +=",
+            "whole conversation",
+            "entire conversation",
+            "full conversation",
+            "second time",
+            "already includes",
+            "counted again"
+          ],
+          "golden": "The coverage gate resumes the first run's session, and a resumed run's Transcript is the whole conversation (first pass included), so `inc.Turns += rcTurns(res2.Transcript)` counts the first pass's turns twice and the manifest over-reports turns; it should assign, not add."
+        }
       ],
-      "forbid": [
-        {"issue": "P2-noise", "file": "PermissionClientTest.java", "any": ["never asserts", "unverified"],
-         "was": "testMapRolesAndCompositesOnlyOneClient never asserts that an admin with MANAGE_CLIENTS is still allowed."}
-      ]
+      "forbid": []
     },
     {
-      "id": "keycloak-37038",
-      "upstream": "https://github.com/keycloak/keycloak/pull/37038",
-      "repo": "jschatz1/keycloak__keycloak__kai__PR37038__20260924",
-      "base": "a69e03fef8ff2ed8f65ab103df38659aeca35e1a",
-      "head": "7355f05e6aafe2a7acc6434fb40c686665416606",
+      "id": "kaicli-125-merge-subject",
+      "upstream": "https://github.com/kaicontext/kai-cli/pull/125",
+      "repo": "kaicontext/kai-cli",
+      "base": "d43795a11fe25a3ec0e5a66a796bf56f7da5292d",
+      "head": "6cb740c7d99120345966e4c158a7497aa7c05e7b",
       "expect": [
-        {"issue": "P1-contracts", "file": "GroupPermissionsV2.java", "any": ["getGroupIdsWithViewPermission", "group id", "group IDs", "resource id"],
-         "golden": "getGroupIdsWithViewPermission passes and collects groupResource.getId(), but hasPermission resolves resources by name (a group id) and callers use the result as group IDs."},
-        {"issue": "P1-regression-guard", "file": "GroupPermissionsV2.java", "any": ["canManage", "VIEW"],
-         "golden": "canManage() falls back to VIEW and MANAGE scopes, so view-only users pass it. (Kai found this on 2026-09-24; keep it.)"}
-      ]
+        {
+          "issue": "P2-overmatch",
+          "file": "ship.go",
+          "any": [
+            "shipismergesubject",
+            "\" into \"",
+            "`into`",
+            "\"into\"",
+            "' into '",
+            "prose",
+            "legitimate",
+            "ordinary commit",
+            "real commit",
+            "false positive",
+            "too broad",
+            "broader"
+          ],
+          "golden": "shipIsMergeSubject treats any subject that starts with \"merge \" and contains \" into \" as a merge commit, so an ordinary change such as \"merge the two handlers into one function\" is skipped by shipFirstCommitSubject and the branch loses its descriptive name, the very regression the commit set out to fix; only git's merge wordings and the refresh's two-bare-ref \"merge <ref> into <ref>\" form should match."
+        }
+      ],
+      "forbid": []
     },
     {
-      "id": "keycloak-37429",
-      "upstream": "https://github.com/keycloak/keycloak/pull/37429",
-      "repo": "jschatz1/keycloak__keycloak__kai__PR37429__20260924",
-      "base": "a3108aae34748536e06b0b0d413a6d3c75fb85c8",
-      "head": "02f48f776f43734d1ac8914d3ad6a7115acdcb33",
+      "id": "kaicli-129-promote-rollback",
+      "upstream": "https://github.com/kaicontext/kai-cli/pull/129",
+      "repo": "kaicontext/kai-cli",
+      "base": "7de7b8995d2bcae63597d5628f2c081382bcdc71",
+      "head": "4ee046af0b5006f35bc66093260b286821c46132",
       "expect": [
-        {"issue": "P1-regression-guard", "file": "messages_lt.properties", "any": ["Italian", "Lithuanian"],
-         "golden": "The translation is in Italian instead of Lithuanian. (Kai found this on 2026-09-24; keep it.)"}
+        {
+          "issue": "P1-rollback",
+          "file": "ship.go",
+          "any": [
+            "tracked file",
+            "existing file",
+            "pre-existing",
+            "already existed",
+            "existed at head",
+            "existed before",
+            "just restored",
+            "restored by",
+            "after the reset",
+            "reset --hard",
+            "discardchanges",
+            "os.remove"
+          ],
+          "golden": "runShipPromote's failure rollback calls gitio.DiscardChanges (reset --hard) and then os.Remove on every non-delete file the apply loop wrote, including files that already existed at HEAD and were just restored by the reset, so a failed promote deletes tracked files from the source repo's working tree; only files the apply created should be removed."
+        }
       ],
-      "forbid": [
-        {"issue": "P1-hostname", "file": "", "any": ["malicious.com"],
-         "was": "this change introduces the host malicious.com, which no file outside the change mentions."},
-        {"issue": "P2-noise", "file": "VerifyMessagePropertiesTest.java", "any": ["assert only", "no assertion"],
-         "was": "tests assert only that some Illegal HTML message exists."}
-      ]
+      "forbid": []
+    },
+    {
+      "id": "kaicli-147-dashboard-race",
+      "upstream": "https://github.com/kaicontext/kai-cli/pull/147",
+      "repo": "kaicontext/kai-cli",
+      "base": "710465c835e93641ec7c8756f1f2c500be4756d2",
+      "head": "555f1ae12e3b6229c7f008af1edb62745e65f1ac",
+      "expect": [
+        {
+          "issue": "P1-concurrency",
+          "file": "review-regressions.yml",
+          "any": [
+            "concurren",
+            "race",
+            "lost update",
+            "overwrit",
+            "clobber",
+            "last write",
+            "last-write",
+            "same body",
+            "simultaneous",
+            "at the same time",
+            "compare-and-set",
+            "read-modify-write"
+          ],
+          "golden": "Pin runs now also read the dashboard issue body, append their entry and write it back with `gh issue edit`, but pin and nightly runs sit in different concurrency groups (review-regressions-<pin_pr> vs review-regressions-nightly), so two runs finishing together each read the same body and the second write silently drops the first run's history entry."
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "kaicli-152-grep-partial",
+      "upstream": "https://github.com/kaicontext/kai-cli/pull/152",
+      "repo": "kaicontext/kai-cli",
+      "base": "8b7d99ba1962472dacebc60b9476bb894753e504",
+      "head": "181e36223752ec304c5a92fd1aafc7f8dd33cd29",
+      "expect": [
+        {
+          "issue": "P1-error-handling",
+          "file": "review_commit_repo.go",
+          "any": [
+            "partial",
+            "incomplete",
+            "truncated",
+            "cut short",
+            "len(out) == 0",
+            "len(out)==0",
+            "timed out",
+            "read cap",
+            "read limit",
+            "complete result",
+            "complete match",
+            "absence"
+          ],
+          "golden": "The gate's grep reports a failed or timed-out search only when git produced no output (both checks are gated on len(out) == 0), so a search killed by its 15s timeout or stopped at the 1 MiB read cap after emitting partial stdout is returned as a complete match list, letting the gate cite a missing match as proof of absence."
+        }
+      ],
+      "forbid": []
     }
   ]
 }

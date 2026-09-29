@@ -1,6 +1,6 @@
-Real diffs of the 2026-09-24 benchmark forks (jschatz1/*__kai__PR*__20260924,
-PR #1 base..head; SHAs in ../review-regressions/cases.json), trimmed to the
-files that carry the golden defects Kai missed. Used by
-review_commit_hints_test.go to pin that rcReviewHints points at each missed
-line. Upstream: calcom/cal.com #14943 #10600 #11059, keycloak/keycloak
-#36880 #37038 (MIT / Apache-2.0).
+Synthetic diffs written for review_commit_hints_test.go, one per hint kind:
+a lost update, a check-then-write, an argument outlier, a client built around
+a token refresh, and ids collected from a lookup. No code from Martian's Code
+Review Bench or any benchmark repository: the fixtures that were here until
+2026-09-30 were benchmark diffs trimmed to their golden defects, which tuned
+the hints to the test they are scored on.

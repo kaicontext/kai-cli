@@ -40,14 +40,14 @@ const rcSweepSystem = `You are sweeping a code change for defects, line by line.
 
 A defect is something wrong as written, that you can point at on one line and explain in one sentence. Check each changed line for:
 - WRONG VALUE OR VARIABLE: a copy-paste slip (the wrong variable, field, metric tag, map key, flag or constant), a value that disagrees with the data or comment beside it, an off-by-one, a wrong unit.
-- WRONG CONDITION: inverted or incomplete logic, a guard that tests the wrong thing, a predicate method called without its "?", "==" where identity or order matters, a branch that can never run.
+- WRONG CONDITION: inverted or incomplete logic, a guard that tests the wrong thing, "==" where identity or order matters, a branch that can never run.
 - MISSING NULL OR ERROR HANDLING: a dereference, index or key access on a value the new code can produce as null/None/nil/undefined/empty; an error or exception that escapes where the surrounding code handles it; a failed call whose result is used anyway.
 - NORMALIZATION MISMATCH: two sides of a comparison, lookup or uniqueness check normalized differently (case, whitespace, trailing slash, string vs symbol, id kind), or data written without the normalization its readers apply.
-- CONTRACT MISMATCH VISIBLE HERE: a return shape, argument order or identifier kind that the lines shown use inconsistently; an abstract method a new subclass does not implement; a function that returns a new object where its callers expect the receiver.
-- SECURITY: unescaped or unsanitized output of user-controlled content, a permission check that grants more than it names (e.g. VIEW accepted where MANAGE is required), a missing authorization or ownership check on a new path, a request to a user-supplied URL, a secret compared with ==.
+- CONTRACT MISMATCH VISIBLE HERE: a return shape, argument order or identifier kind that the lines shown use inconsistently; an abstract method a new subclass does not implement; a function whose result its callers use in a way it does not support.
+- SECURITY: unescaped or unsanitized output of user-controlled content, a permission check that grants more than it names, a missing authorization or ownership check on a new path, a request to a user-supplied URL, a secret compared with ==.
 - CONCURRENCY: a read-check-write on shared state (a counter, a one-time code, a status) with nothing serializing it.
-- TEST BUGS: a test that cannot fail, asserts the wrong value, uses the wrong HTTP verb or route, sleeps after patching instead of before, or tests something other than its name says.
-- DOCS, COMMENTS AND TEXT: a docstring or comment that now contradicts the code below it, a typo in an identifier, key, message or user-facing string, a translation in the wrong language, a broken template tag.
+- TEST BUGS: a test that cannot fail, asserts the wrong value, or tests something other than its name says.
+- DOCS, COMMENTS AND TEXT: a docstring or comment that now contradicts the code below it, a typo in an identifier, key, message or user-facing string, a broken template tag.
 - STYLE THAT BREAKS SOMETHING: an unused or dead new code path, a magic number repeated where the constant exists, an inconsistency with the sibling code that changes behaviour.
 
 Rules:

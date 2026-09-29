@@ -36,7 +36,7 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 			// A defect's trigger must exist today (benchmark 2026-09-24:
 			// Cal.com #14943 "dormant today…", #11059 "future footgun").
 			name:  "a defect needs a trigger that exists today",
-			needs: []string{"A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY", "reachable trigger", "failure mechanism", "ANY(array)", "never goes in ISSUES"},
+			needs: []string{"A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY", "reachable trigger", "failure mechanism", "cannot bind an array parameter", "never goes in ISSUES"},
 		},
 		{
 			// Missing tests, intent and consistency points took over the
@@ -45,19 +45,17 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 			// concrete test, doc and typo defect unreported — so the rule
 			// separates generic advice from concrete defects.
 			name:  "generic advice is not a defect, and every concrete defect is reported",
-			needs: []string{"GENERIC ADVICE IS NOT A DEFECT", "REPORT EVERY DEFECT, NOT ONLY THE HEADLINE ONE", "test files and docs included", "specific missing requirement", "concrete regression risk", "#36880", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
+			needs: []string{"GENERIC ADVICE IS NOT A DEFECT", "REPORT EVERY DEFECT, NOT ONLY THE HEADLINE ONE", "test files and docs included", "specific missing requirement", "concrete regression risk", "the test never asserts the admin path", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
 		},
 		{
-			// Contract mismatches missed in files the review opened
-			// (Keycloak #36880/#37038, Cal.com #11059, 2026-09-24).
+			// Contract mismatches missed in files the review had opened.
 			name:  "trace what crosses a call",
-			needs: []string{"TRACE WHAT CROSSES A CALL", "KIND of identifier", "RETURN SHAPE", "FRESHNESS", "#36880", "#37038", "#11059", "name both ends"},
+			needs: []string{"TRACE WHAT CROSSES A CALL", "kind of value", "shape of what comes back", "freshness", "a price in cents passed where dollars are expected", "name both ends"},
 		},
 		{
-			// Concurrency bugs missed on the benchmark (Cal.com #14943,
-			// #10600, 2026-09-24).
+			// Read-check-write races the reviewer passed over.
 			name:  "two requests at once",
-			needs: []string{"TWO REQUESTS AT ONCE", "run it twice at the same time", "#14943", "#10600", "atomic update", "Name the two requests and the interleaving"},
+			needs: []string{"TWO REQUESTS AT ONCE", "run it twice at the same time", "loses one of two withdrawals", "atomic update", "Name the two requests and the interleaving"},
 		},
 		{
 			name:  "environment assumptions get named",
@@ -100,6 +98,32 @@ func TestReviewSystemPrompt_RulesCiteTheirIncident(t *testing.T) {
 	for _, cite := range []string{"kai-engine, 2026-09-03", "kai-cli, 2026-09-03", "v0.6.46", "v0.6.47"} {
 		if !strings.Contains(rcReviewSystem, cite) {
 			t.Errorf("a rule lost the incident that bought it: %q", cite)
+		}
+	}
+}
+
+// The prompts must not carry Martian's Code Review Bench: its repositories,
+// its pull requests or the defects its golden comments describe. Rules written
+// around benchmark cases (kai-cli #142, 2026-09-25) taught the reviewer the
+// answers to the test it is scored on; a rule needs an example from code the
+// benchmark does not contain.
+func TestPromptsCarryNoBenchmarkCases(t *testing.T) {
+	fingerprints := []string{
+		"Cal.com", "cal.com", "Keycloak", "keycloak", "Sentry", "Grafana", "Discourse", "discourse",
+		"#14943", "#11059", "#10600", "#36880", "#37038", "#37429", "#8087", "#103633",
+		"benchmark", "Prisma", "HubSpot", "Zoho", "jsforce", "refreshOAuthTokens", "retryCount",
+		"backup code", "getClientId", "instance_url", "MANAGE_CLIENTS", "translation in the wrong language",
+		"predicate method", "sleeps after patching",
+	}
+	prompts := map[string]string{
+		"review": rcReviewSystem, "fast": rcFastReviewSystem, "sweep": rcSweepSystem,
+		"challenge head": rcChallengeSystemHead, "challenge tail": rcChallengeSystemTail,
+	}
+	for name, prompt := range prompts {
+		for _, f := range fingerprints {
+			if strings.Contains(prompt, f) {
+				t.Errorf("the %s prompt carries a benchmark case: %q", name, f)
+			}
 		}
 	}
 }

@@ -1,0 +1,15 @@
+diff --git a/src/invites/redeem.ts b/src/invites/redeem.ts
+new file mode 100644
+--- /dev/null
++++ b/src/invites/redeem.ts
+@@ -0,0 +1,10 @@
++import { db } from '../db';
++
++export async function redeem(userId: string, code: string) {
++  const user = await db.user.findUnique({ where: { id: userId } });
++  const codes: string[] = JSON.parse(user.inviteCodes);
++  const index = codes.indexOf(code);
++  if (index === -1) throw new Error('invalid code');
++  codes.splice(index, 1);
++  await db.user.update({ where: { id: userId }, data: { inviteCodes: JSON.stringify(codes) } });
++}

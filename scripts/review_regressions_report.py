@@ -87,7 +87,7 @@ def alerts(history, case_ids):
 
 
 def fmt_totals(t):
-    return (f"{t['passed']}/{t['finished']} passed · golden {t['found']}/{t['expected']} · "
+    return (f"{t['passed']}/{t['finished']} passed · known bugs {t['found']}/{t['expected']} · "
             f"leaked {t['leaked']}/{t['forbidden']} · {t['published']} published")
 
 
@@ -148,7 +148,7 @@ def main():
         bt = totals(load_run(a.baseline_run, cases))
         lines += ["| | " + (a.baseline_ref or "baseline") + " | " + a.ref + " |", "|---|---|---|",
                   f"| Cases passed | {bt['passed']}/{bt['finished']} | {t['passed']}/{t['finished']} |",
-                  f"| Golden bugs found | {bt['found']}/{bt['expected']} | {t['found']}/{t['expected']} |",
+                  f"| Known bugs found | {bt['found']}/{bt['expected']} | {t['found']}/{t['expected']} |",
                   f"| Forbidden findings leaked | {bt['leaked']}/{bt['forbidden']} | {t['leaked']}/{t['forbidden']} |",
                   f"| Findings published | {bt['published']} | {t['published']} |", "",
                   "_One run each; the model varies between runs. Unfinished reviews are left out of the counts._", ""]
@@ -167,7 +167,7 @@ def main():
             trend.append(f"| [{h['date']}]({h['url']}) | {h['ref']} `{h['sha']}` | {ht['passed']}/{ht['finished']} | "
                          f"{ht['found']}/{ht['expected']} | {ht['leaked']}/{ht['forbidden']} | {ht['published']} | {marks} |")
         body = [
-            "Nightly replay of `kai review-commit` on six real PRs from Martian's Code Review Bench, graded against their golden comments ([`cases.json`](https://github.com/kaicontext/kai-cli/blob/main/cmd/kai/testdata/review-regressions/cases.json), [`review-regressions.sh`](https://github.com/kaicontext/kai-cli/blob/main/scripts/review-regressions.sh)). Updated by the `review-regressions` workflow; do not edit by hand.",
+            "Nightly replay of `kai review-commit` on confirmed defects from kai-cli's own history (none from the Martian benchmark), graded against the defect each case carries ([`cases.json`](https://github.com/kaicontext/kai-cli/blob/main/cmd/kai/testdata/review-regressions/cases.json), [`review-regressions.sh`](https://github.com/kaicontext/kai-cli/blob/main/scripts/review-regressions.sh)). Updated by the `review-regressions` workflow; do not edit by hand.",
             "",
             f"**Latest ({history[-1]['date'] if history else now}):** {fmt_totals(last)}",
             "",
@@ -177,7 +177,7 @@ def main():
             "",
             "\n".join(trend),
             "",
-            "A case fails when a golden bug is missed (`expect`), a known-bad finding is published (`forbid`), or one cause is posted too many times (`at_most`). One run is noisy; read the trend.",
+            "A case fails when a known bug is missed (`expect`), a known-bad finding is published (`forbid`), or one cause is posted too many times (`at_most`). One run is noisy; read the trend.",
             "",
             "<!-- review-regressions-history\n" + json.dumps(history) + "\n-->",
         ]
