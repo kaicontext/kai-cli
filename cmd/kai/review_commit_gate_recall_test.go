@@ -169,6 +169,11 @@ func TestPreexistingRefutationNearTheChangeIsFlagged(t *testing.T) {
 	if len(p) != 1 || p[0].Index != 0 || !strings.Contains(p[0].Text, "70-78") {
 		t.Fatalf("problems = %+v, want only the allegation beside lines 70-78", p)
 	}
+	// A bare file name, as reviewers often write it, resolves to the changed file.
+	bare := &rcChallengeResult{Allegations: []rcAllegationResult{{Issue: "webassets.go:82 — stores nil", Status: rcStatusRefuted, Reason: "Pre-existing code."}}}
+	if p := rcVerdictProblems(bare, repo); len(p) != 1 {
+		t.Fatalf("bare path not resolved to the changed file: %+v", p)
+	}
 }
 
 func TestChangedRanges(t *testing.T) {

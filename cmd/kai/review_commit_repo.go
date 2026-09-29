@@ -116,12 +116,36 @@ func (r *rcRepo) changedNear(file string, line, radius int) ([2]int, bool) {
 	if r == nil {
 		return [2]int{}, false
 	}
+	file = r.changedPath(file)
 	for _, rg := range r.changed[file] {
 		if line >= rg[0]-radius && line <= rg[1]+radius {
 			return rg, true
 		}
 	}
 	return [2]int{}, false
+}
+
+// changedPath resolves a path as the reviewer wrote it — often a bare or
+// partial name — to the one changed file it names, the way rcResolvePath does
+// against the whole tree. Only changed files matter here, so only they are
+// searched; an ambiguous name is left as written.
+func (r *rcRepo) changedPath(written string) string {
+	if _, ok := r.changed[written]; ok {
+		return written
+	}
+	match := ""
+	for p := range r.changed {
+		if strings.HasSuffix(p, "/"+written) {
+			if match != "" {
+				return written
+			}
+			match = p
+		}
+	}
+	if match == "" {
+		return written
+	}
+	return match
 }
 
 // Bounds on the gate's lookups.
