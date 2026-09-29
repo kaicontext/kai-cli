@@ -40,11 +40,15 @@ func TestSweepChunksSkipGeneratedFilesAndPutTestsLast(t *testing.T) {
 	}
 }
 
-func TestDraftWithSweepAppendsNewLocationsOnly(t *testing.T) {
-	draft := "Prose.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: verified\nMERGE_READY: 4\nSUMMARY: ok\nISSUES:\n- a.go:10 — reviewer's own finding\nDECISIONS:\n- a decision\n"
-	got := rcDraftWithSweep(draft, []string{"a.go:10 — the same place, sweep wording", "b.go:3 — a new defect"})
+func TestDraftWithSweepAppendsNewDefectsOnly(t *testing.T) {
+	draft := "Prose.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: verified\nMERGE_READY: 4\nSUMMARY: ok\nISSUES:\n- a.go:10 — the session user is dereferenced without a nil check after expiry\nDECISIONS:\n- a decision\n"
+	got := rcDraftWithSweep(draft, []string{
+		"a.go:10 — dereferences the session user after expiry without a nil check", // the same defect, reworded
+		"a.go:10 — the log message misspells receivedAt as recievedAt",             // a different defect on that line
+		"b.go:3 — a new defect",
+	})
 	issues := rcIssuesOf(got)
-	if len(issues) != 2 || !strings.Contains(issues[0], "reviewer's own") || !strings.HasPrefix(issues[1], "b.go:3") {
+	if len(issues) != 3 || !strings.Contains(issues[0], "session user is dereferenced") || !strings.Contains(issues[1], "recievedAt") || !strings.HasPrefix(issues[2], "b.go:3") {
 		t.Fatalf("issues = %q\n%s", issues, got)
 	}
 	if !strings.Contains(got, "DECISIONS:\n- a decision") {

@@ -35,7 +35,14 @@ var (
 func rcChallengeBatches(ctx context.Context, prov provider.Provider, model, draft string, sources, extra []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	prose, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
 	if len(issues) <= rcChallengeBatchSize {
-		return rcChallengeDraft(ctx, prov, model, draft, rcBatchSources(sources, extra, issues), sandbox)
+		res, err := rcChallengeDraft(ctx, prov, model, draft, rcBatchSources(sources, extra, issues), sandbox)
+		if err == nil || len(issues) < 2 || ctx.Err() != nil {
+			return res, err
+		}
+		fmt.Fprintf(os.Stderr, "  challenge: the check failed (%v); re-checking its %d allegations one at a time\n", err, len(issues))
+		batches := rcSingles(issues)
+		results, errs := rcRunBatches(ctx, prov, model, prose, decisions, 0, batches, sources, extra, sandbox)
+		return rcMergeBatches(batches, decisions, results, errs)
 	}
 	var batches [][]string
 	n := (len(issues) + rcChallengeBatchSize - 1) / rcChallengeBatchSize
@@ -44,6 +51,14 @@ func rcChallengeBatches(ctx context.Context, prov provider.Provider, model, draf
 		batches = append(batches, issues[lo:hi])
 	}
 	fmt.Fprintf(os.Stderr, "  challenge: %d allegations in %d batches\n", len(issues), len(batches))
+	results, errs := rcRunBatches(ctx, prov, model, prose, decisions, 0, batches, sources, extra, sandbox)
+	batches, results, errs = rcRetryFailedBatches(ctx, prov, model, prose, decisions, batches, results, errs, sources, extra, sandbox)
+	return rcMergeBatches(batches, decisions, results, errs)
+}
+
+// rcRunBatches checks each batch side by side. The batch at decisionsAt (-1
+// for none) also carries the draft's decisions.
+func rcRunBatches(ctx context.Context, prov provider.Provider, model, prose string, decisions []string, decisionsAt int, batches [][]string, sources, extra []rcSource, sandbox *rcShellSandbox) ([]*rcChallengeResult, []error) {
 	results := make([]*rcChallengeResult, len(batches))
 	errs := make([]error, len(batches))
 	sem := make(chan struct{}, rcChallengeBatchParallel)
@@ -55,14 +70,69 @@ func rcChallengeBatches(ctx context.Context, prov provider.Provider, model, draf
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			var ds []string
-			if i == 0 {
+			if i == decisionsAt {
 				ds = decisions
 			}
 			results[i], errs[i] = rcChallengeDraft(ctx, prov, model, rcSubDraft(prose, batch, ds), rcBatchSources(sources, extra, batch), sandbox)
 		}(i, batch)
 	}
 	wg.Wait()
-	return rcMergeBatches(batches, decisions, results, errs)
+	return results, errs
+}
+
+// rcRetryFailedBatches re-checks every failed batch one allegation at a time.
+//
+// A batch fails as a unit — its call ran out of time, or its answer broke the
+// protocol twice — and before this every allegation in it was lost with it:
+// listed as not verified, and a sweep proposal among them withheld. Five of
+// the run 5 misses (2026-09-28) were drafted defects lost exactly this way.
+// One allegation per call is the shortest check there is, so the retry is
+// the likeliest to finish; the results are spliced back in place, so the
+// first entry still carries the decisions.
+func rcRetryFailedBatches(ctx context.Context, prov provider.Provider, model, prose string, decisions []string, batches [][]string, results []*rcChallengeResult, errs []error, sources, extra []rcSource, sandbox *rcShellSandbox) ([][]string, []*rcChallengeResult, []error) {
+	if ctx.Err() != nil {
+		return batches, results, errs
+	}
+	var singles [][]string
+	decisionsAt := -1
+	for i, batch := range batches {
+		if errs[i] == nil || len(batch) < 2 {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  challenge: batch %d of %d failed (%v); re-checking its %d allegations one at a time\n", i+1, len(batches), errs[i], len(batch))
+		if i == 0 {
+			decisionsAt = len(singles)
+		}
+		singles = append(singles, rcSingles(batch)...)
+	}
+	if len(singles) == 0 {
+		return batches, results, errs
+	}
+	sr, se := rcRunBatches(ctx, prov, model, prose, decisions, decisionsAt, singles, sources, extra, sandbox)
+	var nb [][]string
+	var nr []*rcChallengeResult
+	var ne []error
+	next := 0
+	for i, batch := range batches {
+		if errs[i] == nil || len(batch) < 2 {
+			nb, nr, ne = append(nb, batch), append(nr, results[i]), append(ne, errs[i])
+			continue
+		}
+		for range batch {
+			nb, nr, ne = append(nb, singles[next]), append(nr, sr[next]), append(ne, se[next])
+			next++
+		}
+	}
+	return nb, nr, ne
+}
+
+// rcSingles splits issues into one-allegation batches.
+func rcSingles(issues []string) [][]string {
+	out := make([][]string, len(issues))
+	for i, is := range issues {
+		out[i] = []string{is}
+	}
+	return out
 }
 
 // rcSubDraft is a draft whose coda carries only these issues and decisions.
@@ -145,7 +215,7 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 		if errs[i] != nil || r == nil {
 			fmt.Fprintf(os.Stderr, "  challenge: batch %d of %d failed (%v) — its %d allegation(s) are listed as not verified\n", i+1, len(batches), errs[i], len(batch))
 			for _, is := range batch {
-				merged.Allegations = append(merged.Allegations, rcAllegationResult{Issue: is, Status: rcStatusUnresolved, Reason: fmt.Sprintf("the check for this allegation's batch did not complete (%v)", errs[i])})
+				merged.Allegations = append(merged.Allegations, rcAllegationResult{Issue: is, Status: rcStatusUnresolved, Reason: fmt.Sprintf("the check for this allegation's batch did not complete (%v)", errs[i]), unchecked: true})
 			}
 			continue
 		}
@@ -257,6 +327,11 @@ func rcChallengeModel(reviewModel string) string {
 // not verify" would publish that guess as a doubt — an unmatched finding on
 // the benchmark and noise on a real PR. The reviewer's own unsettled points
 // are still listed, as before. Reports how many were withheld.
+//
+// A proposal whose check never ran — its batch failed, even one allegation at
+// a time — is NOT withheld: the gate reached no view of it, and an
+// infrastructure failure is not a refutation. It stays under "Could not
+// verify".
 func rcWithholdUnsettledSweep(res *rcChallengeResult, sweep []string) int {
 	if res == nil || len(sweep) == 0 {
 		return 0
@@ -267,7 +342,7 @@ func rcWithholdUnsettledSweep(res *rcChallengeResult, sweep []string) int {
 	}
 	n := 0
 	for i, a := range res.Allegations {
-		if a.Status == rcStatusUnresolved && fromSweep[rcIssueKey(a.Issue)] {
+		if a.Status == rcStatusUnresolved && !a.unchecked && fromSweep[rcIssueKey(a.Issue)] {
 			res.Allegations[i].Status = rcStatusRefuted
 			res.Allegations[i].Reason = "withheld: a sweep proposal the check could not settle (" + a.Reason + ")"
 			n++

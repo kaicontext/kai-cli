@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kaicontext/kai-engine/message"
@@ -137,9 +138,16 @@ func TestDistinctDefectsAreNotMerged(t *testing.T) {
 
 // The gate is asked to check one allegation per cause.
 func TestTheGateSeesOneAllegationPerCause(t *testing.T) {
+	// The first request is the whole draft's; a failed check is then retried
+	// one allegation at a time, concurrently.
+	var mu sync.Mutex
 	var asked string
 	p := rcChallengeProvider{send: func(_ context.Context, req provider.Request) (provider.Response, error) {
-		asked = rcRequestText(req)
+		mu.Lock()
+		defer mu.Unlock()
+		if asked == "" {
+			asked = rcRequestText(req)
+		}
 		return provider.Response{}, context.Canceled
 	}}
 	_, _ = rcChallengeReview(context.Background(), p, "test", rcTestReview(rc11059Issues...), nil, nil)

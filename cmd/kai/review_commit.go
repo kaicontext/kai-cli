@@ -137,11 +137,21 @@ const rcMaxAuthorContextBytes = 8 * 1024
 // intent=unknown and zero flags. A hollow finding is worse than a slow one: it
 // reads as "nothing to report" rather than "I ran out of time".
 //
-// The CI step's own timeout is 30 minutes, so this stays well inside it.
+// The CI job's timeout is 60 minutes (review_default_workflow.go), so this
+// stays well inside it.
+//
+// Raised again 2026-09-29, with the turn budget below. The extension was never
+// real for a review: the engine extends only a run that recently edited a file
+// (runner.go lastSubstantiveEditAt), and a review never edits, so 9 minutes
+// was the whole budget. And run 5 of the 2026-09-28 benchmark found the
+// reviewer stopping on its TURN cap at a median of ~4 minutes, having opened
+// the right code for 19 of the 45 defects it missed without raising them. The
+// soft budget is now the budget the review actually gets, sized for the larger
+// turn cap at a thinking model's slower pace (KAI_REVIEW_REASONING_EFFORT).
 const (
-	rcReviewSoftBudget    = 9 * time.Minute
-	rcReviewSoftExtension = 3 * time.Minute // granted at most twice → 15m ceiling
-	rcReviewHardDeadline  = 20 * time.Minute
+	rcReviewSoftBudget    = 15 * time.Minute
+	rcReviewSoftExtension = 3 * time.Minute // only granted after an edit, which a review never makes
+	rcReviewHardDeadline  = 25 * time.Minute
 )
 
 // The review's TURN budget, which is the one that actually binds.
@@ -172,10 +182,15 @@ const (
 // soft budget was designed to be: 45 turns at the observed pace is about 420
 // seconds, inside the 540-second soft budget, and a run slower than that hits
 // the time budget and degrades the way the time budget already handles.
+//
+// Raised 2026-09-29 (base 20→30, 2→3 per file, ceiling 45→72): run 5 showed
+// the reviewer finishing on this cap in ~4 minutes with most of its clock
+// unspent, on PRs where it had read the defect's code and moved on. 72 turns
+// at the measured pace is ~670 seconds, inside the 15-minute soft budget.
 const (
-	rcReviewBaseTurns    = 20
-	rcReviewTurnsPerFile = 2
-	rcReviewTurnCeiling  = 45
+	rcReviewBaseTurns    = 30
+	rcReviewTurnsPerFile = 3
+	rcReviewTurnCeiling  = 72
 	// rcObservedSecondsPerTurn is the median turn cost measured across 85 live
 	// reviews on 2026-09-09 (z-ai/glm-5.2, the model the CI workflow exports).
 	// It is a constant rather than a number in a comment because the ceiling
@@ -380,7 +395,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		phase = time.Now()
 		hosts := rcNewHostsBlock(rcNewHosts(hash, diff, rcPathsOf(files), rcFilesMentioningHost))
 		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref)
-		raw, inc, err = rcRunReviewAgent(ctx, set, prov, model, authorContext, intent, hosts, diff, rcPathsOf(files), sweep)
+		// The publication gate reads the reviewed commit to settle what the
+		// reviewer's own tool results do not show (review_commit_repo.go).
+		gateCtx := rcWithRepo(ctx, rcNewRepo(reviewCommitBase, ref, hash))
+		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, authorContext, intent, hosts, diff, rcPathsOf(files), sweep)
 		if err != nil {
 			return err
 		}
@@ -652,10 +670,11 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 	in.WriteString(diff)
 
 	resp, err := prov.Send(ctx, provider.Request{
-		Model:     model,
-		System:    rcInferIntentSystem,
-		MaxTokens: 600,
-		Messages:  []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
+		Model:           model,
+		System:          rcInferIntentSystem,
+		MaxTokens:       600,
+		ReasoningEffort: rcReasoningEffort(),
+		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
 	})
 	if err != nil {
 		return "", err
@@ -850,6 +869,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// for ReadOnly) and slow harness turns stack up to the CI step timeout.
 		SoftTimeBudget:          rcReviewSoftBudget,
 		SoftTimeBudgetExtension: rcReviewSoftExtension,
+		// Thinking, when the job asks for it (KAI_REVIEW_REASONING_EFFORT).
+		// Unset, the provider keeps GLM's reasoning off, as before.
+		ReasoningEffort: rcReasoningEffort(),
 		Hooks: agent.Hooks{
 			OnToolCall: func(name, inputJSON string) {
 				fmt.Fprintf(os.Stderr, "  → %s %s\n", name, rcOneLine(inputJSON, 90))
@@ -1530,10 +1552,11 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
 		return prov.Send(cctx, provider.Request{
-			Model:     model,
-			System:    rcReviewSystem,
-			MaxTokens: 2500,
-			Messages:  m,
+			Model:           model,
+			System:          rcReviewSystem,
+			MaxTokens:       2500,
+			Messages:        m,
+			ReasoningEffort: rcReasoningEffort(),
 		})
 	}
 	resp, err := send(msgs)
