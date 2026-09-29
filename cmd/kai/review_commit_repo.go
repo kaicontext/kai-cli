@@ -131,7 +131,6 @@ const (
 	rcRepoViewMax       = 400
 	rcRepoGrepMaxLines  = 100
 	rcRepoGrepMaxBytes  = 16 << 10
-	rcRepoGrepTimeout   = 15 * time.Second
 	rcRepoGrepReadLimit = 1 << 20
 )
 
@@ -168,6 +167,9 @@ func rcRepoPath(p string) (string, error) {
 	}
 	return clean, nil
 }
+
+// rcRepoGrepTimeoutVar bounds one gate search (a var so tests can shorten it).
+var rcRepoGrepTimeoutVar = 15 * time.Second
 
 // view is kai_view over the reviewed commit.
 func (r *rcRepo) view(input string) (string, error) {
@@ -241,7 +243,7 @@ func (r *rcRepo) grep(input string) (string, error) {
 		}
 		gitArgs = append(gitArgs, "--", p)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), rcRepoGrepTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), rcRepoGrepTimeoutVar)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.WaitDelay = 2 * time.Second
@@ -267,8 +269,20 @@ func (r *rcRepo) grep(input string) (string, error) {
 	if len(out) == 0 && errors.As(waitErr, &exit) && exit.ExitCode() != 1 {
 		return "", fmt.Errorf("search failed: %s", strings.TrimSpace(stderr.String()))
 	}
-	if len(out) == 0 && ctx.Err() != nil {
-		return "", fmt.Errorf("search timed out after %s", rcRepoGrepTimeout)
+	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
+	if len(out) == 0 && timedOut {
+		return "", fmt.Errorf("search timed out after %s", rcRepoGrepTimeoutVar)
+	}
+	// A search cut short by the clock or the read cap returns what it found,
+	// marked as partial: the gate must not read a missing match as absent.
+	partial := ""
+	if timedOut || full {
+		partial = "(search stopped early — these matches are INCOMPLETE; absence of a match here proves nothing)\n"
+		if full {
+			if i := strings.LastIndexByte(string(out), '\n'); i > 0 {
+				out = out[:i]
+			}
+		}
 	}
 	prefix := r.hash + ":"
 	var b strings.Builder
@@ -285,10 +299,10 @@ func (r *rcRepo) grep(input string) (string, error) {
 		b.WriteByte('\n')
 		n++
 	}
-	if n == 0 {
+	if n == 0 && partial == "" {
 		return fmt.Sprintf("no matches for %q at %s", args.Query, rcShort(r.hash)), nil
 	}
-	return b.String(), nil
+	return b.String() + partial, nil
 }
 
 // run executes one of the gate's repository tools.

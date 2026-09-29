@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/provider"
@@ -332,5 +333,16 @@ func TestGateEffortOnlyOnTheGroundedPath(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A search the clock cut short is marked partial, never passed off as complete.
+func TestRepoGrepMarksATimedOutSearchPartial(t *testing.T) {
+	hash := rcTempRepo(t, map[string]string{"a.go": "x\n"})
+	defer func(d time.Duration) { rcRepoGrepTimeoutVar = d }(rcRepoGrepTimeoutVar)
+	rcRepoGrepTimeoutVar = time.Nanosecond
+	out, err := (&rcRepo{hash: hash}).grep(`{"query":"x"}`)
+	if err == nil && !strings.Contains(out, "INCOMPLETE") {
+		t.Fatalf("a timed-out search read as complete: %q", out)
 	}
 }
