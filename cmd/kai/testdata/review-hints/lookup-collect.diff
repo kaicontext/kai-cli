@@ -1,0 +1,16 @@
+diff --git a/src/main/java/acme/perm/ProjectPermissions.java b/src/main/java/acme/perm/ProjectPermissions.java
+new file mode 100644
+--- /dev/null
++++ b/src/main/java/acme/perm/ProjectPermissions.java
+@@ -0,0 +1,11 @@
++package acme.perm;
++
++public class ProjectPermissions {
++    public Set<String> projectsWithAccess(Store store, Org org) {
++        Set<String> granted = new HashSet<>();
++        for (Entry entry : store.findByOwner(org, org.getId())) {
++            granted.add(entry.getName());
++        }
++        return granted;
++    }
++}

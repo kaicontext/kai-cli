@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Replay kai review-commit on the upstream pull requests in
 # cmd/kai/testdata/review-regressions/cases.json and grade what it published
-# against their golden comments.
+# against the confirmed defect each case carries.
 #
 #   scripts/review-regressions.sh                 # every case
-#   scripts/review-regressions.sh calcom-14943    # one or more by id
+#   scripts/review-regressions.sh kaicli-129-promote-rollback    # one or more by id
 #
-# Each case is a real review: a blobless clone of the benchmark fork, a local
-# graph, and `kai review-commit --deep` on the fork's PR range. It spends LLM
+# Each case is a real review: a blobless clone of the case's repo, a local
+# graph, and `kai review-commit --deep` on the case's base...head range. It spends LLM
 # credit through the Kai account in ~/.kai/credentials.json, so it is a manual
 # check before and after a reviewer change, not part of `go test`.
 #

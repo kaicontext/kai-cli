@@ -15,27 +15,23 @@ func rcHintsFor(t *testing.T, name string) string {
 	return rcReviewHints(string(b))
 }
 
-// Every golden defect the reviewer missed on the benchmark and the first two
-// nightly corpus runs has a hint that points at its line, in the real diff.
+// Each kind of hint points at the line that has its shape, in a synthetic
+// diff written for the test (testdata/review-hints/PROVENANCE).
 func TestReviewHintsPointAtTheMissedDefects(t *testing.T) {
 	for _, tc := range []struct {
 		diff, why string
 		want      []string
 	}{
-		{"calcom-14943", "non-atomic retry increment",
-			[]string{"TWO REQUESTS AT ONCE", "scheduleSMSReminders.ts:184  retryCount: reminder.retryCount + 1", "scheduleSMSReminders.ts:195"}},
-		{"calcom-10600", "backup code checked then written back",
-			[]string{"both pass the check before either write lands", "next-auth-options.ts:144  const index = backupCodes.indexOf("}},
-		{"calcom-11059", "credentialId passed where every other call passes credential.userId",
-			[]string{`zoho-bigin/lib/CalendarService.ts:85  refreshOAuthTokens(…) passes "credentialId" as argument 3 where the other 7 calls pass "credential.userId"`}},
-		{"calcom-11059", "jsforce connection built around a refresh",
-			[]string{"salesforce/lib/CalendarService.ts:101  return new jsforce.Connection({"}},
-		{"keycloak-36880", "resource looked up by the wrong kind of key",
-			[]string{"KIND the record was stored under", "ClientPermissionsV2.java:214  Resource resource =  resourceStore.findByName(server, client.getId(), server.getId());"}},
-		{"keycloak-36880", "names returned where callers expect client ids",
-			[]string{"ClientPermissionsV2.java:140  granted.add(resource.getName());"}},
-		{"keycloak-37038", "resource ids returned where callers expect group ids",
-			[]string{"GroupPermissionsV2.java:123  granted.add(groupResource.getId());", "GroupPermissionsV2.java:141"}},
+		{"lost-update", "a counter written back from the value just read",
+			[]string{"TWO REQUESTS AT ONCE", "src/jobs/worker.ts:8  data: { attempts: job.attempts + 1 },"}},
+		{"check-then-write", "a membership check on a collection the same code writes back",
+			[]string{"both pass the check before either write lands", "src/invites/redeem.ts:6  const index = codes.indexOf(code);"}},
+		{"argument-outlier", "one call passes a different value where every other call agrees",
+			[]string{`src/billing/notify.ts:16  notify(…) passes "org.name" as argument 3 where the other 4 calls pass "org.billingEmail"`}},
+		{"client-around-refresh", "a client built from credentials read before the refresh",
+			[]string{"src/storage/client.ts:8  return new StorageClient({", "src/storage/client.ts:9  token: creds.accessToken,"}},
+		{"lookup-collect", "a lookup by one kind of key, and names collected for callers",
+			[]string{"KIND the record was stored under", "ProjectPermissions.java:6  for (Entry entry : store.findByOwner(org, org.getId())) {", "ProjectPermissions.java:7  granted.add(entry.getName());"}},
 	} {
 		got := rcHintsFor(t, tc.diff)
 		for _, w := range tc.want {
@@ -48,7 +44,7 @@ func TestReviewHintsPointAtTheMissedDefects(t *testing.T) {
 
 // The block is context for the reviewer, never a finding list, and it says so.
 func TestReviewHintsAreFramedAsChecksNotFindings(t *testing.T) {
-	got := rcHintsFor(t, "calcom-14943")
+	got := rcHintsFor(t, "lost-update")
 	if !strings.HasPrefix(got, "REVIEW HINTS (") || !strings.Contains(got, "These are NOT findings") ||
 		!strings.Contains(got, "reachable trigger") {
 		t.Errorf("hint block is not framed as checks:\n%s", got)

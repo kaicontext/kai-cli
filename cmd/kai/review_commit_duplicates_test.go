@@ -165,7 +165,7 @@ func TestPromptsAskForOneIssuePerCause(t *testing.T) {
 			t.Errorf("%s prompt does not show the also-list", name)
 		}
 	}
-	if !strings.Contains(rcReviewSystem, "ONE ROOT CAUSE, ONE ISSUE") || !strings.Contains(rcReviewSystem, "#11059") {
+	if !strings.Contains(rcReviewSystem, "ONE ROOT CAUSE, ONE ISSUE") || !strings.Contains(rcReviewSystem, "one finding with two \"(also: …)\" locations") {
 		t.Error("review prompt is missing the one-cause rule or its incident")
 	}
 	if !strings.Contains(rcChallengeSystemHead, "one allegation, and one check") {

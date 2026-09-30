@@ -39,12 +39,12 @@ var (
 	rcCheckRe = regexp.MustCompile(`\.(indexOf|includes|has|contains)\(`)
 	rcWriteRe = regexp.MustCompile(`\.(update|updateMany|upsert|save|set|delete|splice)\(|\bUPDATE\b`)
 	// A lookup by a key the caller supplies.
-	rcLookupRe = regexp.MustCompile(`\b(findByName|findById|findByClientId|findByOwner|findUnique|findFirst|get[A-Z][A-Za-z]*By(Id|Name|ClientId|Key))\s*\(`)
+	rcLookupRe = regexp.MustCompile(`\b(findByName|findById|findByOwner|findUnique|findFirst|get[A-Z][A-Za-z]*By(Id|Name|Key))\s*\(`)
 	// An identifier collected from a lookup result, for someone else to use.
-	rcCollectRe = regexp.MustCompile(`\.(add|push|append|put)\(\s*[A-Za-z_][A-Za-z0-9_]*\.(getId|getName|getClientId|id|name|clientId)\b`)
+	rcCollectRe = regexp.MustCompile(`\.(add|push|append|put)\(\s*[A-Za-z_][A-Za-z0-9_]*\.(getId|getName|getKey|id|name|key)\b`)
 	// A token refresh, and a later read of a credential field.
-	rcRefreshRe   = regexp.MustCompile(`(?i)refresh[A-Za-z]*\s*\(`)
-	rcTokenUseRe  = regexp.MustCompile(`\.(access_token|accessToken|instance_url|instanceUrl)\b`)
+	rcRefreshRe  = regexp.MustCompile(`(?i)refresh[A-Za-z]*\s*\(`)
+	rcTokenUseRe = regexp.MustCompile(`\.(access_token|accessToken|refresh_token|refreshToken)\b`)
 	// A client or connection built in a file that refreshes credentials: is it
 	// built from the refreshed values or from the ones read before?
 	rcClientNewRe = regexp.MustCompile(`\bnew\s+[A-Za-z_][A-Za-z0-9_.]*(Connection|Client)\s*\(`)
@@ -178,7 +178,7 @@ func rcReviewHints(diff string) string {
 	}
 	section("A value written back from the value just read — can two concurrent requests both read the old value and lose an update (TWO REQUESTS AT ONCE)?", rmw)
 	section("A membership check in a file that also writes the collection back — can two requests both pass the check before either write lands?", check)
-	section("A lookup by a key — is the key the same KIND the record was stored under (internal id vs client id vs name)? Find where the record is created (TRACE WHAT CROSSES A CALL).", lookup)
+	section("A lookup by a key — is the key the same KIND the record was stored under (internal id vs external id vs name)? Find where the record is created (TRACE WHAT CROSSES A CALL).", lookup)
 	section("Identifiers collected from lookup results and returned — which kind (id or name), and what do the callers pass them to?", collect)
 	section("A client or connection built in a file that refreshes credentials — is it built from the refreshed values or from ones read before the refresh?", clients)
 	section("Credential fields read in a file that refreshes them — does each read come after the refresh, from the refreshed value?", fresh)

@@ -1,0 +1,22 @@
+diff --git a/src/billing/notify.ts b/src/billing/notify.ts
+new file mode 100644
+--- /dev/null
++++ b/src/billing/notify.ts
+@@ -0,0 +1,17 @@
++import { notify } from './mailer';
++
++export async function afterCharge(org, invoice) {
++  await notify(invoice.id, 'charged', org.billingEmail);
++}
++export async function afterRefund(org, invoice) {
++  await notify(invoice.id, 'refunded', org.billingEmail);
++}
++export async function afterDispute(org, invoice) {
++  await notify(invoice.id, 'disputed', org.billingEmail);
++}
++export async function afterFailure(org, invoice) {
++  await notify(invoice.id, 'failed', org.billingEmail);
++}
++export async function afterReminder(org, invoice) {
++  await notify(invoice.id, 'reminder', org.name);
++}
