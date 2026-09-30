@@ -13,8 +13,8 @@ package main
 //	fast.md       the fast pass's role and its own coda
 //	sweep.md      the line-by-line sweep's role and output
 //	challenge.md  the fact-check's role and method
-//	packs/        checks for one language or one risk area, added only when the
-//	              change touches it (rcPacksFor)
+//	packs/        checks for one language, CI, or one risk area, added only
+//	              when the change touches it (rcPacksFor)
 //
 // A stage file splits at "<!-- shared sections -->": its role goes before the
 // shared sections, its output contract after. Before this, each stage carried
@@ -88,11 +88,13 @@ func rcReviewSystemFor(packs []string) string {
 		rcPackText(packs), rcSkillFile("report.md"))
 }
 
-// rcSweepSystemFor is the sweep's system prompt. It takes the catalog and the
-// packs but not the definition of a defect: the sweep proposes candidates, and
-// the fact-check that follows applies the definition to each of them.
+// rcSweepSystemFor is the sweep's system prompt: its own line-level checklist
+// and the packs. It takes neither the catalog nor the definition of a defect.
+// The sweep proposes candidates and the fact-check that follows applies the
+// definition to each; given the catalog's findings and non-findings, the sweep
+// proposed less than half as much and the corpus caught fewer defects.
 func rcSweepSystemFor(packs []string) string {
-	return rcComposeStage("sweep.md", rcSkillFile("catalog.md"), rcPackText(packs))
+	return rcComposeStage("sweep.md", rcPackText(packs))
 }
 
 func rcPackText(packs []string) string {
@@ -106,8 +108,10 @@ func rcPackText(packs []string) string {
 	return rcJoinSections(parts...)
 }
 
-// Language packs, by the extensions of the files a change touches.
+// Language packs, by the extensions of the files a change touches. CI
+// workflows are YAML like much else, so they are matched by path (rcCIPath).
 var rcLangPackExts = map[string][]string{
+	"ci":         {".sh", ".bash"},
 	"go":         {".go"},
 	"java":       {".java", ".kt", ".kts"},
 	"python":     {".py"},
@@ -134,9 +138,14 @@ func rcWords(alternatives string) *regexp.Regexp {
 	return regexp.MustCompile(`(?i)(^|[^a-z])(` + alternatives + `)([^a-z]|$)`)
 }
 
+var rcCIPath = regexp.MustCompile(`(^|/)(\.github/workflows/[^/]+\.ya?ml|\.gitlab-ci\.ya?ml|action\.ya?ml)$`)
+
 const (
 	rcMaxLangPacks = 2
 	rcMaxRiskPacks = 3
+	// A risk pack needs this many matching paths and added lines. One stray
+	// "session" or "amount" in a change is not a change to auth or money.
+	rcMinRiskHits = 2
 )
 
 // rcPacksFor picks the packs for a unified diff: up to two language packs, for
@@ -173,10 +182,10 @@ func rcPacksFor(diff string) []string {
 			}
 		}
 	}
-	top := func(counts map[string]int, max int) []string {
+	top := func(counts map[string]int, max, min int) []string {
 		var names []string
 		for n, c := range counts {
-			if c > 0 {
+			if c >= min {
 				names = append(names, n)
 			}
 		}
@@ -192,10 +201,13 @@ func rcPacksFor(diff string) []string {
 		sort.Strings(names)
 		return names
 	}
-	return append(top(langLines, rcMaxLangPacks), top(riskHits, rcMaxRiskPacks)...)
+	return append(top(langLines, rcMaxLangPacks, 1), top(riskHits, rcMaxRiskPacks, rcMinRiskHits)...)
 }
 
 func rcLangOf(p string) string {
+	if rcCIPath.MatchString(p) {
+		return "ci"
+	}
 	ext := strings.ToLower(path.Ext(p))
 	for lang, exts := range rcLangPackExts {
 		for _, e := range exts {

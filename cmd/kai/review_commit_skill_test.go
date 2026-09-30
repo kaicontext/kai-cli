@@ -32,7 +32,10 @@ func TestReviewSkillFilesCompose(t *testing.T) {
 	}
 	order(rcReviewSystem, "# How to review this change", "# What counts as a defect", "# Defect catalog", "# Report format", rcReviewDataMarker)
 	order(rcFastReviewSystem, "# Fast first pass", "# What counts as a defect", "# Defect catalog", "## Report format", rcReviewDataMarker)
-	order(rcSweepSystem, "# Line-by-line sweep", "# Defect catalog", "## Output", "- (none)")
+	order(rcSweepSystem, "# Line-by-line sweep", "## Output", "- (none)")
+	if strings.Contains(rcSweepSystem, "# Defect catalog") {
+		t.Error("the sweep carries the catalog; it proposes from its own checklist")
+	}
 	order(rcChallengeSystemHead, "# Check a draft review before it is published", "# What counts as a defect", "## How to check")
 	// The coda the parsers read stays where it was: last, and complete.
 	for name, prompt := range map[string]string{"review": rcReviewSystem, "fast": rcFastReviewSystem} {
@@ -71,6 +74,7 @@ func TestPacksFollowWhatTheChangeTouches(t *testing.T) {
 		"+    order = Order.objects.get(id=order_id)",
 		"+    stripe.Refund.create(amount=order.amount)",
 		"+    if request.user.is_authenticated and has_permission(request.user):",
+		"+@login_required",
 		"diff --git a/web/Button.tsx b/web/Button.tsx",
 		"+++ b/web/Button.tsx",
 		"+export const Button = () => <button />",
@@ -85,6 +89,19 @@ func TestPacksFollowWhatTheChangeTouches(t *testing.T) {
 	}
 	if got := rcPacksFor("diff --git a/README.md b/README.md\n+++ b/README.md\n+Hello\n"); len(got) != 0 {
 		t.Errorf("a docs-only change got packs %v", got)
+	}
+	// One passing mention is not a change to that area.
+	if got := rcPacksFor("diff --git a/x.go b/x.go\n+++ b/x.go\n+\tsession := store.Get(r)\n"); !reflect.DeepEqual(got, []string{"go"}) {
+		t.Errorf("one mention of a session picked packs %v, want [go]", got)
+	}
+	// Workflows are found by path, shell scripts by extension.
+	for _, p := range []string{".github/workflows/build.yml", "ci/.gitlab-ci.yml", "actions/setup/action.yaml", "scripts/release.sh"} {
+		if got := rcPacksFor("diff --git a/" + p + " b/" + p + "\n+++ b/" + p + "\n+  run: echo hi\n"); !reflect.DeepEqual(got, []string{"ci"}) {
+			t.Errorf("%s picked packs %v, want [ci]", p, got)
+		}
+	}
+	if got := rcPacksFor("diff --git a/k8s/deploy.yml b/k8s/deploy.yml\n+++ b/k8s/deploy.yml\n+replicas: 2\n"); len(got) != 0 {
+		t.Errorf("a plain YAML file picked packs %v", got)
 	}
 	// Every pack a change can pick exists, and the prompt carries its text.
 	for lang := range rcLangPackExts {

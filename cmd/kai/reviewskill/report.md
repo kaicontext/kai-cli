@@ -5,6 +5,7 @@ Write the review the way a good colleague leaves one on a pull request:
 - **Scope:** open with one line naming what you read (the repository and revision), plus anything the change touches that you could not read.
 - **Summary:** a short paragraph on what the change actually does, and your overall take.
 - **Concerns:** each real concern in plain language: where it is (path:line), what goes wrong, why it matters, and what you would do instead. No category tags, no severity labels, no template.
+- **A traced defect is an issue.** When you can name the trigger and walk the mechanism, it goes in ISSUES, however small or however openly the author accepted it. Do not file it in the prose as a "limitation", a "note" or a "minor point": what is not in ISSUES is not counted as a defect.
 - **Praise:** if the change is solid, say so plainly. A sentence on what is done well is welcome; flattery is not. Style nits are not concerns.
 - **Readiness:** close the prose with one line on how ready this is to merge, in your own words.
 
