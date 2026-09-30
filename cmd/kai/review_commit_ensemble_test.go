@@ -108,3 +108,21 @@ func TestEnsembleStagesCanBeTurnedOff(t *testing.T) {
 		t.Error("sweep2 has a default model")
 	}
 }
+
+func TestAnIssueNamedByFunctionGetsItsLine(t *testing.T) {
+	files := map[string][]string{"cmd/kai/ship.go": {"package main", "", "// shipIsMergeSubject is used below", "func shipIsMergeSubject(s string) bool {", "\treturn false", "}"}}
+	read := func(_, p string) ([]string, bool) { l, ok := files[p]; return l, ok }
+	tree := []string{"cmd/kai/ship.go"}
+	got := rcLocateNamedIssue("h", "cmd/kai/ship.go:shipIsMergeSubject — matches too much", tree, read)
+	if got != "cmd/kai/ship.go:4 — matches too much" {
+		t.Errorf("got %q, want the definition line", got)
+	}
+	if got := rcLocateNamedIssue("h", "`cmd/kai/ship.go:main.shipIsMergeSubject` — x", tree, read); got != "`cmd/kai/ship.go:4` — x" {
+		t.Errorf("qualified name: got %q", got)
+	}
+	for _, keep := range []string{"cmd/kai/ship.go:12 — has a line", "cmd/kai/ship.go:nowhere — unknown symbol", "missing.go:foo — no such file"} {
+		if got := rcLocateNamedIssue("h", keep, tree, read); got != keep {
+			t.Errorf("%q changed to %q", keep, got)
+		}
+	}
+}
