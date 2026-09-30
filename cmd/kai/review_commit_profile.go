@@ -43,11 +43,18 @@ const (
 	rcStageSweep      = "sweep"
 	rcStageFactcheck  = "factcheck"
 	rcStageConclusion = "conclusion"
+	// The ensemble around the grounded review (review_commit_ensemble.go): a
+	// second finder agent on another model family, a second sweep, and the
+	// selection step that chooses which confirmed defects to publish.
+	rcStageFinder2 = "finder2"
+	rcStageSweep2  = "sweep2"
+	rcStageRank    = "rank"
 )
 
 var rcProfileStages = []string{
 	rcStageQuickDraft, rcStageQuickFactcheck,
 	rcStageIntent, rcStageMain, rcStageSweep, rcStageFactcheck, rcStageConclusion,
+	rcStageFinder2, rcStageSweep2, rcStageRank,
 }
 
 // rcProfilePath is where the harness commits the profile, on the base branch.
@@ -269,6 +276,8 @@ func rcStageEffort(stage string) string {
 	switch stage {
 	case rcStageQuickDraft, rcStageQuickFactcheck:
 		return ""
+	case rcStageFinder2, rcStageSweep2, rcStageRank:
+		return rcEnsembleEffort(stage)
 	}
 	return rcReasoningEffort()
 }

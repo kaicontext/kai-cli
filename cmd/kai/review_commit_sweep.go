@@ -165,6 +165,12 @@ func rcLooksLikeTest(path string) bool { return rcTestPath.MatchString(path) }
 // it proposes, each grounded to a changed path. Chunks run in parallel; a
 // chunk that errors or times out is counted and skipped.
 func rcRunSweep(ctx context.Context, prov provider.Provider, model, system, intent string, order []string, patches map[string]string) rcSweepResult {
+	return rcRunSweepWith(ctx, prov, model, rcStageEffort(rcStageSweep), system, intent, order, patches)
+}
+
+// rcRunSweepWith is rcRunSweep with the reasoning effort given, for a sweep
+// on a model other than the sweep stage's (the second sweep).
+func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, effort, system, intent string, order []string, patches map[string]string) rcSweepResult {
 	chunks := rcSweepChunks(order, patches)
 	res := rcSweepResult{Chunks: len(chunks)}
 	if len(chunks) == 0 {
@@ -217,7 +223,7 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, system, inte
 				Model:           model,
 				System:          system,
 				MaxTokens:       rcSweepMaxTokens,
-				ReasoningEffort: rcStageEffort(rcStageSweep),
+				ReasoningEffort: effort,
 				Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
 			})
 			if err != nil {
@@ -487,9 +493,25 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 		}
 		system := rcSweepSystemFor(rcPacksFor(all.String()))
 		started := time.Now()
+		// A second sweep on another model reads the same hunks beside the
+		// first; they miss different lines (review_commit_ensemble.go).
+		var second chan rcSweepResult
+		if m2 := rcEnsembleModel(rcStageSweep2); m2 != "" && m2 != model {
+			second = make(chan rcSweepResult, 1)
+			go func() {
+				s := time.Now()
+				r := rcRunSweepWith(ctx, prov, m2, rcStageEffort(rcStageSweep2), system, intent, order, patches)
+				fmt.Fprintf(os.Stderr, "  second sweep (%s): %d chunk(s) read in %s, %d failed, %d defect(s) proposed\n",
+					m2, r.Chunks, time.Since(s).Round(time.Second), r.Failed, len(r.Issues))
+				second <- r
+			}()
+		}
 		res := rcRunSweep(ctx, prov, model, system, intent, order, patches)
 		fmt.Fprintf(os.Stderr, "  sweep: %d chunk(s) read in %s, %d failed, %d defect(s) proposed\n",
 			res.Chunks, time.Since(started).Round(time.Second), res.Failed, len(res.Issues))
+		if second != nil {
+			res = rcMergeSweeps(res, <-second)
+		}
 		ch <- res
 	}()
 	return ch
@@ -521,4 +543,28 @@ func rcAwaitSweep(ch <-chan rcSweepResult) rcSweepResult {
 func rcIssuesOf(draft string) []string {
 	_, issues, _, _, _, _ := rcParseReviewOutput(draft)
 	return issues
+}
+
+// rcMergeSweeps joins two sweeps over the same hunks: every distinct issue
+// from both, and one set of chunk sources (both chunked the same diff).
+func rcMergeSweeps(a, b rcSweepResult) rcSweepResult {
+	seen := map[string]bool{}
+	var issues []string
+	for _, is := range append(append([]string(nil), a.Issues...), b.Issues...) {
+		k := rcIssueKey(is)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		issues = append(issues, is)
+	}
+	out := a
+	out.Issues = issues
+	if len(out.Sources) == 0 {
+		out.Sources = b.Sources
+	}
+	if a.Failed > 0 && b.Failed < a.Failed {
+		out.Failed = b.Failed
+	}
+	return out
 }

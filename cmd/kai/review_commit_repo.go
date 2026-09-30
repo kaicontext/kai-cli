@@ -150,7 +150,7 @@ func (r *rcRepo) changedPath(written string) string {
 
 // Bounds on the gate's lookups.
 const (
-	rcMaxLookups        = 6
+	rcMaxLookups        = 8
 	rcRepoViewDefault   = 200
 	rcRepoViewMax       = 400
 	rcRepoGrepMaxLines  = 100
