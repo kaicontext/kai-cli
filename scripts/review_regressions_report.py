@@ -160,7 +160,7 @@ def main():
 
     if a.out_body:
         last = history[-1]["totals"] if history else t
-        trend = ["| When | Ref | Passed | Golden | Leaked | Published | Cases |", "|---|---|---|---|---|---|---|"]
+        trend = ["| When | Ref | Passed | Known bugs | Leaked | Published | Cases |", "|---|---|---|---|---|---|---|"]
         for h in reversed(history[-14:]):
             ht = h["totals"]
             marks = "".join({"pass": "✅", "fail": "❌"}.get(h["cases"].get(cid), "⚪") for cid in ids)

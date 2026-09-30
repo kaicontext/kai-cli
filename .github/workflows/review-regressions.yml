@@ -65,9 +65,10 @@ jobs:
           client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
           private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
           owner: kaicontext
-          repositories: kai-core,kai-engine
-      # Scoped to kaicontext/: the six forks under review are public repos of
-      # another owner, and must clone anonymously.
+          repositories: kai-core,kai-engine,kai-cli
+      # Scoped to kaicontext/, where the corpus lives too: every case is a
+      # commit of kaicontext/kai-cli, so the rewrite below also carries the
+      # runner's clone of it, and the token must cover kai-cli.
       - name: Authenticate to the private modules
         run: git config --global url."https://x-access-token:${{ steps.core-token.outputs.token }}@github.com/kaicontext/".insteadOf "https://github.com/kaicontext/"
       - name: Install build deps
