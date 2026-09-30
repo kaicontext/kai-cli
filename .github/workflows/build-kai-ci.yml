@@ -42,6 +42,10 @@ on:
         type: choice
         default: both
         options: [both, agent, review, none]
+      candidate_kai_cli_ref:
+        description: 'Candidate only: build kai-cli from this branch or commit instead of its newest tag. Requires pin: none'
+        required: false
+        default: ''
 
 concurrency:
   group: build-kai-ci
@@ -93,12 +97,28 @@ jobs:
       # kai-engine's newest tag is v0.6.58 while its releases/latest still reads
       # v0.3.0, and kai-core publishes no releases at all — so that endpoint
       # would have silently pinned an engine 55 minor versions stale.
+      #
+      # A CANDIDATE is the one exception: kai-cli from a branch or commit, to
+      # trial a change on one org's reviews (org_review_config.review_image in
+      # kai-server) before it is released. It can never be pinned, so no
+      # production default is ever made from a branch tip, and the image still
+      # records the exact commit in its tag and labels.
       - name: Resolve refs
         id: resolve
         env:
           TOKEN: ${{ steps.token.outputs.token }}
+          CANDIDATE: ${{ inputs.candidate_kai_cli_ref }}
+          PIN: ${{ inputs.pin }}
         run: |
           set -euo pipefail
+          if [ -n "$CANDIDATE" ]; then
+            if [ "$PIN" != none ]; then
+              echo "a candidate build cannot be pinned: run it with pin: none"; exit 1
+            fi
+            if ! [[ "$CANDIDATE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+              echo "candidate ref must be a branch name or a commit"; exit 1
+            fi
+          fi
           # No pipe, deliberately. `git ls-remote | head -1` makes head close the
           # pipe while git is still writing, git takes SIGPIPE, and under
           # `set -o pipefail` the whole step dies with exit 141 — which is how
@@ -116,6 +136,11 @@ jobs:
             printf '%s' "${first##*refs/tags/}"
           }
           for m in kai-cli kai-tui kai-engine kai-core; do
+            if [ "$m" = kai-cli ] && [ -n "$CANDIDATE" ]; then
+              echo "$m: $CANDIDATE (candidate)"
+              echo "kai_cli_ref=$CANDIDATE" >> "$GITHUB_OUTPUT"
+              continue
+            fi
             # `if !` rather than a bare assignment: under `set -e` a failing
             # command substitution kills the step with no explanation, and the
             # message below never prints.
