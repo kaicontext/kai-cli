@@ -476,6 +476,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	claims := make([]finding.Claim, 0, len(flags))
 	tree := rcTreeFiles(hash)
 	for _, r := range risks {
+		r = rcLocateNamedIssue(hash, r, tree, rcFileLines)
 		claims = append(claims, rcGroundIssue(hash, r, tree, rcFileLines))
 	}
 	for _, d := range decisions {
