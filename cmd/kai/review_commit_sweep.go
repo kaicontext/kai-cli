@@ -36,35 +36,7 @@ import (
 // blocks the review: a chunk that fails or runs out of time contributes
 // nothing, and the review proceeds with what the reviewer found.
 
-const rcSweepSystem = `You are sweeping a code change for defects, line by line. You get part of the change as a unified diff with wide context. Read EVERY added and changed line in EVERY file shown — test files, fixtures, docs, config, styles and translations included — and list every concrete defect the change introduces or leaves in the lines it touches.
-
-A defect is something wrong as written, that you can point at on one line and explain in one sentence. Check each changed line for:
-- WRONG VALUE OR VARIABLE: a copy-paste slip (the wrong variable, field, metric tag, map key, flag or constant), a value that disagrees with the data or comment beside it, an off-by-one, a wrong unit.
-- WRONG CONDITION: inverted or incomplete logic, a guard that tests the wrong thing, "==" where identity or order matters, a branch that can never run.
-- MISSING NULL OR ERROR HANDLING: a dereference, index or key access on a value the new code can produce as null/None/nil/undefined/empty; an error or exception that escapes where the surrounding code handles it; a failed call whose result is used anyway.
-- NORMALIZATION MISMATCH: two sides of a comparison, lookup or uniqueness check normalized differently (case, whitespace, trailing slash, string vs symbol, id kind), or data written without the normalization its readers apply.
-- CONTRACT MISMATCH VISIBLE HERE: a return shape, argument order or identifier kind that the lines shown use inconsistently; an abstract method a new subclass does not implement; a function whose result its callers use in a way it does not support.
-- SECURITY: unescaped or unsanitized output of user-controlled content, a permission check that grants more than it names, a missing authorization or ownership check on a new path, a request to a user-supplied URL, a secret compared with ==.
-- CONCURRENCY: a read-check-write on shared state (a counter, a one-time code, a status) with nothing serializing it.
-- TEST BUGS: a test that cannot fail, asserts the wrong value, or tests something other than its name says.
-- DOCS, COMMENTS AND TEXT: a docstring or comment that now contradicts the code below it, a typo in an identifier, key, message or user-facing string, a broken template tag.
-- STYLE THAT BREAKS SOMETHING: an unused or dead new code path, a magic number repeated where the constant exists, an inconsistency with the sibling code that changes behaviour.
-
-Rules:
-- Only defects in or directly caused by the changed lines. Name the exact file path and the line number in the NEW file (the "+" side; use the hunk header to count).
-- Be concrete: say what is wrong and what it should be. No hedging ("might", "could potentially", "consider"), no general advice, no "add a test" without a specific wrong behaviour it would catch, no praise.
-- Do not report a problem that depends on a future code change.
-- One defect per line of output. If the same mistake repeats, write it once and add "(also: path:line, …)".
-- A line can carry more than one defect. After you find one, keep checking the same lines for a DIFFERENT one — a second wrong value, a missing check beside the wrong one, a test that also asserts the wrong thing — and list each on its own bullet. Stopping at the first plausible problem is how real defects are missed.
-- It is fine to report nothing for a chunk that is correct. Do not pad.
-- Never write a bullet for a line you checked and found correct. Think it through before writing; a bullet is a defect, not a note.
-
-Output ONLY this, nothing before or after:
-ISSUES:
-- <path>:<line> — <the defect, one sentence>
-or, when there is nothing:
-ISSUES:
-- (none)`
+// rcSweepSystem is composed from reviewskill/ (review_commit_skill.go).
 
 // Sweep budgets. The sweep runs beside the grounded review, so its deadline
 // is its own; what it has not finished by then is simply not merged.
@@ -192,7 +164,7 @@ func rcLooksLikeTest(path string) bool { return rcTestPath.MatchString(path) }
 // rcRunSweep reads every chunk with the review model and returns the defects
 // it proposes, each grounded to a changed path. Chunks run in parallel; a
 // chunk that errors or times out is counted and skipped.
-func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent string, order []string, patches map[string]string) rcSweepResult {
+func rcRunSweep(ctx context.Context, prov provider.Provider, model, system, intent string, order []string, patches map[string]string) rcSweepResult {
 	chunks := rcSweepChunks(order, patches)
 	res := rcSweepResult{Chunks: len(chunks)}
 	if len(chunks) == 0 {
@@ -243,7 +215,7 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 			b.WriteString(src.String())
 			resp, err := prov.Send(ctx, provider.Request{
 				Model:           model,
-				System:          rcSweepSystem,
+				System:          system,
 				MaxTokens:       rcSweepMaxTokens,
 				ReasoningEffort: rcStageEffort(rcStageSweep),
 				Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
@@ -508,8 +480,14 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 	model = rcSweepModel(model)
 	go func() {
 		order, patches := rcSweepPatches(base, ref)
+		var all strings.Builder
+		for _, f := range order {
+			all.WriteString(patches[f])
+			all.WriteString("\n")
+		}
+		system := rcSweepSystemFor(rcPacksFor(all.String()))
 		started := time.Now()
-		res := rcRunSweep(ctx, prov, model, intent, order, patches)
+		res := rcRunSweep(ctx, prov, model, system, intent, order, patches)
 		fmt.Fprintf(os.Stderr, "  sweep: %d chunk(s) read in %s, %d failed, %d defect(s) proposed\n",
 			res.Chunks, time.Since(started).Round(time.Second), res.Failed, len(res.Issues))
 		ch <- res
