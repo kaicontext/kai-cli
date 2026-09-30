@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSelectionPublishesTheChosenDefectsInOrder(t *testing.T) {
@@ -124,5 +125,21 @@ func TestAnIssueNamedByFunctionGetsItsLine(t *testing.T) {
 		if got := rcLocateNamedIssue("h", keep, tree, read); got != keep {
 			t.Errorf("%q changed to %q", keep, got)
 		}
+	}
+}
+
+func TestASlowSecondFinderIsLeftBehind(t *testing.T) {
+	old := rcSecondFinderGrace
+	rcSecondFinderGrace = 10 * time.Millisecond
+	defer func() { rcSecondFinderGrace = old }()
+	cancelled := false
+	sf := &rcSecondFinder{ch: make(chan rcFinderResult, 1), cancel: func() { cancelled = true }, model: "slow"}
+	if r := rcAwaitSecondFinder(sf); r.Raw != "" || len(r.Issues) != 0 || !cancelled {
+		t.Errorf("a finder past its grace must be cancelled and contribute nothing; got %+v cancelled=%v", r, cancelled)
+	}
+	sf = &rcSecondFinder{ch: make(chan rcFinderResult, 1), cancel: func() {}, model: "fast"}
+	sf.ch <- rcFinderResult{Model: "fast", Issues: []string{"a.go:1 — x"}, Raw: "r"}
+	if r := rcAwaitSecondFinder(sf); len(r.Issues) != 1 {
+		t.Errorf("a finished finder's issues were lost: %+v", r)
 	}
 }

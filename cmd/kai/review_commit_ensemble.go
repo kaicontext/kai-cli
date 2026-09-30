@@ -34,8 +34,10 @@ import (
 // its environment variable; "off" turns the stage off.
 var rcEnsembleDefaults = map[string]struct{ modelEnv, model, effortEnv, effort string }{
 	// Another model family from the main finder, so the two miss different
-	// things. Low effort: it runs a full agent loop.
-	rcStageFinder2: {"KAI_FINDER2_MODEL", "openai/gpt-5.5", "KAI_FINDER2_EFFORT", "low"},
+	// things. Low effort: it runs a full agent loop. Tried first: GPT-5.5
+	// (about $2 a review with the fact-check), Kimi K2.6 (a minute a turn),
+	// Gemini 3.5 Flash (two tool calls, no issues).
+	rcStageFinder2: {"KAI_FINDER2_MODEL", "openai/gpt-5.6-sol", "KAI_FINDER2_EFFORT", "low"},
 	// The second sweep reads the same hunks with a different model.
 	rcStageSweep2: {"KAI_SWEEP2_MODEL", "z-ai/glm-5.2", "KAI_SWEEP2_EFFORT", ""},
 	// One call per review, so the strongest judgement available.
@@ -71,6 +73,18 @@ func rcEnsembleEffort(stage string) string {
 	return e
 }
 
+// rcSecondFinderGrace is how long the review waits for the second finder
+// once the main finder is done. The second finder is extra coverage, not the
+// review: a slow model must not hold every review to its hard deadline.
+var rcSecondFinderGrace = 5 * time.Minute
+
+// rcSecondFinder is a running second finder.
+type rcSecondFinder struct {
+	ch     chan rcFinderResult
+	cancel context.CancelFunc
+	model  string
+}
+
 // rcFinderResult is what the second finder hands back.
 type rcFinderResult struct {
 	Model   string
@@ -85,11 +99,12 @@ type rcFinderResult struct {
 // (so it cannot contend with the first agent's) and gets no coverage gate; if
 // it ends without a coda, one is written from its transcript. A nil channel
 // means the stage is off or would duplicate the main finder.
-func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options, prov provider.Provider) <-chan rcFinderResult {
+func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options, prov provider.Provider) *rcSecondFinder {
 	model := rcEnsembleModel(rcStageFinder2)
 	if model == "" || model == opts.Model {
 		return nil
 	}
+	runCtx, cancel := context.WithCancel(runCtx)
 	second := opts
 	second.Model = model
 	second.ReasoningEffort = rcStageEffort(rcStageFinder2)
@@ -104,7 +119,8 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 		effort = "off"
 	}
 	fmt.Fprintf(os.Stderr, "  second finder: %s (effort %s)\n", model, effort)
-	ch := make(chan rcFinderResult, 1)
+	sf := &rcSecondFinder{ch: make(chan rcFinderResult, 1), cancel: cancel, model: model}
+	ch := sf.ch
 	go func() {
 		started := time.Now()
 		out := rcFinderResult{Model: model}
@@ -126,16 +142,25 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 		out.Elapsed = time.Since(started)
 		ch <- out
 	}()
-	return ch
+	return sf
 }
 
-// rcAwaitSecondFinder waits for the second finder, which is bounded by the
-// review's own deadline. A nil channel yields nothing.
-func rcAwaitSecondFinder(ch <-chan rcFinderResult) rcFinderResult {
-	if ch == nil {
+// rcAwaitSecondFinder waits for the second finder, at most
+// rcSecondFinderGrace past the main finder; a finder still running then is
+// cancelled and the review goes on without it. Nil yields nothing.
+func rcAwaitSecondFinder(sf *rcSecondFinder) rcFinderResult {
+	if sf == nil {
 		return rcFinderResult{}
 	}
-	r := <-ch
+	var r rcFinderResult
+	select {
+	case r = <-sf.ch:
+	case <-time.After(rcSecondFinderGrace):
+		sf.cancel()
+		fmt.Fprintf(os.Stderr, "  second finder (%s) still running %s after the main finder — continuing without it\n", sf.model, rcSecondFinderGrace)
+		return rcFinderResult{Model: sf.model}
+	}
+	sf.cancel()
 	switch {
 	case r.Err != nil:
 		fmt.Fprintf(os.Stderr, "  second finder (%s) failed after %s: %v\n", r.Model, r.Elapsed.Round(time.Second), r.Err)
