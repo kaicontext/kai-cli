@@ -137,3 +137,12 @@ func TestRunFailureSentenceIsTheOneTheServerReads(t *testing.T) {
 		t.Errorf("rcProseRunFailed changed to %q; update cliProseRunFailed in kai-server review_outcome.go", rcProseRunFailed)
 	}
 }
+
+// agent.Run returns (nil, err) when it fails before its first turn; reporting
+// that must not panic, or the run emits nothing at all.
+func TestRunFailureWithNoResult(t *testing.T) {
+	inc := rcRunFailure("m", nil, errors.New("agent: Provider required"), time.Second, "")
+	if inc == nil || inc.RunCategory != "other" || inc.Turns != 0 {
+		t.Errorf("rcRunFailure(nil res) = %+v", inc)
+	}
+}

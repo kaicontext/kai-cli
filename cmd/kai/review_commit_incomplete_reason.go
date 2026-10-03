@@ -6,7 +6,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/provider"
 )
 
@@ -117,4 +119,22 @@ func rcFailureCategory(err error) string {
 		return "no_answer"
 	}
 	return "other"
+}
+
+// rcRunFailure is the account of a review run that failed outright. res may be
+// nil: agent.Run returns (nil, err) when it fails before its first turn, and a
+// panic here would emit nothing, the very failure this exists to prevent.
+func rcRunFailure(model string, res *agent.Result, err error, elapsed time.Duration, root string) *rcIncomplete {
+	inc := &rcIncomplete{
+		Model:       model,
+		Elapsed:     elapsed,
+		RunFailure:  err.Error(),
+		RunCategory: rcFailureCategory(err),
+	}
+	if res != nil {
+		inc.FinishReason = string(res.FinishReason)
+		inc.Turns = rcTurns(res.Transcript)
+		inc.FilesRead = rcFilesRead(res.Transcript, root)
+	}
+	return inc
 }

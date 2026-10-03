@@ -923,15 +923,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// this line in the job log. Report it the way a failed fact-check is
 		// reported instead, so the bundle says which kind of failure it was.
 		fmt.Fprintf(os.Stderr, "  review run failed: %v\n", err)
-		return "", &rcIncomplete{
-			Model:        model,
-			FinishReason: string(res.FinishReason),
-			Elapsed:      time.Since(started),
-			Turns:        rcTurns(res.Transcript),
-			FilesRead:    rcFilesRead(res.Transcript, primary.Path),
-			RunFailure:   err.Error(),
-			RunCategory:  rcFailureCategory(err),
-		}, nil
+		return "", rcRunFailure(model, res, err, time.Since(started), primary.Path), nil
 	}
 	fmt.Fprintln(os.Stderr)
 
