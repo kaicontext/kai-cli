@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The provider carries an HTTP status only in its error text, in the shapes
@@ -102,5 +103,46 @@ func TestIncompleteReasonCarriesNoErrorText(t *testing.T) {
 	}
 	if strings.Contains(string(out), "SECRET-BODY") {
 		t.Errorf("incompleteReason leaks the error text: %s", out)
+	}
+}
+
+// A review whose run failed outright used to emit nothing, so the job log was
+// the only record of why. It now writes an incomplete bundle that says the
+// review stage stopped and on what kind of failure.
+func TestRunFailureWritesAnIncompleteReview(t *testing.T) {
+	inc := &rcIncomplete{
+		Model:       "z-ai/glm-5.2",
+		Elapsed:     95 * time.Second,
+		RunFailure:  "openrouter provider: 503: SECRET-BODY",
+		RunCategory: rcFailureCategory(errors.New("openrouter provider: 503: SECRET-BODY")),
+	}
+	prose := rcIncompleteProse(inc)
+	if !strings.Contains(prose, rcProseRunFailed) || !strings.Contains(prose, "1m35s") {
+		t.Errorf("run-failure prose = %q", prose)
+	}
+	if strings.Contains(prose, "SECRET-BODY") {
+		t.Errorf("run-failure prose leaks the error text: %q", prose)
+	}
+	r := rcIncompleteReasonOf(inc)
+	want := rcIncompleteReason{Stage: "review", Category: "upstream_5xx", Model: "z-ai/glm-5.2"}
+	if r == nil || *r != want {
+		t.Errorf("reason = %+v, want %+v", r, want)
+	}
+}
+
+// kai-server classes a bundle by this sentence when it cannot read the
+// structured reason, so it must not change without the server's copy.
+func TestRunFailureSentenceIsTheOneTheServerReads(t *testing.T) {
+	if rcProseRunFailed != "The review could not get an answer from the model" {
+		t.Errorf("rcProseRunFailed changed to %q; update cliProseRunFailed in kai-server review_outcome.go", rcProseRunFailed)
+	}
+}
+
+// agent.Run returns (nil, err) when it fails before its first turn; reporting
+// that must not panic, or the run emits nothing at all.
+func TestRunFailureWithNoResult(t *testing.T) {
+	inc := rcRunFailure("m", nil, errors.New("agent: Provider required"), time.Second, "")
+	if inc == nil || inc.RunCategory != "other" || inc.Turns != 0 {
+		t.Errorf("rcRunFailure(nil res) = %+v", inc)
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/provider"
 )
 
@@ -36,6 +38,11 @@ type rcIncompleteReason struct {
 	FinishReason string `json:"finishReason,omitempty"`
 }
 
+// rcProseRunFailed is the sentence an outright run failure writes. kai-server
+// reads it (cliProseRunFailed) to class a bundle from a kai-cli whose reason it
+// does not parse, so it is named once and a test holds it.
+const rcProseRunFailed = "The review could not get an answer from the model"
+
 const (
 	rcStageNameChallenge  = "challenge"
 	rcStageNameConclusion = "conclusion"
@@ -50,6 +57,8 @@ func rcIncompleteReasonOf(inc *rcIncomplete) *rcIncompleteReason {
 	}
 	r := &rcIncompleteReason{FinishReason: inc.FinishReason}
 	switch {
+	case inc.RunFailure != "":
+		r.Stage, r.Category, r.Model = rcStageNameReview, inc.RunCategory, inc.Model
 	case inc.ChallengeFailure != "":
 		r.Stage, r.Category, r.Model = rcStageNameChallenge, inc.ChallengeCategory, inc.ChallengeModel
 	case inc.ConclusionCategory != "":
@@ -110,4 +119,22 @@ func rcFailureCategory(err error) string {
 		return "no_answer"
 	}
 	return "other"
+}
+
+// rcRunFailure is the account of a review run that failed outright. res may be
+// nil: agent.Run returns (nil, err) when it fails before its first turn, and a
+// panic here would emit nothing, the very failure this exists to prevent.
+func rcRunFailure(model string, res *agent.Result, err error, elapsed time.Duration, root string) *rcIncomplete {
+	inc := &rcIncomplete{
+		Model:       model,
+		Elapsed:     elapsed,
+		RunFailure:  err.Error(),
+		RunCategory: rcFailureCategory(err),
+	}
+	if res != nil {
+		inc.FinishReason = string(res.FinishReason)
+		inc.Turns = rcTurns(res.Transcript)
+		inc.FilesRead = rcFilesRead(res.Transcript, root)
+	}
+	return inc
 }

@@ -917,7 +917,13 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	started := time.Now()
 	res, err := agent.Run(ctx, opts)
 	if err != nil {
-		return "", nil, fmt.Errorf("review run: %w", err)
+		// The run itself failed — in practice the model provider failing
+		// every retry. Returning the error emitted NO bundle: the job exited
+		// with "produced no finding at all", and the only record of why was
+		// this line in the job log. Report it the way a failed fact-check is
+		// reported instead, so the bundle says which kind of failure it was.
+		fmt.Fprintf(os.Stderr, "  review run failed: %v\n", err)
+		return "", rcRunFailure(model, res, err, time.Since(started), primary.Path), nil
 	}
 	fmt.Fprintln(os.Stderr)
 
@@ -1416,9 +1422,13 @@ type rcIncomplete struct {
 	ChallengeModel     string
 	ConclusionCategory string
 	ConclusionModel    string
-	Elapsed            time.Duration
-	Turns              int
-	FilesRead          []string
+	// RunFailure is the review agent's own error when the run failed
+	// outright; RunCategory is rcFailureCategory's label for it.
+	RunFailure  string
+	RunCategory string
+	Elapsed     time.Duration
+	Turns       int
+	FilesRead   []string
 	// Challenge is the gate's structured record when it PUBLISHED a review.
 	// Unlike ChallengeFailure, the review body is real and kept; items it
 	// could not settle are listed in it under "Could not verify".
@@ -1540,6 +1550,10 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 	if inc.ChallengeFailure != "" {
 		return "**This review did not finish.** The draft's defect claims could not be checked before publication. " +
 			"The unchecked draft has been withheld; this is not an approval or a verdict on the change. Re-run the review."
+	}
+	if inc.RunFailure != "" {
+		return "**This review did not finish.** " + rcProseRunFailed + " after " + inc.Elapsed.Round(time.Second).String() +
+			", so nothing here is a verdict on the change. Re-run the review."
 	}
 	reason := "the run ended without writing its review down"
 	if inc.FinishReason == string(message.FinishReasonTimeBudget) {
