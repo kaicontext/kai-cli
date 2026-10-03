@@ -184,7 +184,7 @@ func TestReviewConclusionPreservesFullToolResults(t *testing.T) {
 		}
 		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestReview()}}}, nil
 	}}
-	if got := rcConcludeFromTranscript(context.Background(), p, "test", tr); got == "" {
+	if got, _ := rcConcludeFromTranscript(context.Background(), p, "test", tr); got == "" {
 		t.Fatal("missing conclusion")
 	}
 	if tr[0].Parts[0].(message.ToolResult).Content != file {
@@ -202,7 +202,7 @@ func TestReviewConclusionFailureDoesNotRetryWithMissingEvidence(t *testing.T) {
 		calls++
 		return provider.Response{}, errors.New("too much context")
 	}}
-	if got := rcConcludeFromTranscript(context.Background(), p, "test", tr); got != "" || calls != 1 {
+	if got, _ := rcConcludeFromTranscript(context.Background(), p, "test", tr); got != "" || calls != 1 {
 		t.Fatalf("retried on a partial transcript: calls=%d, output=%s", calls, got)
 	}
 }

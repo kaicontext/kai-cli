@@ -579,6 +579,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// shallow finding from the grounded one that supersedes it — without
 		// it, a 60-second skim renders in the inbox identically to a
 		// nine-minute callers-checked review, which is worse than being slow.
+		var reason *rcIncompleteReason
+		if incomplete {
+			reason = rcIncompleteReasonOf(inc)
+		}
 		depth := "grounded"
 		if fast {
 			depth = "fast"
@@ -600,7 +604,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// allegation's and decision's final status, reason and citations.
 			// Additive and optional; readers that do not know it ignore it.
 			Challenge *rcChallengeResult `json:"challenge,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge}, "", "  ")
+			// IncompleteReason says, in fixed labels, why an incomplete
+			// review stopped, so the server need not infer it from Review.
+			IncompleteReason *rcIncompleteReason `json:"incompleteReason,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -918,6 +925,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// down. When the write-down is missing these are the whole report the PR
 	// gets, so they are collected unconditionally and cost nothing.
 	inc := &rcIncomplete{
+		Model:        model,
 		FinishReason: string(res.FinishReason),
 		Elapsed:      time.Since(started),
 		Turns:        rcTurns(res.Transcript),
@@ -1034,8 +1042,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// was there for, without covering the one it should not.
 	if rcNeedsConclusion(raw) {
 		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", inc.FinishReason)
-		if concluded := rcConcludeFromTranscript(publicationCtx, prov, model, transcript); concluded != "" {
+		concluded, category := rcConcludeFromTranscript(publicationCtx, prov, model, transcript)
+		if concluded != "" {
 			raw = rcRestoreCodaMarker(concluded)
+		} else {
+			inc.ConclusionCategory, inc.ConclusionModel = category, rcStageModel(rcStageConclusion, model)
 		}
 	}
 	if rcUsableCoda(raw) {
@@ -1060,6 +1071,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  review challenge incomplete: %v\n", err)
 			inc.ChallengeFailure = err.Error()
+			inc.ChallengeCategory, inc.ChallengeModel = rcFailureCategory(err), gateModel
 			return "", inc, nil
 		}
 		raw = res.Review
@@ -1396,9 +1408,17 @@ func rcTurns(transcript []message.Message) int {
 type rcIncomplete struct {
 	ChallengeFailure string
 	FinishReason     string
-	Elapsed          time.Duration
-	Turns            int
-	FilesRead        []string
+	// Model is the review agent's model. The categories and the stage models
+	// below are fixed labels and model ids, never error text: they ride in the
+	// bundle (rcIncompleteReasonOf), which the server stores and logs.
+	Model              string
+	ChallengeCategory  string
+	ChallengeModel     string
+	ConclusionCategory string
+	ConclusionModel    string
+	Elapsed            time.Duration
+	Turns              int
+	FilesRead          []string
 	// Challenge is the gate's structured record when it PUBLISHED a review.
 	// Unlike ChallengeFailure, the review body is real and kept; items it
 	// could not settle are listed in it under "Could not verify".
@@ -1548,10 +1568,11 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 
 // rcConcludeFromTranscript makes one non-tool completion over the review
 // run's message history, demanding the final write-up. Best-effort: any
-// failure returns "" and the caller keeps whatever the run produced.
-func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) string {
+// failure returns "" and the caller keeps whatever the run produced. The
+// second result is rcFailureCategory's label for why it returned "".
+func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
 	if len(transcript) == 0 {
-		return ""
+		return "", "no_transcript"
 	}
 	model = rcStageModel(rcStageConclusion, model)
 	// Preserve the actual evidence. Prefix trimming can remove the changed
@@ -1561,7 +1582,7 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 	encoded, err := json.Marshal(transcript)
 	if err != nil || len(encoded) > rcEvidenceLimit {
 		fmt.Fprintln(os.Stderr, "  conclusion evidence is too large; refusing to discard source material")
-		return ""
+		return "", "evidence_too_large"
 	}
 	msgs := append(append([]message.Message(nil), transcript...), message.Message{
 		Role: message.RoleUser,
@@ -1588,7 +1609,7 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 	resp, err := send(msgs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  conclusion call failed: %v\n", err)
-		return ""
+		return "", rcFailureCategory(err)
 	}
 	var out strings.Builder
 	for _, p := range resp.Parts {
@@ -1596,7 +1617,10 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 			out.WriteString(t.Text)
 		}
 	}
-	return strings.TrimSpace(out.String())
+	if text := strings.TrimSpace(out.String()); text != "" {
+		return text, ""
+	}
+	return "", "empty"
 }
 
 // rcChangedSymbols extracts top-level declarations the diff ADDS or touches,
