@@ -36,6 +36,11 @@ type rcIncompleteReason struct {
 	FinishReason string `json:"finishReason,omitempty"`
 }
 
+// rcProseRunFailed is the sentence an outright run failure writes. kai-server
+// reads it (cliProseRunFailed) to class a bundle from a kai-cli whose reason it
+// does not parse, so it is named once and a test holds it.
+const rcProseRunFailed = "The review could not get an answer from the model"
+
 const (
 	rcStageNameChallenge  = "challenge"
 	rcStageNameConclusion = "conclusion"
@@ -50,6 +55,8 @@ func rcIncompleteReasonOf(inc *rcIncomplete) *rcIncompleteReason {
 	}
 	r := &rcIncompleteReason{FinishReason: inc.FinishReason}
 	switch {
+	case inc.RunFailure != "":
+		r.Stage, r.Category, r.Model = rcStageNameReview, inc.RunCategory, inc.Model
 	case inc.ChallengeFailure != "":
 		r.Stage, r.Category, r.Model = rcStageNameChallenge, inc.ChallengeCategory, inc.ChallengeModel
 	case inc.ConclusionCategory != "":
