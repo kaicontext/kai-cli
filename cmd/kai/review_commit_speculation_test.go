@@ -156,9 +156,9 @@ func TestDraftWithARealIssueStillGoesToTheGate(t *testing.T) {
 // not in view).
 func TestGateAndFastPassRefuteFutureTriggers(t *testing.T) {
 	for _, want := range []string{
-		"REFUTE one whose failure needs a future change", "trigger is hypothetical", "supported only when a source establishes",
-		"two concurrent calls to a handler that requests, a scheduler or a queue can invoke ARE a reachable trigger",
-		"refute it only when a source shows something that serializes them",
+		"Refute an allegation whose failure needs a future change", "trigger is hypothetical", "supported only when a source establishes",
+		"two concurrent calls to a handler that requests, a scheduler or a queue can invoke are a reachable trigger",
+		"Refute it only when a source shows something that serializes them",
 	} {
 		if !strings.Contains(rcChallengeSystemHead, want) {
 			t.Errorf("challenge prompt is missing %q", want)

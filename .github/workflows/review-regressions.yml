@@ -34,9 +34,15 @@ on:
       pin_pr:
         description: 'kai-server PR number to post the before/after on (PIN mode)'
         default: ''
+      record:
+        description: 'Append this run to the nightly dashboard (off for an ad-hoc comparison of two refs)'
+        type: boolean
+        default: true
 
 concurrency:
-  group: review-regressions-${{ inputs.pin_pr || 'nightly' }}
+  # An ad-hoc comparison (record off) runs on its own, so several can go at
+  # once; nightly and pin runs keep the shared group.
+  group: review-regressions-${{ inputs.pin_pr || (github.event_name == 'workflow_dispatch' && inputs.record == false && github.run_id) || 'nightly' }}
   cancel-in-progress: false
 
 permissions:
@@ -131,6 +137,7 @@ jobs:
 
       - name: Report
         id: report
+        if: ${{ inputs.record != false }}
         env:
           GH_TOKEN: ${{ github.token }}
           PIN_PR: ${{ inputs.pin_pr }}
@@ -182,6 +189,24 @@ jobs:
           if [ -s "$RUNNER_TEMP/alert.txt" ]; then
             gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/comment.md"
           fi
+
+      - name: Report (ad-hoc comparison, not recorded)
+        if: ${{ inputs.record == false }}
+        env:
+          KAI_REF: ${{ inputs.kai_ref || 'main' }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          SHA: ${{ steps.build.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          run_dir() { ls -d "$1"/runs/* 2>/dev/null | tail -1; }
+          args=(--run "$(run_dir "$RUNNER_TEMP/rr")" --cases "$REGRESSION_CASES" --ref "$KAI_REF" --sha "$SHA"
+                --run-url "$RUN_URL" --out-comment "$RUNNER_TEMP/comment.md")
+          if [ -n "$BASELINE_REF" ]; then
+            args+=(--baseline-run "$(run_dir "$RUNNER_TEMP/rr-base")" --baseline-ref "$BASELINE_REF")
+          fi
+          python3 scripts/review_regressions_report.py "${args[@]}"
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Mint App token for kai-server
         if: ${{ inputs.pin_pr != '' }}

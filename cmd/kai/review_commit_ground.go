@@ -462,3 +462,58 @@ func rcNewHostsBlock(hosts []rcAddedURLHost) string {
 	b.WriteString("A host being new to the repository is not a defect. Report one only with a concrete incorrect URL or a code path that fails because of it (see NEW DEFAULTS POINT SOMEWHERE).\n\n")
 	return b.String()
 }
+
+// rcNamedLocationRe matches an issue that names a symbol where its line
+// belongs: "path/file.go:funcName — …" (a reviewer's habit, not the format).
+var rcNamedLocationRe = regexp.MustCompile(`^(\s*` + "`?" + `)([A-Za-z0-9_./\-]+\.[A-Za-z0-9]+):([A-Za-z_][A-Za-z0-9_.]*)` + "`?")
+
+// rcLocateNamedIssue rewrites "path:symbol" at the start of an issue to
+// "path:line", the line where the symbol is defined in the reviewed commit
+// (else where it first appears). An issue that already names a line, or whose
+// symbol cannot be found, is returned unchanged and grounds as before. Without
+// this a real defect written against a function name is held: published as
+// text, but anchored nowhere and not counted.
+func rcLocateNamedIssue(hash, item string, tree []string, readFile func(hash, path string) ([]string, bool)) string {
+	if _, _, ok := rcIssueLocation(item); ok {
+		return item
+	}
+	m := rcNamedLocationRe.FindStringSubmatchIndex(item)
+	if m == nil {
+		return item
+	}
+	written, symbol := item[m[4]:m[5]], item[m[6]:m[7]]
+	path, _ := rcResolvePath(written, tree)
+	if path == "" {
+		return item
+	}
+	lines, ok := readFile(hash, path)
+	if !ok {
+		return item
+	}
+	name := symbol
+	if i := strings.LastIndex(name, "."); i >= 0 && i+1 < len(name) {
+		name = name[i+1:]
+	}
+	word := regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_]|$)`)
+	def := regexp.MustCompile(`\b(func|def|class|function|fn|interface|type|struct|enum|const|let|var|val|module|object|trait)\b`)
+	line := 0
+	for i, l := range lines {
+		if word.MatchString(l) && def.MatchString(l) {
+			line = i + 1
+			break
+		}
+	}
+	if line == 0 {
+		for i, l := range lines {
+			if word.MatchString(l) {
+				line = i + 1
+				break
+			}
+		}
+	}
+	if line == 0 {
+		return item
+	}
+	// Keep a closing backtick the match consumed.
+	return item[:m[0]] + item[m[2]:m[3]] + fmt.Sprintf("%s:%d", written, line) + item[m[7]:m[1]] + item[m[1]:]
+}

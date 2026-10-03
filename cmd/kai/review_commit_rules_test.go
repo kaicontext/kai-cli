@@ -5,84 +5,40 @@ import (
 	"testing"
 )
 
-// The reviewer prompt is the only place these rules live, and each block
-// in it was bought with a real incident. A rule that gets dropped in an
-// edit fails silently — the reviewer simply stops looking, and nothing
-// says so. Pin the ones added after the 2026-09-03 review, by the
-// behaviour they demand rather than by exact wording, so rephrasing is
-// free and deletion is not.
+// The rules a review applies live in the review skill (reviewskill/), and a
+// rule dropped in an edit fails silently: the reviewer simply stops looking.
+// Pin each one by the behaviour it demands, so rewording is free and deletion
+// is not.
 func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 	rules := []struct {
 		name  string
 		needs []string
 	}{
-		{
-			// A fix whose test also passes on the old code proves nothing.
-			name:  "a test must fail without the fix",
-			needs: []string{"FAILS with the fix removed", "unverified"},
-		},
-		{
-			// Asserting a mechanism was configured is not asserting the
-			// behaviour it was meant to buy.
-			name:  "mechanism configured is not behaviour verified",
-			needs: []string{"MECHANISM was configured", "BEHAVIOUR"},
-		},
-		{
-			// A test that skips on the machine that runs it runs nowhere.
-			name:  "a skipped test is not a passing test",
-			needs: []string{"SKIPS for an environmental reason"},
-		},
-		{
-			// A defect's trigger must exist today (benchmark 2026-09-24:
-			// Cal.com #14943 "dormant today…", #11059 "future footgun").
-			name:  "a defect needs a trigger that exists today",
-			needs: []string{"A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY", "reachable trigger", "failure mechanism", "cannot bind an array parameter", "never goes in ISSUES"},
-		},
-		{
-			// Missing tests, intent and consistency points took over the
-			// defect list on the 2026-09-24 benchmark; the 2026-09-27 rerun
-			// then showed the opposite failure — one theme per PR and every
-			// concrete test, doc and typo defect unreported — so the rule
-			// separates generic advice from concrete defects.
-			name:  "generic advice is not a defect, and every concrete defect is reported",
-			needs: []string{"GENERIC ADVICE IS NOT A DEFECT", "REPORT EVERY DEFECT, NOT ONLY THE HEADLINE ONE", "test files and docs included", "specific missing requirement", "concrete regression risk", "the test never asserts the admin path", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
-		},
-		{
-			// Contract mismatches missed in files the review had opened.
-			name:  "trace what crosses a call",
-			needs: []string{"TRACE WHAT CROSSES A CALL", "kind of value", "shape of what comes back", "freshness", "a price in cents passed where dollars are expected", "name both ends"},
-		},
-		{
-			// Read-check-write races the reviewer passed over.
-			name:  "two requests at once",
-			needs: []string{"TWO REQUESTS AT ONCE", "run it twice at the same time", "loses one of two withdrawals", "atomic update", "Name the two requests and the interleaving"},
-		},
-		{
-			name:  "environment assumptions get named",
-			needs: []string{"THE ENVIRONMENT IS NOT CLEAN", "failure mode is the finding"},
-		},
-		{
-			name:  "config read from the wrong place",
-			needs: []string{"CONFIG READ FROM THE WRONG PLACE", "gitconfig"},
-		},
-		{
-			name:  "a deadline alone does not bound an exec",
-			needs: []string{"SUBPROCESSES THAT NEVER RETURN", "WaitDelay"},
-		},
-		{
-			name:  "hot-path cost",
-			needs: []string{"COST ON A HOT PATH"},
-		},
-		{
-			name:  "an optimisation must not be fatal",
-			needs: []string{"A NICETY THAT CAN BE FATAL"},
-		},
-		{
-			name:  "unrequested writes get named",
-			needs: []string{"WRITES NOBODY ASKED FOR", "opt-out"},
-		},
+		{name: "a test must fail without the fix", needs: []string{"fails with the fix removed", "the fix is unverified"}},
+		{name: "mechanism configured is not behaviour verified", needs: []string{"asserts the mechanism was configured instead of the behaviour"}},
+		{name: "a skipped test is not a passing test", needs: []string{"skips for an environmental reason"}},
+		{name: "a defect needs a trigger that exists today", needs: []string{"# What counts as a defect", "**trigger**", "**failure mechanism**", "needs someone to change code first is not a defect", "cannot bind an array parameter", "never as an issue"}},
+		{name: "wrong as written counts", needs: []string{"Wrong as written counts, even without a current caller"}},
+		{name: "concurrency is reachable by default", needs: []string{"Concurrency is reachable by default"}},
+		{name: "the change owns what it touches", needs: []string{"\"Pre-existing\" means code whose lines and enclosing function the change does not touch"}},
+		{name: "generic advice is not a defect", needs: []string{"## What is not a defect", "Generic advice", "a specific requirement this change must meet that nothing verifies", "a concrete regression", "adds nothing that would fail without the fix", "that one stays a finding"}},
+		{name: "every concrete defect is reported", needs: []string{"Keep going after the first finding", "tests and docs included", "A defect you saw and left out is lost"}},
+		{name: "one cause, one issue", needs: []string{"## One cause, one issue", "(also: path:line, path:line)"}},
+		{name: "decisions, and money has a direction", needs: []string{"## Decisions", "who is debited and who is credited", "never lowers the verdict"}},
+		{name: "trace what crosses a call", needs: []string{"## 1. Contracts across a call", "Kind of value", "Shape", "Freshness", "a price in cents passed where dollars are expected", "Name both ends"}},
+		{name: "two requests at once", needs: []string{"## 2. Shared state and concurrency", "run it twice at the same time", "loses one of two withdrawals", "an atomic update", "Name the two requests and the interleaving"}},
+		{name: "sibling paths share guards", needs: []string{"Sibling paths share guards"}},
+		{name: "secrets compare in constant time", needs: []string{"constant-time comparison"}},
+		{name: "environment assumptions get named", needs: []string{"## 5. Resources and the environment", "The finding is the failure mode"}},
+		{name: "config read from the wrong place", needs: []string{"Configuration read from the wrong place", "gitconfig"}},
+		{name: "a deadline alone does not bound an exec", needs: []string{"Subprocesses that never return", "WaitDelay"}},
+		{name: "hot-path cost", needs: []string{"Cost on a hot path"}},
+		{name: "an optimisation must not be fatal", needs: []string{"An optional step that can abort the whole operation"}},
+		{name: "unrequested writes get named", needs: []string{"Writes nobody asked for", "opt-out"}},
+		{name: "an all-clear needs a boundary", needs: []string{"within this repository, the only caller is X"}},
+		{name: "external facts get checked", needs: []string{"Repeating the author's premise back in your own voice is not review"}},
+		{name: "graph tools are used", needs: []string{"kai_callers", "kai_dependents", "kai_context", "kai_web_search"}},
 	}
-
 	for _, r := range rules {
 		for _, need := range r.needs {
 			if !strings.Contains(rcReviewSystem, need) {
@@ -92,12 +48,23 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 	}
 }
 
-// Each rule cites the incident that produced it, which is what stops a
-// later reader deleting it as boilerplate. Keep the citations.
-func TestReviewSystemPrompt_RulesCiteTheirIncident(t *testing.T) {
-	for _, cite := range []string{"kai-engine, 2026-09-03", "kai-cli, 2026-09-03", "v0.6.46", "v0.6.47"} {
-		if !strings.Contains(rcReviewSystem, cite) {
-			t.Errorf("a rule lost the incident that bought it: %q", cite)
+// A rule lands better with an example than with a warning: the categories
+// where judgement is hardest each show a finding next to something that is
+// not one.
+func TestReviewCatalogShowsFindingsNextToNonFindings(t *testing.T) {
+	catalog := rcSkillFile("catalog.md")
+	for _, section := range []string{"## 1. Contracts across a call", "## 2. Shared state and concurrency", "## 3. Errors and absent values", "## 4. Inputs, security and access", "## 6. Tests"} {
+		i := strings.Index(catalog, section)
+		if i < 0 {
+			t.Errorf("catalog lost %q", section)
+			continue
+		}
+		rest := catalog[i+len(section):]
+		if k := strings.Index(rest, "\n## "); k >= 0 {
+			rest = rest[:k]
+		}
+		if !strings.Contains(rest, "> Finding:") || !strings.Contains(rest, "> Not a finding:") {
+			t.Errorf("%s has no finding / not-a-finding example", section)
 		}
 	}
 }
