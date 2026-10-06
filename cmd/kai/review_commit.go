@@ -2015,6 +2015,7 @@ func rcCommitDiffStat(base, ref string) (added, removed int, files []finding.Dif
 	// Code tab renders real added/removed lines, not just counts. numstat alone
 	// gave us Added/Removed but left DiffFile.Patch empty (blank Code tab).
 	patches := rcCommitPatches(base, ref)
+	patchBytes := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
@@ -2025,9 +2026,50 @@ func rcCommitDiffStat(base, ref string) (added, removed int, files []finding.Dif
 		added += a
 		removed += r
 		path := fields[2]
-		files = append(files, finding.DiffFile{Path: path, Action: "modified", Added: a, Removed: r, Patch: patches[path]})
+		patch := rcBudgetPatch(patches[path], rcPatchTotalBudget-patchBytes)
+		patchBytes += len(patch)
+		files = append(files, finding.DiffFile{Path: path, Action: "modified", Added: a, Removed: r, Patch: patch})
 	}
 	return added, removed, files
+}
+
+// The bundle's per-file patches feed one thing, the finding page's Code tab,
+// and they are most of the bundle on a large change: FalkorDB#3172 (691 new
+// Lean files, +139,644 lines) wrote 7.4 MB of patches into a 7.7 MB bundle,
+// the control plane refused it past its body limit, and the finished review
+// was lost. Each patch is held to rcPatchFileBudget and the bundle's to
+// rcPatchTotalBudget; kai-server applies the same budget on ingest
+// (finding_patch_budget.go) and the two are kept equal.
+const (
+	rcPatchFileBudget  = 64 << 10
+	rcPatchTotalBudget = 1 << 20
+	// The notes start with "\" so the Code tab renders them as diff meta
+	// lines, like "\ No newline at end of file".
+	rcPatchCutNote     = "\\ Patch cut here by Kai: the rest of this file's change is in the pull request."
+	rcPatchOmittedNote = "\\ Patch not kept by Kai: this change is too large to store every file's diff."
+)
+
+// rcBudgetPatch is one file's patch within its own budget and what remains of
+// the bundle's: whole if it fits, else cut at the last line boundary that does
+// and ended with a note, or only the note when there is no room.
+func rcBudgetPatch(patch string, remaining int) string {
+	limit := rcPatchFileBudget
+	if remaining < limit {
+		limit = remaining
+	}
+	if len(patch) <= limit {
+		return patch
+	}
+	room := limit - len(rcPatchCutNote) - 1
+	if room <= 0 {
+		return rcPatchOmittedNote
+	}
+	head := patch[:room]
+	nl := strings.LastIndexByte(head, '\n')
+	if nl <= 0 {
+		return rcPatchOmittedNote
+	}
+	return head[:nl+1] + rcPatchCutNote
 }
 
 // rcCommitPatches returns the unified-diff hunks for each changed file over the
