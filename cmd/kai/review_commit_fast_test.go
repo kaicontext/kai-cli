@@ -184,9 +184,9 @@ func TestFastBudgetOverride(t *testing.T) {
 // like a grounded one is worse than no pass at all.
 func TestFastPromptForbidsClearingAChange(t *testing.T) {
 	for _, want := range []string{
-		"NEVER GREEN-CHECK",
-		"CANNOT be 5",
-		"AT MOST THREE ISSUES",
+		"**Never green-check.**",
+		"it cannot be 5",
+		"**At most three issues, most confident first, none hedged.**",
 		rcReviewDataMarker,
 	} {
 		if !strings.Contains(rcFastReviewSystem, want) {

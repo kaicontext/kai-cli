@@ -313,7 +313,7 @@ diff --git a/packages/app-store/office365/api/add.ts b/packages/app-store/office
 // new hosts as risks on its behalf.
 func TestReviewPromptRequiresEvidenceForHosts(t *testing.T) {
 	for _, want := range []string{
-		"a host being new to the repository is NOT a defect by itself",
+		"a host being new to the repository is not a defect by itself",
 		"concrete incorrect URL",
 		"a code path that fails because of it",
 		"test fixture",

@@ -11,12 +11,12 @@ import (
 // or a string is supported like any other (the 2026-09-27 rerun missed every
 // one of those).
 func TestGateAndFastPassDoNotPublishTestAndIntentNoise(t *testing.T) {
-	for _, want := range []string{"REFUTE an allegation that is only generic advice", "describes as intended", "concrete regression (what breaks, for whom, on which input)", "SUPPORT concrete defects wherever they are, test and doc files included", "Small is not the same as wrong"} {
+	for _, want := range []string{"Refute an allegation that is only generic advice", "describes as intended", "concrete regression (what breaks, for whom, on which input)", "a concrete defect wherever it is, test and doc files included", "Small is not the same as wrong"} {
 		if !strings.Contains(rcChallengeSystemHead, want) {
 			t.Errorf("challenge prompt is missing %q", want)
 		}
 	}
-	for _, want := range []string{"presents as the proof of its fix", "A path without a test, a style or consistency point, or a change the author says is intended is not an issue"} {
+	for _, want := range []string{"presents as the proof of its fix", "## What is not a defect", "An intended behaviour change"} {
 		if !strings.Contains(rcFastReviewSystem, want) {
 			t.Errorf("fast-pass prompt is missing %q", want)
 		}
@@ -37,10 +37,10 @@ func TestGateAndFastPassDoNotPublishTestAndIntentNoise(t *testing.T) {
 }
 
 func TestFastPassChecksContractsVisibleInTheDiff(t *testing.T) {
-	// The rule and the four concrete mismatches the benchmark missed: a
-	// reword that keeps the sentence but drops the examples fails here.
-	for _, want := range []string{"a value whose producer and consumer are both in the diff and disagree",
-		"an id vs a name", "a credential id vs a user id", "a Response vs its body", "a stale token after a refresh"} {
+	// The fast pass checks the contracts the diff itself shows, with the
+	// shared catalog's kinds of mismatch.
+	for _, want := range []string{"a producer and consumer that are both in the diff and disagree on what a value is",
+		"## 1. Contracts across a call", "Kind of value", "Shape", "Freshness"} {
 		if !strings.Contains(rcFastReviewSystem, want) {
 			t.Errorf("fast-pass prompt is missing %q", want)
 		}
@@ -48,9 +48,8 @@ func TestFastPassChecksContractsVisibleInTheDiff(t *testing.T) {
 }
 
 func TestFastPassChecksReadCheckWriteRaces(t *testing.T) {
-	for _, want := range []string{"two concurrent requests would both pass",
-		"a counter set to the value read plus one instead of an atomic increment",
-		"a one-time code checked and then written back"} {
+	for _, want := range []string{"## 2. Shared state and concurrency", "run it twice at the same time",
+		"loses one of two withdrawals", "Name the two requests and the interleaving"} {
 		if !strings.Contains(rcFastReviewSystem, want) {
 			t.Errorf("fast-pass prompt is missing %q", want)
 		}
