@@ -340,3 +340,21 @@ func TestHostIsKnown(t *testing.T) {
 		}
 	}
 }
+
+// The reviewer is told that other branches are readable and how. FalkorDB
+// keeps its C reference on master while PRs target main; without this the
+// reviewer wrote "could not verify the C implementation" and repeated the
+// author's parity claim back as fact (FalkorDB #3113, 2026-10-04).
+func TestReviewPromptPointsAtOtherBranches(t *testing.T) {
+	for _, want := range []string{
+		"every branch of this repository is readable",
+		`kai_files and kai_view take a "ref"`,
+		"reference implementation the project's guidelines name",
+		"that is a premise, not a fact",
+		"open that implementation and compare the exact behaviour",
+	} {
+		if !strings.Contains(rcReviewSystem, want) {
+			t.Errorf("review prompt is missing %q", want)
+		}
+	}
+}
