@@ -118,7 +118,7 @@ func TestSweepRecordedBadPathsDoNotDiscardValidSiblings(t *testing.T) {
 			}
 			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: string(raw)}}, FinishReason: message.FinishReasonEndTurn}, nil
 		}}
-		result := rcRunSweepWith(context.Background(), p, "test", "off", "", "", paths, patches)
+		result := rcRunSweep(context.Background(), p, "test", "", paths, patches)
 		if calls != 2 || result.Failed != 1 || len(result.Issues) != 11 || len(result.Sources) != 1 || len(result.Runs[0].Attempts) != 2 {
 			t.Fatalf("partial sweep lost proposals, evidence, or diagnostics: %+v", result)
 		}
