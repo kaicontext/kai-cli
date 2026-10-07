@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kaicontext/kai-engine/provider"
 )
 
 // Provider retries have already been exhausted. Splitting a capacity failure
@@ -16,11 +18,16 @@ func rcCapacityFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-	if rcFailureCategory(err) == "rate_limited" {
+	if provider.IsCapExceeded(err) {
+		return false
+	}
+	if rcCapacityStatus.MatchString(err.Error()) {
 		return true
 	}
 	return strings.Contains(err.Error(), "in_flight_budget_exhausted") && strings.Contains(err.Error(), "402")
 }
+
+var rcCapacityStatus = regexp.MustCompile(`provider(?: \([a-z ]+\))?: 429:`)
 
 var rcRetryAfterBody = regexp.MustCompile(`(?i)Retry-After"\s*:\s*"?(\d+)`)
 
