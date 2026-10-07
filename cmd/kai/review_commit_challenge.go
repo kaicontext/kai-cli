@@ -59,7 +59,7 @@ Finish by calling submit_review with this shape (plain JSON is accepted if tool 
  "limitations":["what was NOT covered, and any caveat on the coverage"],
  "intent_match":"verified|partial|diverges",
  "merge_ready":1-5,
- "checks":[{"issue":"exact original ISSUES bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"concrete reasoning, including the counterexample considered","finding":"for a SUPPORTED verdict only: the published description of the defect","remedy":"the proposed fix for THIS allegation, if any","evidence":[{"source":1,"line_start":3,"line_end":5}]}],
+ "checks":[{"finding_id":"supplied finding ID","issue":"optional original claim","verdict":"supported|refuted|unverified","reason":"concrete reasoning, including the counterexample considered","finding":"for a SUPPORTED verdict only: the published description of the defect","remedy":"the proposed fix for THIS allegation, if any","evidence":[{"source":1,"line_start":3,"line_end":5}]}],
  "decisions":[{"decision":"exact original DECISIONS bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"why this is, or is not, a genuine choice the change already makes","evidence":[{"source":1,"line_start":3,"line_end":5}]}]}
 
 Do NOT write a revised review. There is no review, assessment or summary field, and none is wanted: the system assembles the published review, its summary, its counts and its ISSUES list from your per-item verdicts, so they cannot disagree with them. Scope and limitations describe COVERAGE only — what you did and did not examine. They are not a place to state, hint at, or paraphrase any allegation's outcome or fix.
@@ -138,12 +138,13 @@ type rcCheckEvidence struct {
 }
 
 type rcIssueCheck struct {
-	Issue    string            `json:"issue"`
-	Verdict  string            `json:"verdict"`
-	Reason   string            `json:"reason"`
-	Finding  string            `json:"finding"`
-	Remedy   string            `json:"remedy"`
-	Evidence []rcCheckEvidence `json:"evidence"`
+	FindingID string            `json:"finding_id,omitempty"`
+	Issue     string            `json:"issue"`
+	Verdict   string            `json:"verdict"`
+	Reason    string            `json:"reason"`
+	Finding   string            `json:"finding"`
+	Remedy    string            `json:"remedy"`
+	Evidence  []rcCheckEvidence `json:"evidence"`
 }
 
 // rcDecisionCheck assesses one of the DRAFT's decisions. The challenger cannot
@@ -218,6 +219,7 @@ type rcDecisionResult struct {
 // it could not settle is withheld and listed under "Could not verify"; it does
 // not make the review incomplete (see rcValidateChallenge).
 type rcChallengeResult struct {
+	OutputAttempts         []rcOutputAttempt    `json:"outputAttempts,omitempty"`
 	Review                 string               `json:"-"`
 	VerificationIncomplete bool                 `json:"verificationIncomplete,omitempty"`
 	FailedChecks           int                  `json:"failedChecks,omitempty"`
@@ -268,8 +270,8 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 	}, "required": []string{"source", "line_start", "line_end"}}
 	evidenceList := map[string]any{"type": "array", "items": evidence}
 	check := map[string]any{"type": "object", "properties": map[string]any{
-		"issue": str(), "verdict": verdict, "reason": str(), "finding": str(), "remedy": str(), "evidence": evidenceList,
-	}, "required": []string{"issue", "verdict", "reason", "evidence"}}
+		"finding_id": str(), "issue": str(), "verdict": verdict, "reason": str(), "finding": str(), "remedy": str(), "evidence": evidenceList,
+	}, "required": []string{"finding_id", "verdict", "reason", "evidence"}}
 	decision := map[string]any{"type": "object", "properties": map[string]any{
 		"decision": str(), "verdict": verdict, "reason": str(), "evidence": evidenceList,
 	}, "required": []string{"decision", "verdict", "reason", "evidence"}}
@@ -587,9 +589,9 @@ func rcChallengeReviewWith(ctx context.Context, prov provider.Provider, model, d
 // rcChallengeDraft is the gate itself, over a draft whose speculative issues
 // are already gone.
 func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
-	_, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
+	_, issues, decisions, draftMatch, draftReady, _ := rcParseReviewOutput(draft)
 	if len(issues) == 0 && len(decisions) == 0 {
-		return &rcChallengeResult{Review: draft}, nil
+		return &rcChallengeResult{Review: rcAssembleReview(nil, nil, nil, nil, draftMatch, draftReady, "No proposed defects to verify.")}, nil
 	}
 	// This is a publication gate: failure must not fall back to the unchecked
 	// draft. Bound the extra call, and propagate cancellation from the caller.
@@ -614,7 +616,7 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 	}
 	fmt.Fprintf(&b, "\n\nDRAFT (claims to challenge):\n%s\n\nISSUES TO CHECK:\n", draft)
 	for _, issue := range issues {
-		fmt.Fprintf(&b, "- %s\n", issue)
+		fmt.Fprintf(&b, "- [%s] %s\n", rcFindingKey(issue), issue)
 	}
 	if len(decisions) > 0 {
 		b.WriteString("\nDECISIONS TO ASSESS:\n")
@@ -626,7 +628,14 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 		return nil, fmt.Errorf("challenge evidence exceeds %d bytes; refusing to discard evidence", rcEvidenceLimit)
 	}
 	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}}
-	available := []tools.ToolInfo{rcSubmitReviewToolInfo()}
+	submit := rcSubmitReviewToolInfo()
+	ids := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		ids = append(ids, rcFindingKey(issue))
+	}
+	checkSchema := submit.Parameters["checks"].(map[string]any)["items"].(map[string]any)
+	checkSchema["properties"].(map[string]any)["finding_id"] = map[string]any{"type": "string", "enum": ids}
+	available := []tools.ToolInfo{submit}
 	if sandbox != nil {
 		available = append(available, rcShellToolInfo())
 	}
@@ -1074,7 +1083,16 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	results := make([]rcAllegationResult, len(issues))
 	for checkIndex, check := range answer.Checks {
 		id, known := index[check.Issue]
-		if !known {
+		if check.FindingID != "" {
+			known = false
+			for i, issue := range issues {
+				if rcFindingKey(issue) == check.FindingID {
+					id, known = i, true
+					break
+				}
+			}
+		}
+		if !known && check.FindingID == "" {
 			// A model that re-quotes the bullet with other backticks, quotes,
 			// spacing or trailing punctuation is still checking that bullet.
 			// Exact echo was the only accepted form, and one cosmetic
@@ -1138,7 +1156,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	for i, issue := range issues {
 		if !seen[i] {
 			unassessed[i] = true
-			results[i] = rcAllegationResult{ID: i + 1, Issue: issue, Status: rcStatusUnresolved, Reason: "the challenge did not assess this allegation"}
+			results[i] = rcAllegationResult{ID: i + 1, Issue: issue, Status: rcStatusUnresolved, Reason: "the challenge did not assess this allegation", Unchecked: true}
 		}
 	}
 
@@ -1237,6 +1255,8 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	}
 	summary := rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions, match, readiness)
 	res.scope, res.limitations, res.match, res.proposed = rcNonEmpty(answer.Scope), rcNonEmpty(answer.Limitations), match, proposed
+	res.FailedChecks = len(unassessed)
+	res.VerificationIncomplete = res.FailedChecks > 0
 	res.Review = rcAssembleReview(res.scope, res.limitations, results, dresults, match, readiness, summary)
 	return res, problems, nil
 }
@@ -1318,7 +1338,7 @@ func rcAssembleReview(scope, limitations []string, results []rcAllegationResult,
 	if len(kept) > 0 {
 		b.WriteString("## Findings\n")
 		for _, r := range kept {
-			fmt.Fprintf(&b, "\n### %s\n%s\n", r.Issue, r.Finding)
+			fmt.Fprintf(&b, "\n### %s\n", rcPublishedIssue(r))
 			if r.Remedy != "" {
 				fmt.Fprintf(&b, "\n**Remedy:** %s\n", r.Remedy)
 			}
@@ -1380,7 +1400,7 @@ func rcIssueKey(issue string) string {
 // record; only its location is carried into the published finding.
 func rcPublishedIssue(r rcAllegationResult) string {
 	text := strings.TrimSpace(r.Finding)
-	if text == "" {
+	if text == "" || text == strings.TrimSpace(r.Issue) {
 		return r.Issue
 	}
 	text = strings.Join(strings.Fields(text), " ")

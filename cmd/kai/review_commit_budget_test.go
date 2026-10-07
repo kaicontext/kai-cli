@@ -76,11 +76,11 @@ func TestUsableCodaNeedsMoreThanTheMarker(t *testing.T) {
 	if rcUsableCoda(rcReviewDataMarker + "\nISSUES:\n- a.go:1 — x") {
 		t.Error("a coda with neither INTENT_MATCH nor SUMMARY is not parseable")
 	}
-	if !rcUsableCoda("Prose.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: verified\nSUMMARY: ok\n") {
+	if !rcUsableCoda("Prose.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: verified\nMERGE_READY: 5\nSUMMARY: ok\nISSUES:\n- (none)\n") {
 		t.Error("a complete coda must be usable")
 	}
-	if !rcUsableCoda("Prose.\n\n" + rcReviewDataMarker + "\nSUMMARY: ok\n") {
-		t.Error("SUMMARY alone is enough for the parser")
+	if rcUsableCoda("Prose.\n\n" + rcReviewDataMarker + "\nSUMMARY: ok\n") {
+		t.Error("SUMMARY alone must not certify completed discovery")
 	}
 }
 
@@ -266,7 +266,7 @@ func TestPullRequestDescriptionIsBounded(t *testing.T) {
 // a test that drives the helpers around it — which is why they broke twice.
 // Reverting either now fails here.
 func TestMergeGateKeepsTheRightAnswerAndTheRightReason(t *testing.T) {
-	good := "A real review.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: verified\nSUMMARY: fine\n"
+	good := "A real review.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: verified\nMERGE_READY: 5\nSUMMARY: fine\nISSUES:\n- (none)\n"
 	half := "Ran out of road.\n\n" + rcReviewDataMarker
 	timeBudget := string(message.FinishReasonTimeBudget)
 
@@ -286,7 +286,7 @@ func TestMergeGateKeepsTheRightAnswerAndTheRightReason(t *testing.T) {
 	}
 
 	// The ordinary success: the gate wrote a whole review, so it wins.
-	better := "Now with the skipped files.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: partial\nSUMMARY: two gaps\n"
+	better := "Now with the skipped files.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: partial\nMERGE_READY: 2\nSUMMARY: two gaps\nISSUES:\n- a.go:1 — gap\n"
 	raw, finish, adopted = rcMergeGate(good, better, "end_turn")
 	if !adopted || raw != strings.TrimSpace(better) {
 		t.Error("a complete second pass is the review — it read files the first one skipped")
@@ -312,8 +312,8 @@ func TestMergeGateKeepsTheRightAnswerAndTheRightReason(t *testing.T) {
 func TestSummaryOnlyCodaSurvivesTheParser(t *testing.T) {
 	raw := "The change is fine.\n\n" + rcReviewDataMarker +
 		"\nSUMMARY: no defects\nISSUES:\n- api/ci.go:12 — a real one\n"
-	if !rcUsableCoda(raw) {
-		t.Fatal("precondition: a SUMMARY-only coda is accepted")
+	if rcUsableCoda(raw) {
+		t.Fatal("a partial response must require recovery despite parseable fields")
 	}
 	prose, risks, _, match, _, note := rcParseReviewOutput(raw)
 	if strings.TrimSpace(prose) == "" {

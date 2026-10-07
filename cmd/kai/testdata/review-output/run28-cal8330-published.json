@@ -1,0 +1,9 @@
+{
+  "intent": {
+    "stated": "use the correct timezone of user for date overrides",
+    "match": "unknown",
+    "note": "The change attempts to make date overrides timezone-aware and to gate fixed-host round-robin slots on the fixed host's actual availability, but the new `checkIfIsAvailable` logic contains a copy-paste bug that breaks the working-hours check for every non-override slot, the date-override window test has an always-false `===` comparison, and the one test added as proof of the timezone fix asserts the same UTC output as the unchanged-timezone case \u2014 so it would pass on the old code and does not verify the fix."
+  },
+  "review": "**Scope:** Reviewed `packages/trpc/server/routers/viewer/slots.ts`, `packages/lib/slots.ts`, `packages/types/schedule.d.ts`, and `apps/web/test/lib/getSchedule.test.ts` against the `getSchedule` callers and the `getSlots`/`buildSlots` pipeline. Could not run the test suite to confirm runtime behavior, and could not verify dayjs's `.tz(undefined)` semantics against the library source in this repository.\n",
+  "claims": []
+}

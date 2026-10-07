@@ -47,7 +47,7 @@ func TestReviewCitationDiagnostics(t *testing.T) {
 			if got := res.Allegations[0]; got.Status != rcStatusUnresolved || !strings.Contains(got.Reason, "citation 1 could not be resolved") || got.Remedy != "" || got.WithheldRemedy != rcFalseCDRemedy || got.Finding != "" {
 				t.Fatalf("item with an unresolvable citation not degraded: %+v", got)
 			}
-			if len(res.unresolved()) != 1 || res.Allegations[1].Status != rcStatusSupported || !strings.Contains(res.Review, rcEscapeIssue) {
+			if len(res.unresolved()) != 1 || res.Allegations[1].Status != rcStatusSupported || !strings.Contains(res.Review, rcEscapeFinding) {
 				t.Fatalf("the other finding was lost, or the open item was not reported as unresolved: %+v", res)
 			}
 			if !strings.Contains(couldNotVerifySection(res.Review), "- "+rcFalseCDIssue+" — citation 1 could not be resolved") {
@@ -181,7 +181,7 @@ func TestReviewCitationCorrection(t *testing.T) {
 					t.Fatalf("a citation slip withheld the review: %+v %v", got, err)
 				}
 				// The supported finding is published in every outcome.
-				if !strings.Contains(got.Review, rcEscapeIssue) {
+				if !strings.Contains(got.Review, rcEscapeFinding) {
 					t.Fatalf("supported finding lost: %s", got.Review)
 				}
 				switch outcome {
@@ -231,7 +231,7 @@ func TestReviewCitationDoesNotRetrySemanticUncertainty(t *testing.T) {
 	// Not retried — and not withheld: the item is unresolved and listed under
 	// "Could not verify", the supported finding is kept, and the review is not
 	// marked incomplete for one open item.
-	if calls != 1 || err != nil || len(got.unresolved()) != 1 || !strings.Contains(got.Review, rcEscapeIssue) || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) || strings.Contains(got.Review, "## Findings\n\n### "+rcFalseCDIssue) {
+	if calls != 1 || err != nil || len(got.unresolved()) != 1 || !strings.Contains(got.Review, rcEscapeFinding) || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) || strings.Contains(got.Review, "## Findings\n\n### "+rcFalseCDIssue) {
 		t.Fatalf("uncertainty retried, withheld, or published as a finding: calls=%d %+v %v", calls, got, err)
 	}
 }

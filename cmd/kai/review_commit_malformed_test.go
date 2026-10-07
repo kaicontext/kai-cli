@@ -198,7 +198,7 @@ func TestReviewMalformedRepairWithBadCitationPublishesDegraded(t *testing.T) {
 	if len(got.unresolved()) != 1 || !strings.Contains(couldNotVerifySection(got.Review), "- "+rcFalseCDIssue) {
 		t.Errorf("the unresolved item must be listed under Could not verify, unresolved=%v", got.unresolved())
 	}
-	if !strings.Contains(got.Review, rcEscapeIssue) {
+	if !strings.Contains(got.Review, rcEscapeFinding) {
 		t.Error("the supported finding is missing from the published review")
 	}
 }

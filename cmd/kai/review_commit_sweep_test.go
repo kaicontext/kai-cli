@@ -156,7 +156,7 @@ func TestUnsettledSweepProposalsAreWithheld(t *testing.T) {
 	if !strings.Contains(cnv, "reviewer's own doubt") || strings.Contains(res.Review, "sweep guess") {
 		t.Fatalf("review:\n%s", res.Review)
 	}
-	if !strings.Contains(res.Review, "c.go:3 — sweep hit") {
+	if !strings.Contains(res.Review, "c.go:3 — c is wrong") {
 		t.Fatalf("the supported sweep finding was lost:\n%s", res.Review)
 	}
 }

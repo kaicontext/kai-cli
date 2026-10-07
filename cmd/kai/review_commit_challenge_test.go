@@ -69,7 +69,7 @@ func TestReviewChallengeDropsRefutedIssueAndKeepsSupportedIssue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := res.Review; strings.Contains(got, rcFalseCDIssue) || !strings.Contains(got, rcEscapeIssue) {
+	if got := res.Review; strings.Contains(got, rcFalseCDIssue) || !strings.Contains(got, rcEscapeFinding) {
 		t.Fatalf("wrong published allegations: %s", got)
 	}
 }
@@ -256,7 +256,7 @@ func TestFastDraftDoesNotSubstituteChallenger(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, answer)}}}, nil
 	}}
 	got, _, err := rcRunFastReview(context.Background(), p, "fast-draft-substitute", "configured-review-model", "", "", "test", "", rcCDSource, nil)
-	if err != nil || !strings.Contains(got, rcEscapeIssue) {
+	if err != nil || !strings.Contains(got, rcEscapeFinding) {
 		t.Fatalf("fast review did not publish the checked draft: %q %v", got, err)
 	}
 	if len(requested) != 2 || requested[0] != "fast-draft-substitute" {
@@ -294,7 +294,7 @@ func TestReviewCitationIsExtractedBySystem(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
 	}}
 	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), sources, nil)
-	if err != nil || !strings.Contains(res.Review, rcEscapeIssue) {
+	if err != nil || !strings.Contains(res.Review, rcEscapeFinding) {
 		t.Fatalf("location citations rejected: %+v %v", res, err)
 	}
 	for _, want := range []string{"SOURCE 1 (2 rows; cite the ROW numbers printed at the left):\n    1| cd /tmp && pwd\n    2| pwd\n", "SOURCE 2 (1 row; cite the ROW numbers printed at the left):\n    1| cd \"$HOME\"\n"} {
@@ -361,7 +361,7 @@ func TestReviewChallengeEveryRetryThenSubmits(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
 	}}
 	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
-	if err != nil || calls != rcMaxRefusedCalls+rcMaxTruncations+1 || !strings.Contains(res.Review, rcEscapeIssue) {
+	if err != nil || calls != rcMaxRefusedCalls+rcMaxTruncations+1 || !strings.Contains(res.Review, rcEscapeFinding) {
 		t.Fatalf("final answer lost after every retry: calls=%d %+v %v", calls, res, err)
 	}
 	if max := rcMaxExperiments + rcMaxRefusedCalls + rcMaxTruncations + 1; rcChallengeMaxTurns <= max {
@@ -401,7 +401,7 @@ func TestReviewChallengeAnswersUnofferedToolAndFinishes(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
 	}}
 	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
-	if err != nil || calls != 2 || !strings.Contains(res.Review, rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDIssue) {
+	if err != nil || calls != 2 || !strings.Contains(res.Review, rcEscapeFinding) || strings.Contains(res.Review, rcFalseCDIssue) {
 		t.Fatalf("review did not finish after an unoffered tool call: calls=%d %+v %v", calls, res, err)
 	}
 }
@@ -439,7 +439,7 @@ func TestReviewChallengeRecoversFromTruncatedAnswer(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
 	}}
 	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
-	if err != nil || calls != 2 || !strings.Contains(res.Review, rcEscapeIssue) {
+	if err != nil || calls != 2 || !strings.Contains(res.Review, rcEscapeFinding) {
 		t.Fatalf("review did not finish after a truncated answer: calls=%d %+v %v", calls, res, err)
 	}
 }
@@ -475,7 +475,7 @@ func TestReviewChallengeTruncationThenCitationCorrection(t *testing.T) {
 		return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "s2", Name: "submit_review", Input: rcTestAnswer(t, rcCDChecks())}}}, nil
 	}}
 	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
-	if err != nil || calls != 3 || !strings.Contains(res.Review, rcEscapeIssue) || strings.Contains(res.Review, rcFalseCDIssue) {
+	if err != nil || calls != 3 || !strings.Contains(res.Review, rcEscapeFinding) || strings.Contains(res.Review, rcFalseCDIssue) {
 		t.Fatalf("review did not finish after truncation and correction: calls=%d %+v %v", calls, res, err)
 	}
 }
@@ -491,7 +491,7 @@ func TestReviewChallengeAcceptsStructuredSubmissionWithCommentary(t *testing.T) 
 		}}, nil
 	}}
 	res, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(rcFalseCDIssue, rcEscapeIssue), rcCDSources, nil)
-	if err != nil || strings.Contains(res.Review, rcFalseCDIssue) || !strings.Contains(res.Review, rcEscapeIssue) {
+	if err != nil || strings.Contains(res.Review, rcFalseCDIssue) || !strings.Contains(res.Review, rcEscapeFinding) {
 		t.Fatalf("bad structured submission: %+v %v", res, err)
 	}
 }
@@ -501,7 +501,7 @@ func TestReviewChallengeSkipsDraftWithoutIssues(t *testing.T) {
 		t.Fatal("a draft without allegations does not need this pass")
 		return provider.Response{}, nil
 	}}
-	if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || got.Review != rcTestReview() {
+	if got, err := rcChallengeReview(context.Background(), p, "test", rcTestReview(), nil, nil); err != nil || !rcPublicationReady(got.Review, got) {
 		t.Fatalf("changed issue-free draft: %+v %v", got, err)
 	}
 }

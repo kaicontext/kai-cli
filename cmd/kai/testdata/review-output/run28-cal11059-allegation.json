@@ -1,0 +1,24 @@
+{
+  "id": 39,
+  "issue": "packages/app-store/googlecalendar/lib/CalendarService.ts:79 \u2014 `parseRefreshTokenResponse(googleCredentials, googleCredentialSchema)` is called with `googleCredentials` (the mutated local credentials) instead of the newly refreshed token response `token`, so it validates the wrong object.",
+  "status": "supported",
+  "reason": "`googleCredentials` is validated after being mutated with the new token fields, which is the same as the old parse. The real defect is that the returned SafeParseResult object (not `.data`) is saved as `key`. That corrupts the stored credential.",
+  "evidence": [
+    {
+      "source": 8,
+      "lineStart": 94,
+      "lineEnd": 101,
+      "coord": "file",
+      "path": "packages/app-store/googlecalendar/lib/CalendarService.ts"
+    },
+    {
+      "source": 3,
+      "lineStart": 29,
+      "lineEnd": 29,
+      "coord": "file",
+      "path": "packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts"
+    }
+  ],
+  "finding": "Google refresh passes `parseRefreshTokenResponse(googleCredentials, ...)` and writes its return value, a `{success, data}` SafeParseResult, as the credential `key`. Previously the key was the parsed credentials. The stored credential is now malformed.",
+  "remedy": "Use the `.data` of the parse result as `key`."
+}

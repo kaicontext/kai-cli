@@ -242,11 +242,12 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 			}
 			b.WriteString(src.String())
 			resp, err := prov.Send(ctx, provider.Request{
-				Model:           model,
-				System:          rcSweepSystem,
-				MaxTokens:       rcSweepMaxTokens,
-				ReasoningEffort: rcStageEffort(rcStageSweep),
-				Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
+				Model:            model,
+				System:           rcSweepSystem + rcOutputInstruction,
+				OutputJSONSchema: rcOutputSchema(),
+				MaxTokens:        rcSweepMaxTokens,
+				ReasoningEffort:  rcStageEffort(rcStageSweep),
+				Messages:         []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
 			})
 			if err != nil {
 				outs[i] = out{err: err}
@@ -261,7 +262,12 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 					text.WriteString(t.Text)
 				}
 			}
-			outs[i] = out{issues: rcSweepIssues(text.String(), changed), source: src.String()}
+			decoded, decodeErr := rcDecodeReview(text.String())
+			if decodeErr != nil {
+				outs[i] = out{err: fmt.Errorf("invalid sweep output: %w", decodeErr)}
+				return
+			}
+			outs[i] = out{issues: rcSweepIssues(decoded.draft(), changed), source: src.String()}
 		}(i, files)
 	}
 	wg.Wait()
@@ -301,7 +307,7 @@ func rcSweepIssues(text string, changed map[string]bool) []string {
 	in := false
 	for _, ln := range strings.Split(text, "\n") {
 		t := strings.TrimSpace(ln)
-		if strings.EqualFold(strings.TrimSuffix(t, ":"), "ISSUES") {
+		if k, _, ok := rcMachineLine(t); ok && (k == "issues" || k == "findings") {
 			in = true
 			continue
 		}
@@ -400,6 +406,11 @@ func rcWordOverlap(a, b map[string]bool) float64 {
 }
 
 func rcDraftWithSweep(draft string, extra []string) string {
+	if strings.HasPrefix(strings.TrimSpace(draft), "{") || strings.HasPrefix(strings.TrimSpace(draft), "```") {
+		if output, err := rcDecodeReview(draft); err == nil {
+			draft = output.draft()
+		}
+	}
 	if len(extra) == 0 {
 		return draft
 	}
