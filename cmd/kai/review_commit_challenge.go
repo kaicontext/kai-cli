@@ -201,7 +201,7 @@ type rcAllegationResult struct {
 	WithheldRemedy string          `json:"withheldRemedy,omitempty"`
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
-	unchecked bool
+	Unchecked bool `json:"unchecked,omitempty"`
 }
 
 // rcDecisionResult is the final result for one of the draft's decisions.
@@ -218,9 +218,11 @@ type rcDecisionResult struct {
 // it could not settle is withheld and listed under "Could not verify"; it does
 // not make the review incomplete (see rcValidateChallenge).
 type rcChallengeResult struct {
-	Review      string               `json:"-"`
-	Allegations []rcAllegationResult `json:"allegations,omitempty"`
-	Decisions   []rcDecisionResult   `json:"decisions,omitempty"`
+	Review                 string               `json:"-"`
+	VerificationIncomplete bool                 `json:"verificationIncomplete,omitempty"`
+	FailedChecks           int                  `json:"failedChecks,omitempty"`
+	Allegations            []rcAllegationResult `json:"allegations,omitempty"`
+	Decisions              []rcDecisionResult   `json:"decisions,omitempty"`
 
 	// What the answer said about coverage and the verdict, kept so batches of
 	// one draft (rcChallengeBatches) can be reassembled into one review.
@@ -1351,7 +1353,7 @@ func rcAssembleReview(scope, limitations []string, results []rcAllegationResult,
 		b.WriteString("- (none)\n")
 	}
 	for _, r := range kept {
-		fmt.Fprintf(&b, "- %s\n", r.Issue)
+		fmt.Fprintf(&b, "- %s\n", rcPublishedIssue(r))
 	}
 	if len(keptDecisions) > 0 {
 		b.WriteString("DECISIONS:\n")
@@ -1371,4 +1373,19 @@ func rcIssueKey(issue string) string {
 	s = strings.NewReplacer("`", "", "\u201c", "\"", "\u201d", "\"", "\u2018", "'", "\u2019", "'", "**", "", "\u2014", "-", "\u2013", "-").Replace(s)
 	s = strings.Join(strings.Fields(s), " ")
 	return strings.TrimRight(s, " .;:")
+}
+
+// Keep the validated explanation in the machine coda used by inline comments
+// and benchmark extraction. Issue remains the original allegation in the audit
+// record; only its location is carried into the published finding.
+func rcPublishedIssue(r rcAllegationResult) string {
+	text := strings.TrimSpace(r.Finding)
+	if text == "" {
+		return r.Issue
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	if path, line, ok := rcIssueLocation(r.Issue); ok {
+		return fmt.Sprintf("%s:%d — %s", path, line, text)
+	}
+	return text
 }
