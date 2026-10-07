@@ -205,7 +205,7 @@ func TestPublicationSummaryFindingsAndCodaAgree(t *testing.T) {
 			for _, r := range res.Allegations {
 				switch r.Status {
 				case rcStatusSupported:
-					supported = append(supported, r.Issue)
+					supported = append(supported, rcPublishedIssue(r))
 				case rcStatusRefuted:
 					refuted++
 				default:

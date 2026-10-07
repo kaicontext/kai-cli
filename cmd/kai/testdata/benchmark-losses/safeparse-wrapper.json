@@ -1,0 +1,24 @@
+{
+  "id": 21,
+  "issue": "packages/app-store/googlecalendar/lib/CalendarService.ts:80 \u2014 `parseRefreshTokenResponse(googleCredentials, googleCredentialSchema)` is called with the accumulated credential object instead of the fresh token response, so `access_token` and `expiry_date` that were just assigned are re-validated against a schema expecting the full credential shape and the returned `key` is the parsed credentials rather than the new token data.",
+  "status": "supported",
+  "reason": "The call passes googleCredentials, not the token response. parseRefreshTokenResponse returns a safeParse result object ({success, data}), and that whole object is stored as `key` in the DB. This is a real bug: the stored key is wrapped and no longer matches the credential shape.",
+  "evidence": [
+    {
+      "source": 7,
+      "lineStart": 94,
+      "lineEnd": 101,
+      "coord": "file",
+      "path": "packages/app-store/googlecalendar/lib/CalendarService.ts"
+    },
+    {
+      "source": 6,
+      "lineStart": 13,
+      "lineEnd": 29,
+      "coord": "file",
+      "path": "packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts"
+    }
+  ],
+  "finding": "parseRefreshTokenResponse returns a safeParse result ({success, data}). Google stores that wrapper object as the credential `key` instead of the parsed credentials, so the persisted key no longer has the credential shape. The original code stored the parsed data.",
+  "remedy": "Store parseRefreshTokenResponse(...).data as the key."
+}

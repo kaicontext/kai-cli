@@ -72,7 +72,7 @@ func TestReviewMalformedSubmissionRepaired(t *testing.T) {
 			// The repair re-expresses the SAME assessment: the refuted
 			// allegation stays dropped and the supported one stays published.
 			_, issues, _, _, _, _ := rcParseReviewOutput(got.Review)
-			if len(issues) != 1 || issues[0] != rcEscapeIssue {
+			if len(issues) != 1 || issues[0] != rcPublishedIssue(rcAllegationResult{Issue: rcEscapeIssue, Finding: rcEscapeFinding}) {
 				t.Fatalf("repair changed the findings: %v", issues)
 			}
 		})

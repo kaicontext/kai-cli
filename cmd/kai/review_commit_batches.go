@@ -36,6 +36,13 @@ func rcChallengeBatches(ctx context.Context, prov provider.Provider, model, draf
 	prose, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
 	if len(issues) <= rcChallengeBatchSize {
 		res, err := rcChallengeDraft(ctx, prov, model, draft, rcBatchSources(sources, extra, issues), sandbox)
+		if err != nil && rcCapacityFailure(err) && ctx.Err() == nil {
+			rr, ee := []*rcChallengeResult{res}, []error{err}
+			rcRecoverCapacityBatches(ctx, rr, ee, func(int) (*rcChallengeResult, error) {
+				return rcChallengeDraft(ctx, prov, model, draft, rcBatchSources(sources, extra, issues), sandbox)
+			}, rcCapacityWait)
+			return rr[0], ee[0]
+		}
 		if err == nil || len(issues) < 2 || ctx.Err() != nil {
 			return res, err
 		}
@@ -52,6 +59,13 @@ func rcChallengeBatches(ctx context.Context, prov provider.Provider, model, draf
 	}
 	fmt.Fprintf(os.Stderr, "  challenge: %d allegations in %d batches\n", len(issues), len(batches))
 	results, errs := rcRunBatches(ctx, prov, model, prose, decisions, 0, batches, sources, extra, sandbox)
+	rcRecoverCapacityBatches(ctx, results, errs, func(i int) (*rcChallengeResult, error) {
+		var ds []string
+		if i == 0 {
+			ds = decisions
+		}
+		return rcChallengeDraft(ctx, prov, model, rcSubDraft(prose, batches[i], ds), rcBatchSources(sources, extra, batches[i]), sandbox)
+	}, rcCapacityWait)
 	batches, results, errs = rcRetryFailedBatches(ctx, prov, model, prose, decisions, batches, results, errs, sources, extra, sandbox)
 	return rcMergeBatches(batches, decisions, results, errs)
 }
@@ -96,7 +110,7 @@ func rcRetryFailedBatches(ctx context.Context, prov provider.Provider, model, pr
 	var singles [][]string
 	decisionsAt := -1
 	for i, batch := range batches {
-		if errs[i] == nil || len(batch) < 2 {
+		if errs[i] == nil || len(batch) < 2 || rcCapacityFailure(errs[i]) {
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "  challenge: batch %d of %d failed (%v); re-checking its %d allegations one at a time\n", i+1, len(batches), errs[i], len(batch))
@@ -114,7 +128,7 @@ func rcRetryFailedBatches(ctx context.Context, prov provider.Provider, model, pr
 	var ne []error
 	next := 0
 	for i, batch := range batches {
-		if errs[i] == nil || len(batch) < 2 {
+		if errs[i] == nil || len(batch) < 2 || rcCapacityFailure(errs[i]) {
 			nb, nr, ne = append(nb, batch), append(nr, results[i]), append(ne, errs[i])
 			continue
 		}
@@ -215,7 +229,7 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 		if errs[i] != nil || r == nil {
 			fmt.Fprintf(os.Stderr, "  challenge: batch %d of %d failed (%v) — its %d allegation(s) are listed as not verified\n", i+1, len(batches), errs[i], len(batch))
 			for _, is := range batch {
-				merged.Allegations = append(merged.Allegations, rcAllegationResult{Issue: is, Status: rcStatusUnresolved, Reason: fmt.Sprintf("the check for this allegation's batch did not complete (%v)", errs[i]), unchecked: true})
+				merged.Allegations = append(merged.Allegations, rcAllegationResult{Issue: is, Status: rcStatusUnresolved, Reason: fmt.Sprintf("the check for this allegation's batch did not complete (%v)", errs[i]), Unchecked: true})
 			}
 			continue
 		}
@@ -260,6 +274,13 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 // from its allegations and decisions, with the caps rcValidateChallenge
 // applies. Used after batches are merged and after allegations change status.
 func rcFinalize(merged *rcChallengeResult) {
+	merged.FailedChecks = 0
+	for _, a := range merged.Allegations {
+		if a.Unchecked {
+			merged.FailedChecks++
+		}
+	}
+	merged.VerificationIncomplete = merged.FailedChecks > 0
 	supported, refuted, unresolved := 0, 0, 0
 	for _, a := range merged.Allegations {
 		switch a.Status {
@@ -344,7 +365,7 @@ func rcWithholdUnsettledSweep(res *rcChallengeResult, sweep []string) int {
 	}
 	n := 0
 	for i, a := range res.Allegations {
-		if a.Status == rcStatusUnresolved && !a.unchecked && fromSweep[rcIssueKey(a.Issue)] {
+		if a.Status == rcStatusUnresolved && !a.Unchecked && fromSweep[rcIssueKey(a.Issue)] {
 			res.Allegations[i].Status = rcStatusRefuted
 			res.Allegations[i].Reason = "withheld: a sweep proposal the check could not settle (" + a.Reason + ")"
 			n++
