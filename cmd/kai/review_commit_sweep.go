@@ -242,12 +242,11 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 			}
 			b.WriteString(src.String())
 			resp, err := prov.Send(ctx, provider.Request{
-				Model:            model,
-				System:           rcSweepSystem + rcOutputInstruction,
-				OutputJSONSchema: rcOutputSchema(),
-				MaxTokens:        rcSweepMaxTokens,
-				ReasoningEffort:  rcStageEffort(rcStageSweep),
-				Messages:         []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
+				Model:           model,
+				System:          rcSweepSystem + rcOutputInstruction,
+				MaxTokens:       rcSweepMaxTokens,
+				ReasoningEffort: rcStageEffort(rcStageSweep),
+				Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
 			})
 			if err != nil {
 				outs[i] = out{err: err}
