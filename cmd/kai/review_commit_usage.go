@@ -79,6 +79,7 @@ func (p *rcUsageProvider) begin(ctx context.Context, req provider.Request) func(
 	p.meter.next++
 	id := p.meter.next
 	p.meter.mu.Unlock()
+	p.meter.persist()
 	return func(resp provider.Response, err error) {
 		c := rcUsageCall{ID: id, Stage: stage, Model: req.Model, Started: started.UTC().Format(time.RFC3339Nano), Seconds: time.Since(started).Seconds(), Input: resp.InputTokens, Output: resp.OutputTokens, CacheRead: resp.CacheReadTokens, CacheWrite: resp.CacheCreationTokens, Reasoning: resp.ReasoningTokens}
 		if resp.EstimatedCostUSD > 0 {
