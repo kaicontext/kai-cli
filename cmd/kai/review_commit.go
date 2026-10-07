@@ -1105,6 +1105,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	raw = output.draft()
 	{
 		sw := rcAwaitSweep(sweep)
+		inc.recordSweep(sw)
 		if len(sw.Issues) > 0 {
 			before := len(rcIssuesOf(raw))
 			raw = rcDraftWithSweep(raw, sw.Issues)

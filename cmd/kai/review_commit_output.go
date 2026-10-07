@@ -140,11 +140,13 @@ func rcSingleLine(s string) string { return strings.Join(strings.Fields(s), " ")
 // Diagnostics contain model output, not prompts/tool responses. They are part
 // of the private finding artifact, not the rendered public review.
 type rcOutputAttempt struct {
+	Chunk int    `json:"chunk,omitempty"`
 	Stage string `json:"stage"`
 	Raw   string `json:"raw"`
 	Error string `json:"error,omitempty"`
 }
 type rcExecution struct {
+	Sweeps         []rcSweepRun      `json:"sweeps,omitempty"`
 	AuthorText     string            `json:"authorText,omitempty"`
 	InferredIntent string            `json:"inferredIntent,omitempty"`
 	Failure        string            `json:"failure,omitempty"`
