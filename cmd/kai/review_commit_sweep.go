@@ -260,8 +260,7 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 		run.Attempts = append(run.Attempts, o.attempts...)
 		if o.err != nil {
 			res.Failed++
-			fmt.Fprintf(os.Stderr, "  sweep: a chunk failed (%v) — the review proceeds without it\n", o.err)
-			continue
+			fmt.Fprintf(os.Stderr, "  sweep: a chunk was incomplete (%v) — retaining %d valid proposals for verification\n", o.err, len(o.issues))
 		}
 		if o.source != "" {
 			res.Sources = append(res.Sources, rcRowSource(o.source))
