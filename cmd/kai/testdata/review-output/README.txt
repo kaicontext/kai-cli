@@ -1,0 +1,1 @@
+Extracts from saved run28-verification-fixes bundles, not original model responses. Cal11059 preserves allegation 39; Cal8330 preserves intent, review and claims. These test publication and missing-verification behavior; they do not establish the original formatting failure.

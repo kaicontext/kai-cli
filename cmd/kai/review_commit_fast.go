@@ -137,11 +137,12 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	defer cancel()
 
 	resp, err := prov.Send(cctx, provider.Request{
-		Model:           model,
-		System:          rcFastReviewSystem,
-		MaxTokens:       rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)),
-		ReasoningEffort: rcStageEffort(rcStageQuickDraft),
-		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}}},
+		Model:            model,
+		System:           rcFastReviewSystem + rcOutputInstruction,
+		OutputJSONSchema: rcOutputSchema(),
+		MaxTokens:        rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)),
+		ReasoningEffort:  rcStageEffort(rcStageQuickDraft),
+		Messages:         []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}}},
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("fast review call: %w", err)
@@ -153,11 +154,33 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 		}
 	}
 	draft := strings.TrimSpace(out.String())
+	output, outputErr := rcDecodeReview(draft)
+	attempts := []rcOutputAttempt{{Stage: "fast", Raw: draft}}
+	if outputErr != nil {
+		attempts[0].Error = outputErr.Error()
+		repair, repairErr := prov.Send(cctx, provider.Request{Model: model, System: rcFastReviewSystem + rcOutputInstruction, OutputJSONSchema: rcOutputSchema(), MaxTokens: rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)), ReasoningEffort: rcStageEffort(rcStageQuickDraft), Messages: []message.Message{
+			{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}},
+			{Role: message.RoleAssistant, Parts: []message.ContentPart{message.TextContent{Text: draft}}},
+			{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Repair the response structure without adding allegations or evidence. " + rcOutputInstruction}}},
+		}})
+		if repairErr != nil {
+			return "", nil, &rcDiscoveryError{Cause: fmt.Errorf("fast output repair failed: %w", repairErr), Attempts: attempts}
+		}
+		repaired := rcResponseText(repair)
+		output, outputErr = rcDecodeReview(repaired)
+		attempts = append(attempts, rcOutputAttempt{Stage: "fast_repair", Raw: repaired})
+		if outputErr != nil {
+			attempts[len(attempts)-1].Error = outputErr.Error()
+			return "", nil, &rcDiscoveryError{Cause: fmt.Errorf("invalid fast discovery output: %w", outputErr), Attempts: attempts}
+		}
+	}
+	draft = output.draft()
 	fmt.Fprintf(os.Stderr, "  challenge model: requested %s (draft was requested from %s)\n", challengeModel, model)
 	res, err := rcChallengeReview(cctx, prov, challengeModel, draft, []rcSource{rcPromptSource(user.String())}, rcConfiguredSandbox())
 	if err != nil {
-		return "", nil, fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
+		return "", nil, &rcDiscoveryError{Cause: fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err), Attempts: attempts, VerificationStarted: true}
 	}
+	res.OutputAttempts = attempts
 	return res.Review, res, nil
 }
 

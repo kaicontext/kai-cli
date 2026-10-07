@@ -65,7 +65,7 @@ func couldNotVerifySection(review string) string {
 func TestPublicationSupportedSurvivesRefuted(t *testing.T) {
 	res := rcMustValidate(t, rcCDChecks(), nil)
 	f := findingsSection(res.Review)
-	for _, want := range []string{"### " + rcEscapeIssue, rcEscapeFinding, "**Remedy:** " + rcEscapeRemedy} {
+	for _, want := range []string{"### " + rcPublishedIssue(res.Allegations[1]), rcEscapeFinding, "**Remedy:** " + rcEscapeRemedy} {
 		if !strings.Contains(f, want) {
 			t.Fatalf("supported finding not published (%q missing):\n%s", want, res.Review)
 		}
@@ -95,7 +95,7 @@ func TestPublicationSupportedSurvivesUnresolved(t *testing.T) {
 	if _, _, _, _, readiness, _ := rcParseReviewOutput(res.Review); readiness > finding.ReadinessDecideThenMerge {
 		t.Fatalf("readiness %d with an open item", readiness)
 	}
-	if f := findingsSection(res.Review); !strings.Contains(f, rcEscapeIssue) || !strings.Contains(f, rcEscapeRemedy) || strings.Contains(f, rcFalseCDIssue) {
+	if f := findingsSection(res.Review); !strings.Contains(f, rcEscapeFinding) || !strings.Contains(f, rcEscapeRemedy) || strings.Contains(f, rcFalseCDIssue) {
 		t.Fatalf("findings section wrong:\n%s", res.Review)
 	}
 	if !strings.Contains(res.Review, "\n## Could not verify\n") || !strings.Contains(res.Review, "- "+rcFalseCDIssue+" — needs a shell to settle") {
@@ -223,7 +223,7 @@ func TestPublicationSummaryFindingsAndCodaAgree(t *testing.T) {
 				t.Fatalf("%d finding sections for %d supported results:\n%s", got, len(supported), prose)
 			}
 			for _, r := range res.Allegations {
-				inFindings := strings.Contains(findingsSection(res.Review), "### "+r.Issue)
+				inFindings := strings.Contains(findingsSection(res.Review), "### "+rcPublishedIssue(r))
 				if inFindings != (r.Status == rcStatusSupported) {
 					t.Fatalf("allegation %q status=%s but published-as-finding=%v", r.Issue, r.Status, inFindings)
 				}
@@ -280,7 +280,7 @@ func TestPublicationSupportedWithoutFindingPublishesTheAllegation(t *testing.T) 
 		t.Fatalf("supported-without-finding: %+v", got)
 	}
 	f := findingsSection(res.Review)
-	if len(res.unresolved()) != 0 || !strings.Contains(f, "### "+rcFalseCDIssue) || !strings.Contains(f, "**Remedy:** "+rcFalseCDRemedy) || !strings.Contains(f, rcEscapeIssue) {
+	if len(res.unresolved()) != 0 || !strings.Contains(f, "### "+rcFalseCDIssue) || !strings.Contains(f, "**Remedy:** "+rcFalseCDRemedy) || !strings.Contains(f, rcEscapeFinding) {
 		t.Fatalf("allegation not published as a finding, or the other finding lost:\n%s", res.Review)
 	}
 }

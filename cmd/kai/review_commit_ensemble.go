@@ -135,8 +135,9 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 				}
 			}
 			if rcUsableCoda(raw) {
-				out.Raw = raw
-				out.Issues = rcIssuesOf(raw)
+				decoded, _ := rcDecodeReview(raw)
+				out.Raw = decoded.draft()
+				out.Issues = decoded.Findings
 			}
 		}
 		out.Elapsed = time.Since(started)

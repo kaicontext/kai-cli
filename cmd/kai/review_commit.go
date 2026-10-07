@@ -345,8 +345,22 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			fastModel, rcFastChallengeModel(model), rcFastHardDeadline)
 		phase := time.Now()
 		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, rcFastChallengeModel(model), repoRoot, authorContext, stated, intentBody, diff, changedPaths)
+		inc = &rcIncomplete{Execution: &rcExecution{Discovery: "completed", Verification: "completed"}}
 		if err != nil {
-			return err
+			inc.ChallengeFailure = err.Error()
+			inc.Execution.Discovery, inc.Execution.Verification = "incomplete", "not_started"
+			var failure *rcDiscoveryError
+			if errors.As(err, &failure) {
+				inc.Execution.Attempts = failure.Attempts
+				if failure.VerificationStarted {
+					inc.Execution.Discovery, inc.Execution.Verification = "completed", "failed"
+				}
+			}
+		} else if challenge != nil {
+			inc.Execution.Attempts = challenge.OutputAttempts
+			if challenge.VerificationIncomplete {
+				inc.Execution.Verification = "incomplete"
+			}
 		}
 		fmt.Fprintf(os.Stderr, "  timing: fast-review=%s\n", time.Since(phase).Round(time.Second))
 	} else {
@@ -374,6 +388,19 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			challenge = inc.Challenge
 		}
 		fmt.Fprintf(os.Stderr, "  timing: review=%s\n", time.Since(phase).Round(time.Second))
+	}
+
+	if !rcPublicationReady(raw, challenge) {
+		if inc == nil {
+			inc = &rcIncomplete{}
+		}
+		if inc.ChallengeFailure == "" {
+			inc.ChallengeFailure = "verification did not complete for the published claims"
+		}
+		if inc.Execution == nil {
+			inc.Execution = &rcExecution{Discovery: "incomplete", Verification: "not_started"}
+		}
+		raw = ""
 	}
 
 	prose, risks, decisions, match, readiness, note := rcParseReviewOutput(raw)
@@ -547,7 +574,8 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// allegation's and decision's final status, reason and citations.
 			// Additive and optional; readers that do not know it ignore it.
 			Challenge *rcChallengeResult `json:"challenge,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge}, "", "  ")
+			Execution *rcExecution       `json:"execution,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, rcExecutionOf(inc)}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -824,12 +852,13 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// scopes graph context to changed functions, and whitelists the
 		// read-only tool set (+ kai_impact / kai_diff). ReadOnly is belt and
 		// braces on top of the mode's whitelist.
-		Mode:       agent.ModeReview,
-		System:     rcReviewSystemFor(packs),
-		ReadOnly:   true,
-		EnableBash: false,
-		MaxTurns:   rcReviewMaxTurns(len(changed)),
-		Prompt:     user.String(),
+		Mode:             agent.ModeReview,
+		System:           rcReviewSystemFor(packs) + rcOutputInstruction,
+		OutputJSONSchema: rcOutputSchema(),
+		ReadOnly:         true,
+		EnableBash:       false,
+		MaxTurns:         rcReviewMaxTurns(len(changed)),
+		Prompt:           user.String(),
 
 		InjectedContext: injected,
 		SessionStore:    gdb,
@@ -880,6 +909,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		FilesRead:    rcFilesRead(res.Transcript, primary.Path),
 	}
 	raw := rcRestoreCodaMarker(strings.TrimSpace(res.FinalText))
+	inc.recordOutput("main", res.FinalText)
 
 	// COVERAGE GATE. A review that never opened a changed file is not a
 	// verdict on it, and until now the only consequence was a line in the
@@ -966,6 +996,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				// finding. When it is not usable the first review stands and
 				// the fallback below still gets the gate's transcript, so the
 				// files it opened are not lost either.
+				inc.recordOutput("coverage", res2.FinalText)
 				raw, inc.FinishReason, _ = rcMergeGate(raw, res2.FinalText, string(res2.FinishReason))
 				if still := rcUnopenedChanged(changed, inc.FilesRead); len(still) > 0 {
 					fmt.Fprintf(os.Stderr, "  coverage gate: %d file(s) still unopened\n", len(still))
@@ -990,12 +1021,21 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// was there for, without covering the one it should not.
 	if rcNeedsConclusion(raw) {
 		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", inc.FinishReason)
-		if concluded := rcConcludeFromTranscript(publicationCtx, prov, model, transcript); concluded != "" {
+		concluded := rcConcludeFromTranscript(publicationCtx, prov, model, transcript)
+		inc.recordOutput("repair", concluded)
+		if concluded != "" {
 			raw = rcRestoreCodaMarker(concluded)
 		}
 	}
 	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second))
-	if rcUsableCoda(raw) {
+	output, outputErr := rcDecodeReview(raw)
+	if outputErr != nil {
+		inc.ChallengeFailure = "invalid discovery output: " + outputErr.Error()
+		return "", inc, nil
+	}
+	inc.Execution.Discovery = "completed"
+	raw = output.draft()
+	{
 		sw := rcAwaitSweep(sweep)
 		if len(sw.Issues) > 0 {
 			before := len(rcIssuesOf(raw))
@@ -1017,6 +1057,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  review challenge incomplete: %v\n", err)
 			inc.ChallengeFailure = err.Error()
+			inc.Execution.Verification = "failed"
 			return "", inc, nil
 		}
 		// The check settled what is true; the selection step chooses what is
@@ -1024,6 +1065,15 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		rcRankSupported(publicationCtx, prov, intent, diff, len(changed), res)
 		raw = res.Review
 		inc.Challenge = res
+		inc.Execution.Verification = "completed"
+		if res.VerificationIncomplete {
+			inc.Execution.Verification = "incomplete"
+		}
+		if !rcPublicationReady(raw, res) {
+			inc.Execution.Verification = "failed"
+			inc.ChallengeFailure = "publication contains an unverified finding"
+			return "", inc, nil
+		}
 	}
 	return raw, inc, nil
 }
@@ -1278,12 +1328,8 @@ func rcRestoreCodaMarker(raw string) string {
 // ran out of turns mid-write emits the marker and stops, and treating that as
 // a review would swap a complete one for an incomplete finding.
 func rcUsableCoda(raw string) bool {
-	i := strings.Index(raw, rcReviewDataMarker)
-	if i < 0 {
-		return false
-	}
-	tail := raw[i+len(rcReviewDataMarker):]
-	return strings.Contains(tail, "INTENT_MATCH:") || strings.Contains(tail, "SUMMARY:")
+	_, err := rcDecodeReview(raw)
+	return err == nil
 }
 
 // rcCoverageGateTurns bounds the second pass: a turn to open each skipped file
@@ -1363,6 +1409,7 @@ type rcIncomplete struct {
 	// Unlike ChallengeFailure, the review body is real and kept; items it
 	// could not settle are listed in it under "Could not verify".
 	Challenge *rcChallengeResult
+	Execution *rcExecution
 }
 
 // rcCoverage is the machine-written record of what a review actually did:
@@ -1527,8 +1574,7 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 		Role: message.RoleUser,
 		Parts: []message.ContentPart{message.TextContent{Text: "Finish the review using only the evidence already present. " +
 			"Do not invent runtime behavior or promote a suspicion into a defect to finish the task. " +
-			"State unresolved questions as limitations. Output the human review and a complete " +
-			rcReviewDataMarker + " coda with INTENT_MATCH, MERGE_READY, SUMMARY, ISSUES and DECISIONS."}},
+			"State unresolved questions as limitations. " + rcOutputInstruction}},
 	})
 	// The conclusion is a deliberate grace period BEYOND the run, so it gets
 	// a FRESH deadline — hanging it off the run's context handed it whatever
@@ -1538,11 +1584,12 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
 		return prov.Send(cctx, provider.Request{
-			Model:           model,
-			System:          rcReviewSystem,
-			MaxTokens:       rcTokensFor(2500, rcStageEffort(rcStageConclusion)),
-			Messages:        m,
-			ReasoningEffort: rcStageEffort(rcStageConclusion),
+			Model:            model,
+			System:           rcReviewSystem + rcOutputInstruction,
+			OutputJSONSchema: rcOutputSchema(),
+			MaxTokens:        rcTokensFor(2500, rcStageEffort(rcStageConclusion)),
+			Messages:         m,
+			ReasoningEffort:  rcStageEffort(rcStageConclusion),
 		})
 	}
 	resp, err := send(msgs)
@@ -1682,6 +1729,11 @@ func rcIntentVerdict(value string) (finding.Match, bool) {
 // and the structured fields the finding carries. Tolerant of the legacy shape
 // (no marker; FINDINGS:/NOTE: lines inline) so an old model answer still parses.
 func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, match finding.Match, readiness finding.Readiness, note string) {
+	if strings.HasPrefix(strings.TrimSpace(raw), "{") || strings.HasPrefix(strings.TrimSpace(raw), "```json") {
+		if out, err := rcDecodeReview(raw); err == nil {
+			raw = out.draft()
+		}
+	}
 	match = finding.MatchUnknown
 	readiness = finding.ReadinessUnknown
 	var statedMatch finding.Match

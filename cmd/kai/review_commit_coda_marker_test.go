@@ -16,8 +16,8 @@ func TestRestoreCodaMarkerRescuesARealAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := strings.TrimSpace(string(b))
-	if rcUsableCoda(raw) {
-		t.Fatal("fixture should reproduce the bug: no marker, so not usable as-is")
+	if !rcUsableCoda(raw) {
+		t.Fatal("a complete legacy answer must parse without an exact marker")
 	}
 	got := rcRestoreCodaMarker(raw)
 	if !rcUsableCoda(got) || rcNeedsConclusion(got) {
