@@ -88,7 +88,7 @@ func rcChallengeSystemPromptWith(shell, repo bool) string {
 	if repo {
 		para += "\n\n" + rcChallengeRepoAvailable
 	}
-	return rcChallengeSystemHead + "\n\n" + para + "\n\n" + rcChallengeSystemTail
+	return rcChallengeSystemHead + "\n\n" + para + "\n\n" + rcChallengeSystemTail + "\n\n" + rcAuthorPolicy + rcAcceptanceContract
 }
 
 // rcChallengeMaxTokens bounds each challenge answer. 6000 was too small for a
@@ -138,22 +138,25 @@ type rcCheckEvidence struct {
 }
 
 type rcIssueCheck struct {
-	FindingID string            `json:"finding_id,omitempty"`
-	Issue     string            `json:"issue"`
-	Verdict   string            `json:"verdict"`
-	Reason    string            `json:"reason"`
-	Finding   string            `json:"finding"`
-	Remedy    string            `json:"remedy"`
-	Evidence  []rcCheckEvidence `json:"evidence"`
+	RefutationBasis string            `json:"refutation_basis,omitempty"`
+	AcceptanceQuote string            `json:"acceptance_quote,omitempty"`
+	FindingID       string            `json:"finding_id,omitempty"`
+	Issue           string            `json:"issue"`
+	Verdict         string            `json:"verdict"`
+	Reason          string            `json:"reason"`
+	Finding         string            `json:"finding"`
+	Remedy          string            `json:"remedy"`
+	Evidence        []rcCheckEvidence `json:"evidence"`
 }
 
 // rcDecisionCheck assesses one of the DRAFT's decisions. The challenger cannot
 // introduce decisions of its own; it can only judge the ones the draft made.
 type rcDecisionCheck struct {
-	Decision string            `json:"decision"`
-	Verdict  string            `json:"verdict"`
-	Reason   string            `json:"reason"`
-	Evidence []rcCheckEvidence `json:"evidence"`
+	AcceptanceQuote string            `json:"acceptance_quote,omitempty"`
+	Decision        string            `json:"decision"`
+	Verdict         string            `json:"verdict"`
+	Reason          string            `json:"reason"`
+	Evidence        []rcCheckEvidence `json:"evidence"`
 }
 
 // rcChallengeAnswer is the challenger's structured submission. There is
@@ -192,14 +195,16 @@ const (
 // model proposed for anything else is kept as WithheldRemedy for the record and
 // never published as advice.
 type rcAllegationResult struct {
-	ID             int             `json:"id"`
-	Issue          string          `json:"issue"`
-	Status         string          `json:"status"`
-	Reason         string          `json:"reason,omitempty"`
-	Evidence       []rcCitationRef `json:"evidence,omitempty"`
-	Finding        string          `json:"finding,omitempty"`
-	Remedy         string          `json:"remedy,omitempty"`
-	WithheldRemedy string          `json:"withheldRemedy,omitempty"`
+	RefutationBasis string          `json:"refutationBasis,omitempty"`
+	AcceptanceQuote string          `json:"acceptanceQuote,omitempty"`
+	ID              int             `json:"id"`
+	Issue           string          `json:"issue"`
+	Status          string          `json:"status"`
+	Reason          string          `json:"reason,omitempty"`
+	Evidence        []rcCitationRef `json:"evidence,omitempty"`
+	Finding         string          `json:"finding,omitempty"`
+	Remedy          string          `json:"remedy,omitempty"`
+	WithheldRemedy  string          `json:"withheldRemedy,omitempty"`
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
 	Unchecked bool `json:"unchecked,omitempty"`
@@ -207,11 +212,12 @@ type rcAllegationResult struct {
 
 // rcDecisionResult is the final result for one of the draft's decisions.
 type rcDecisionResult struct {
-	ID       int             `json:"id"`
-	Decision string          `json:"decision"`
-	Status   string          `json:"status"`
-	Reason   string          `json:"reason,omitempty"`
-	Evidence []rcCitationRef `json:"evidence,omitempty"`
+	AcceptanceQuote string          `json:"acceptanceQuote,omitempty"`
+	ID              int             `json:"id"`
+	Decision        string          `json:"decision"`
+	Status          string          `json:"status"`
+	Reason          string          `json:"reason,omitempty"`
+	Evidence        []rcCitationRef `json:"evidence,omitempty"`
 }
 
 // rcChallengeResult is everything the challenge decided. Review is the text to
@@ -270,10 +276,11 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 	}, "required": []string{"source", "line_start", "line_end"}}
 	evidenceList := map[string]any{"type": "array", "items": evidence}
 	check := map[string]any{"type": "object", "properties": map[string]any{
+		"refutation_basis": map[string]any{"type": "string", "enum": []string{"technical", "author_acceptance"}}, "acceptance_quote": str(),
 		"finding_id": str(), "issue": str(), "verdict": verdict, "reason": str(), "finding": str(), "remedy": str(), "evidence": evidenceList,
 	}, "required": []string{"finding_id", "verdict", "reason", "evidence"}}
 	decision := map[string]any{"type": "object", "properties": map[string]any{
-		"decision": str(), "verdict": verdict, "reason": str(), "evidence": evidenceList,
+		"acceptance_quote": str(), "decision": str(), "verdict": verdict, "reason": str(), "evidence": evidenceList,
 	}, "required": []string{"decision", "verdict", "reason", "evidence"}}
 	return tools.ToolInfo{Name: "submit_review", Description: "Submit one evidence-backed assessment per original issue and per original decision. The published review, its summary and its ISSUES list are assembled by the system from these verdicts. This ends the challenge.",
 		Parameters: map[string]any{
@@ -314,9 +321,10 @@ const (
 )
 
 type rcSource struct {
-	Text  string // what the challenger sees for this source (before any row numbering)
-	Tool  string // the tool that produced it; "" for the prompt
-	Coord string // rcCoordRows | rcCoordFile
+	AuthorText *string // non-nil only for original author material supplied by code
+	Text       string  // what the challenger sees for this source (before any row numbering)
+	Tool       string  // the tool that produced it; "" for the prompt
+	Coord      string  // rcCoordRows | rcCoordFile
 	// File coordinates, when Coord == rcCoordFile: the file, the first file
 	// line the tool actually RETURNED, and the returned rows in order (text
 	// without the "N: " prefix). offset/limit in the call describe what was
@@ -605,6 +613,9 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 	// Batches run side by side over one shared source list, and a lookup or
 	// experiment appends to it: give this call its own copy.
 	sources = append([]rcSource(nil), sources...)
+	if author, ok := ctx.Value(rcAuthorContextKey{}).(string); ok {
+		sources = append(sources, rcSource{Text: "ORIGINAL AUTHOR STATEMENTS (only this source can establish author acceptance):\n" + author, Coord: rcCoordRows, AuthorText: &author})
+	}
 	// Sources first, then the claims. The sources are the same for every
 	// batch of one review and the claims differ, so with the sources leading
 	// the prompt, batches after the first reuse them from the provider's
@@ -1118,8 +1129,13 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 		}
 		refs, bad := rcResolveEvidence(checkIndex+1, check.Evidence, sources)
 		problems = append(problems, bad...)
-		r := rcAllegationResult{ID: id + 1, Issue: check.Issue, Status: status, Reason: reason, Evidence: refs}
+		r := rcAllegationResult{RefutationBasis: check.RefutationBasis, AcceptanceQuote: check.AcceptanceQuote, ID: id + 1, Issue: check.Issue, Status: status, Reason: reason, Evidence: refs}
 		findingText, remedy := strings.TrimSpace(check.Finding), strings.TrimSpace(check.Remedy)
+		if status == rcStatusRefuted && rcHasAuthorBoundary(sources) {
+			if check.RefutationBasis != "technical" && (check.RefutationBasis != "author_acceptance" || !rcValidAcceptanceQuote(check.AcceptanceQuote, sources)) {
+				r.Status, r.Reason = rcStatusUnresolved, "refutation lacks a technical basis or a verifiable quotation of author acceptance; reassess the failure mechanism"
+			}
+		}
 		if len(bad) > 0 && status == rcStatusSupported {
 			// A verdict cannot rest on evidence that points nowhere. The item
 			// is unresolved with the exact reason; the others are untouched.
@@ -1195,7 +1211,10 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 		}
 		refs, bad := rcResolveEvidence(len(answer.Checks)+decisionIndex+1, dc.Evidence, sources)
 		problems = append(problems, bad...)
-		dr := rcDecisionResult{ID: id + 1, Decision: dc.Decision, Status: status, Reason: strings.TrimSpace(dc.Reason), Evidence: refs}
+		dr := rcDecisionResult{AcceptanceQuote: dc.AcceptanceQuote, ID: id + 1, Decision: dc.Decision, Status: status, Reason: strings.TrimSpace(dc.Reason), Evidence: refs}
+		if status == rcStatusSupported && rcHasAuthorBoundary(sources) && !rcValidAcceptanceQuote(dc.AcceptanceQuote, sources) {
+			dr.Status, dr.Reason = rcStatusUnresolved, "claimed accepted tradeoff has no verifiable quotation in the original author statements; evaluate the behavior as a potential defect"
+		}
 		if len(bad) > 0 && status != rcStatusUnresolved {
 			dr.Status, dr.Reason = rcStatusUnresolved, fmt.Sprintf("citation %d could not be resolved (%s); the verdict %q was not published on evidence that does not exist", bad[0].Citation, bad[0].Reason, status)
 		}

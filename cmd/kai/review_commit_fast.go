@@ -120,6 +120,7 @@ DECISIONS:
 // publication challenge must use: the substitution meant for the one-call skim
 // must never silently apply to the gate that decides what is published.
 func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challengeModel, root, authorContext, subject, body, diff string, changedPaths []string) (string, *rcChallengeResult, error) {
+	ctx = rcWithAuthorText(ctx, authorContext+"\n"+subject+"\n"+body)
 	var user strings.Builder
 	if sc := strings.TrimSpace(authorContext); sc != "" {
 		if len(sc) > rcMaxAuthorContextBytes {
@@ -187,7 +188,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 
 	resp, err := prov.Send(cctx, provider.Request{
 		Model:            model,
-		System:           rcFastReviewSystem + rcOutputInstruction,
+		System:           rcFastReviewSystem + rcAuthorPolicy + rcOutputInstruction,
 		OutputJSONSchema: rcOutputSchema(),
 		MaxTokens:        rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)),
 		ReasoningEffort:  rcStageEffort(rcStageQuickDraft),
@@ -207,7 +208,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	attempts := []rcOutputAttempt{{Stage: "fast", Raw: draft}}
 	if outputErr != nil {
 		attempts[0].Error = outputErr.Error()
-		repair, repairErr := prov.Send(cctx, provider.Request{Model: model, System: rcFastReviewSystem + rcOutputInstruction, OutputJSONSchema: rcOutputSchema(), MaxTokens: rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)), ReasoningEffort: rcStageEffort(rcStageQuickDraft), Messages: []message.Message{
+		repair, repairErr := prov.Send(cctx, provider.Request{Model: model, System: rcFastReviewSystem + rcAuthorPolicy + rcOutputInstruction, OutputJSONSchema: rcOutputSchema(), MaxTokens: rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)), ReasoningEffort: rcStageEffort(rcStageQuickDraft), Messages: []message.Message{
 			{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}},
 			{Role: message.RoleAssistant, Parts: []message.ContentPart{message.TextContent{Text: draft}}},
 			{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "Repair the response structure without adding allegations or evidence. " + rcOutputInstruction}}},
