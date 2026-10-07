@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/finding"
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/provider"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -184,5 +186,90 @@ func TestFastFailedRepairNeverReachesVerification(t *testing.T) {
 	failure, ok := err.(*rcDiscoveryError)
 	if !ok || len(failure.Attempts) != 2 {
 		t.Fatal("failed response diagnostics lost")
+	}
+}
+
+func TestGroundedExplorerReadsFileBeforeFinalOutput(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "source.go"), []byte("package fixture\n// READ_SENTINEL_29\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	p := rcChallengeProvider{send: func(_ context.Context, req provider.Request) (provider.Response, error) {
+		calls++
+		if len(req.OutputJSONSchema) > 0 {
+			t.Fatal("schema leaked onto exploration turn")
+		}
+		if calls == 1 {
+			found := false
+			for _, tool := range req.Tools {
+				if tool.Name == "kai_view" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("file tool missing")
+			}
+			return provider.Response{Parts: []message.ContentPart{message.ToolCall{ID: "read", Name: "kai_view", Input: `{"file_path":"source.go"}`}}, FinishReason: message.FinishReasonToolUse}, nil
+		}
+		seen := false
+		for _, m := range req.Messages {
+			for _, part := range m.Parts {
+				if r, ok := part.(message.ToolResult); ok && strings.Contains(r.Content, "READ_SENTINEL_29") {
+					seen = true
+				}
+			}
+		}
+		if !seen {
+			t.Fatal("actual file contents did not reach the model")
+		}
+		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: rcTestReview()}}, FinishReason: message.FinishReasonEndTurn}, nil
+	}}
+	opts := rcExplorationOptions(agent.Options{Workspace: dir, Provider: p, Model: "test", Mode: agent.ModeReview, ReadOnly: true, MaxTurns: 4, Prompt: "Read source.go before reviewing.", OutputJSONSchema: rcOutputSchema(), DisableTools: true})
+	res, err := agent.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := rcFilesRead(res.Transcript, dir)
+	if calls < 2 || len(files) == 0 {
+		t.Fatalf("calls=%d files=%v", calls, files)
+	}
+	if err := rcRequireExploration(&rcIncomplete{FilesRead: files}, []string{"source.go"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidOutputCannotCertifyUnexploredGroundedReview(t *testing.T) {
+	raw := rcTestReview()
+	if !rcUsableCoda(raw) {
+		t.Fatal("fixture must be valid")
+	}
+	if err := rcRequireExploration(&rcIncomplete{}, []string{"source.go"}); err == nil {
+		t.Fatal("zero-file grounded review accepted")
+	}
+	if err := rcRequireExploration(&rcIncomplete{}, nil); err != nil {
+		t.Fatal("no changed files must not require a file read")
+	}
+}
+
+func TestSweepUsesValidatedOutputWithoutProviderGrammar(t *testing.T) {
+	for _, valid := range []bool{true, false} {
+		p := rcChallengeProvider{send: func(_ context.Context, req provider.Request) (provider.Response, error) {
+			if len(req.OutputJSONSchema) > 0 {
+				t.Error("sweep still requires provider grammar")
+			}
+			text := "malformed response"
+			if valid {
+				text = `{"intent_match":"partial","merge_ready":2,"summary":"check","findings":[{"file":"a.go","line":1,"claim":"nil dereference","evidence":[]}],"decisions":[],"limitations":[]}`
+			}
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: text}}, FinishReason: message.FinishReasonEndTurn}, nil
+		}}
+		result := rcRunSweep(context.Background(), p, "test", rcSweepSystem, "test", []string{"a.go"}, map[string]string{"a.go": "diff --git a/a.go b/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n"})
+		if valid && (result.Failed != 0 || len(result.Issues) != 1) {
+			t.Fatalf("valid sweep lost: %+v", result)
+		}
+		if !valid && (result.Failed != 1 || len(result.Issues) != 0) {
+			t.Fatalf("malformed sweep silently accepted: %+v", result)
+		}
 	}
 }

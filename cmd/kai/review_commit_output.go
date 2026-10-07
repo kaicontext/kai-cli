@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/finding"
 )
 
@@ -205,3 +206,18 @@ type rcDiscoveryError struct {
 
 func (e *rcDiscoveryError) Error() string { return e.Cause.Error() }
 func (e *rcDiscoveryError) Unwrap() error { return e.Cause }
+
+// Structured decoding belongs at the output boundary, not on every turn of
+// a tool-using explorer. Run29 produced valid JSON but opened zero files.
+func rcExplorationOptions(opts agent.Options) agent.Options {
+	opts.OutputJSONSchema = nil
+	opts.DisableTools = false
+	return opts
+}
+
+func rcRequireExploration(inc *rcIncomplete, changed []string) error {
+	if len(changed) > 0 && (inc == nil || len(inc.FilesRead) == 0) {
+		return fmt.Errorf("grounded discovery opened no repository files; withholding the draft despite valid output")
+	}
+	return nil
+}

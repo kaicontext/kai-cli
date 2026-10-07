@@ -852,13 +852,12 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// scopes graph context to changed functions, and whitelists the
 		// read-only tool set (+ kai_impact / kai_diff). ReadOnly is belt and
 		// braces on top of the mode's whitelist.
-		Mode:             agent.ModeReview,
-		System:           rcReviewSystemFor(packs) + rcOutputInstruction,
-		OutputJSONSchema: rcOutputSchema(),
-		ReadOnly:         true,
-		EnableBash:       false,
-		MaxTurns:         rcReviewMaxTurns(len(changed)),
-		Prompt:           user.String(),
+		Mode:       agent.ModeReview,
+		System:     rcReviewSystemFor(packs),
+		ReadOnly:   true,
+		EnableBash: false,
+		MaxTurns:   rcReviewMaxTurns(len(changed)),
+		Prompt:     user.String(),
 
 		InjectedContext: injected,
 		SessionStore:    gdb,
@@ -884,6 +883,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			},
 		},
 	}
+	opts = rcExplorationOptions(opts)
 	// Effort tier LAST, after every deliberate field above — ApplyEffort only
 	// tightens. Zero-value Speed resolves KAI_SPEED → thorough (a no-op).
 	agent.ApplyEffort(&opts, 0)
@@ -1003,6 +1003,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				}
 			}
 		}
+	}
+	if err := rcRequireExploration(inc, changed); err != nil {
+		inc.ChallengeFailure = err.Error()
+		inc.Execution.Discovery = "incomplete"
+		return "", inc, nil
 	}
 	// A run that ran out of road — the soft time budget fired, or the loop
 	// ended without ever emitting the structured coda — has read the code
