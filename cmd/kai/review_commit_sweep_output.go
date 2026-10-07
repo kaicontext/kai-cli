@@ -34,20 +34,28 @@ func rcDecodeSweep(raw string, changed map[string]bool) ([]string, error) {
 	if err := json.Unmarshal(findings, &entries); err != nil {
 		return nil, fmt.Errorf("sweep findings must be an array: %w", err)
 	}
-	for _, entry := range entries {
-		if !strings.HasPrefix(strings.TrimSpace(string(entry)), "{") {
-			return nil, fmt.Errorf("sweep findings must contain location and claim objects")
+	var issues, rejected []string
+	for i, entry := range entries {
+		var location struct {
+			File string `json:"file"`
 		}
+		if err := json.Unmarshal(entry, &location); err != nil || !changed[location.File] {
+			rejected = append(rejected, fmt.Sprintf("finding %d has an invalid or out-of-chunk file", i+1))
+			continue
+		}
+		normalized := map[string]any{"findings": []json.RawMessage{entry}, "intent_match": "partial", "merge_ready": 2, "summary": "Sweep proposals", "decisions": []string{}, "limitations": []string{}}
+		data, _ := json.Marshal(normalized)
+		decoded, err := rcDecodeReview(string(data))
+		if err != nil {
+			rejected = append(rejected, fmt.Sprintf("finding %d: %v", i+1, err))
+			continue
+		}
+		// Already structured and validated; do not re-parse prose or infer a
+		// retraction with a phrase regex. The verifier judges these proposals.
+		issues = append(issues, decoded.Findings...)
 	}
-	normalized := map[string]any{"findings": findings, "intent_match": "partial", "merge_ready": 2, "summary": "Sweep proposals", "decisions": []string{}, "limitations": []string{}}
-	data, _ := json.Marshal(normalized)
-	decoded, err := rcDecodeReview(string(data))
-	if err != nil {
-		return nil, err
-	}
-	issues := rcSweepIssues(decoded.draft(), changed)
-	if len(issues) != len(decoded.Findings) {
-		return nil, fmt.Errorf("sweep finding has an invalid or out-of-chunk location, or retracts its own claim")
+	if len(rejected) > 0 {
+		return issues, fmt.Errorf("%s", strings.Join(rejected, "; "))
 	}
 	return issues, nil
 }
@@ -63,6 +71,8 @@ type rcSweepRun struct {
 // truncated responses remain failures; a repair must not certify lost content.
 func rcSweepChunk(ctx context.Context, prov provider.Provider, req provider.Request, changed map[string]bool, chunk int) ([]string, []rcOutputAttempt, error) {
 	var attempts []rcOutputAttempt
+	var retained []string
+	seen := map[string]bool{}
 	for n := 0; n < 2; n++ {
 		stage := "sweep"
 		if n > 0 {
@@ -77,23 +87,29 @@ func rcSweepChunk(ctx context.Context, prov provider.Provider, req provider.Requ
 		if err != nil {
 			a.Error = err.Error()
 			attempts = append(attempts, a)
-			return nil, attempts, err
+			return retained, attempts, err
 		}
 		if resp.FinishReason == message.FinishReasonMaxTokens {
 			err = fmt.Errorf("sweep response truncated")
 			a.Error = err.Error()
 			attempts = append(attempts, a)
-			return nil, attempts, err
+			return retained, attempts, err
 		}
 		issues, decodeErr := rcDecodeSweep(raw, changed)
+		for _, issue := range issues {
+			if !seen[issue] {
+				retained = append(retained, issue)
+				seen[issue] = true
+			}
+		}
 		if decodeErr == nil {
 			attempts = append(attempts, a)
-			return issues, attempts, nil
+			return retained, attempts, nil
 		}
 		a.Error = decodeErr.Error()
 		attempts = append(attempts, a)
 		if n == 1 || ctx.Err() != nil {
-			return nil, attempts, decodeErr
+			return retained, attempts, decodeErr
 		}
 		req.Messages = append(append([]message.Message(nil), req.Messages...),
 			message.Message{Role: message.RoleAssistant, Parts: []message.ContentPart{message.TextContent{Text: raw}}},

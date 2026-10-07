@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -84,5 +85,50 @@ func TestSweepFailureSurvivesMergeAndCompletionRecord(t *testing.T) {
 	inc.recordSweep(sw)
 	if inc.Execution.Discovery != "incomplete" || inc.Execution.Verification != "completed" || len(inc.Execution.Sweeps) != 2 {
 		t.Fatalf("bad completeness: %+v", inc.Execution)
+	}
+}
+
+func TestSweepRecordedBadPathsDoNotDiscardValidSiblings(t *testing.T) {
+	raw, err := os.ReadFile("testdata/sweep-keycloak-32918.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{
+		"model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/idp/InfinispanIdentityProviderStorageProvider.java",
+		"server-spi/src/main/java/org/keycloak/models/IdentityProviderStorageProvider.java",
+		"services/src/main/java/org/keycloak/organization/forms/login/freemarker/model/OrganizationAwareIdentityProviderBean.java",
+		"testsuite/integration-arquillian/tests/base/src/test/java/org/keycloak/testsuite/organization/cache/OrganizationCacheTest.java",
+	}
+	changed := map[string]bool{}
+	patches := map[string]string{}
+	for _, p := range paths {
+		changed[p] = true
+		patches[p] = "diff " + p
+	}
+	issues, err := rcDecodeSweep(string(raw), changed)
+	if err == nil || len(issues) != 11 || !strings.Contains(strings.Join(issues, "\n"), "literal alias") {
+		t.Fatalf("lost valid siblings or hid bad paths: %d, %v", len(issues), err)
+	}
+	for _, failRepair := range []bool{false, true} {
+		calls := 0
+		p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+			calls++
+			if calls == 2 && failRepair {
+				return provider.Response{}, errors.New("429")
+			}
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: string(raw)}}, FinishReason: message.FinishReasonEndTurn}, nil
+		}}
+		result := rcRunSweepWith(context.Background(), p, "test", "off", "", "", paths, patches)
+		if calls != 2 || result.Failed != 1 || len(result.Issues) != 11 || len(result.Sources) != 1 || len(result.Runs[0].Attempts) != 2 {
+			t.Fatalf("partial sweep lost proposals, evidence, or diagnostics: %+v", result)
+		}
+	}
+}
+
+func TestStructuredSweepDoesNotInterpretRetractionPhrases(t *testing.T) {
+	raw := strings.Replace(sweepFinding, "nil dereference", "The old check was safe, which is correct, but the new branch dereferences nil", 1)
+	issues, err := rcDecodeSweep(raw, map[string]bool{"a.go": true})
+	if err != nil || len(issues) != 1 {
+		t.Fatalf("phrase discarded a structured proposal: %v %v", issues, err)
 	}
 }
