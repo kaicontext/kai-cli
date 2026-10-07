@@ -64,7 +64,11 @@ type rcSweepRun struct {
 func rcSweepChunk(ctx context.Context, prov provider.Provider, req provider.Request, changed map[string]bool, chunk int) ([]string, []rcOutputAttempt, error) {
 	var attempts []rcOutputAttempt
 	for n := 0; n < 2; n++ {
-		resp, err := prov.Send(ctx, req)
+		stage := "sweep"
+		if n > 0 {
+			stage = "sweep_repair"
+		}
+		resp, err := prov.Send(rcUsageStage(ctx, stage), req)
 		raw := rcResponseText(resp)
 		a := rcOutputAttempt{Stage: "sweep", Raw: raw, Chunk: chunk}
 		if n > 0 {

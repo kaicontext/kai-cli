@@ -1,0 +1,25 @@
+{
+  "author": "THE PULL REQUEST, in the author's words. This is the change's stated goal; the commit messages below are how it was built.\n\n# Add cache for IdentityProviderStorageProvider.getForLogin\n\nCloses #32573\r\n\r\n<!---\r\nPlease read https://github.com/keycloak/keycloak/blob/main/CONTRIBUTING.md and follow these guidelines when contributing to Keycloak\r\n-->\n\n--- the commits that make it up ---\n\nAdd cache for IdentityProviderStorageProvider.getForLogin\n\nCloses #32573\n\nSigned-off-by: Stefan Guilhen <sguilhen@redhat.com>",
+  "decision": {
+    "acceptanceQuote": "Add cache for IdentityProviderStorageProvider.getForLogin",
+    "id": 1,
+    "decision": "The tightened `getLoginPredicate()` (server-spi:252-256) now excludes org-linked IDPs without `broker-public=true` from the base `IdentityProviderBean.federatedProviderPredicate()` path, so a user with a federated link to an org-linked *private* broker will no longer see that broker on the standard login page. This affects end-user login display and is a deliberate behavior change; it should be confirmed as intended and noted in the PR/upgrade docs.",
+    "status": "supported",
+    "reason": "The predicate change is in the diff. The base bean's federatedProviderPredicate() uses it (source 12 shows the call), so it changes who sees which login IDPs. The PR description does not mention it, so a human should confirm it.",
+    "evidence": [
+      {
+        "source": 4,
+        "lineStart": 252,
+        "lineEnd": 256,
+        "coord": "file",
+        "path": "server-spi/src/main/java/org/keycloak/models/IdentityProviderStorageProvider.java"
+      },
+      {
+        "source": 12,
+        "lineStart": 10,
+        "lineEnd": 11,
+        "coord": "rows"
+      }
+    ]
+  }
+}

@@ -280,7 +280,7 @@ func rcFinalize(merged *rcChallengeResult) {
 			merged.FailedChecks++
 		}
 	}
-	merged.VerificationIncomplete = merged.FailedChecks > 0
+	merged.VerificationIncomplete = merged.FailedChecks > 0 || (merged.AcceptanceAudit != nil && merged.AcceptanceAudit.Error != "")
 	supported, refuted, unresolved := 0, 0, 0
 	for _, a := range merged.Allegations {
 		switch a.Status {

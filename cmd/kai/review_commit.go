@@ -292,6 +292,8 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	if prov == nil {
 		return fmt.Errorf("no LLM provider available (run `kai login`)")
 	}
+	prov, usageMeter := rcMeterProvider(prov, fmt.Sprintf("review-%s-%d", rcShort(hash), time.Now().UnixNano()))
+	ctx = rcUsageStage(ctx, "main")
 	model = rcStageModel(rcStageMain, model)
 	stageModels := map[string]string{
 		rcStageQuickDraft:     rcFastModel(model, provKind),
@@ -576,7 +578,8 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// Additive and optional; readers that do not know it ignore it.
 			Challenge *rcChallengeResult `json:"challenge,omitempty"`
 			Execution *rcExecution       `json:"execution,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, rcExecutionOf(inc)}, "", "  ")
+			Usage     *rcUsageSnapshot   `json:"usage,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, rcExecutionOf(inc), usageMeter.snapshot()}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -659,6 +662,7 @@ func rcReviewProvider() (provider.Provider, string, provider.Kind) {
 }
 
 func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, body, diff string) (string, error) {
+	ctx = rcUsageStage(ctx, "intent")
 	var in strings.Builder
 	in.WriteString("COMMIT MESSAGE:\n")
 	in.WriteString(strings.TrimSpace(subject))
@@ -1567,6 +1571,7 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 // run's message history, demanding the final write-up. Best-effort: any
 // failure returns "" and the caller keeps whatever the run produced.
 func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) string {
+	ctx = rcUsageStage(ctx, "conclusion")
 	if len(transcript) == 0 {
 		return ""
 	}
