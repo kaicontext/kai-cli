@@ -351,6 +351,8 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	if prov == nil {
 		return fmt.Errorf("no LLM provider available (run `kai login`)")
 	}
+	prov, usageMeter := rcMeterProvider(prov, fmt.Sprintf("review-%s-%d", rcShort(hash), time.Now().UnixNano()))
+	ctx = rcUsageStage(ctx, "main")
 	model = rcStageModel(rcStageMain, model)
 	stageModels := map[string]string{
 		rcStageQuickDraft:     rcFastModel(model, provKind),
@@ -633,10 +635,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// Additive and optional; readers that do not know it ignore it.
 			Challenge *rcChallengeResult `json:"challenge,omitempty"`
 			Execution *rcExecution       `json:"execution,omitempty"`
-			// IncompleteReason says, in fixed labels, why an incomplete
-			// review stopped, so the server need not infer it from Review.
+			// IncompleteReason records why an incomplete review stopped.
 			IncompleteReason *rcIncompleteReason `json:"incompleteReason,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, rcExecutionOf(inc), reason}, "", "  ")
+			Usage            *rcUsageSnapshot    `json:"usage,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, rcExecutionOf(inc), reason, usageMeter.snapshot()}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -719,6 +721,7 @@ func rcReviewProvider() (provider.Provider, string, provider.Kind) {
 }
 
 func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, body, diff string) (string, error) {
+	ctx = rcUsageStage(ctx, "intent")
 	var in strings.Builder
 	in.WriteString("COMMIT MESSAGE:\n")
 	in.WriteString(strings.TrimSpace(subject))
@@ -1641,6 +1644,7 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 // failure returns "" and the caller keeps whatever the run produced. The
 // second result is rcFailureCategory's label for why it returned "".
 func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
+	ctx = rcUsageStage(ctx, "conclusion")
 	if len(transcript) == 0 {
 		return "", "no_transcript"
 	}

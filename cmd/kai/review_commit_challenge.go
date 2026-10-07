@@ -225,6 +225,7 @@ type rcDecisionResult struct {
 // it could not settle is withheld and listed under "Could not verify"; it does
 // not make the review incomplete (see rcValidateChallenge).
 type rcChallengeResult struct {
+	AcceptanceAudit        *rcAcceptanceAudit   `json:"acceptanceAudit,omitempty"`
 	OutputAttempts         []rcOutputAttempt    `json:"outputAttempts,omitempty"`
 	Review                 string               `json:"-"`
 	VerificationIncomplete bool                 `json:"verificationIncomplete,omitempty"`
@@ -584,6 +585,9 @@ func rcChallengeReviewWith(ctx context.Context, prov provider.Provider, model, d
 	// repeat, as "(also: …)" locations, before anything is checked.
 	draft, _ = rcMergeDuplicateIssues(draft)
 	res, err := rcChallengeBatches(ctx, prov, model, draft, sources, extra, sandbox)
+	if err == nil {
+		rcAuditAcceptance(ctx, prov, model, res)
+	}
 	if err != nil || len(speculative) == 0 {
 		return res, err
 	}
@@ -597,6 +601,7 @@ func rcChallengeReviewWith(ctx context.Context, prov provider.Provider, model, d
 // rcChallengeDraft is the gate itself, over a draft whose speculative issues
 // are already gone.
 func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
+	ctx = rcUsageStage(ctx, "verification")
 	_, issues, decisions, draftMatch, draftReady, _ := rcParseReviewOutput(draft)
 	if len(issues) == 0 && len(decisions) == 0 {
 		return &rcChallengeResult{Review: rcAssembleReview(nil, nil, nil, nil, draftMatch, draftReady, "No proposed defects to verify.")}, nil
