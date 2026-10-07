@@ -46,7 +46,8 @@ const rcInferIntentSystem = "You reconstruct the INTENT of a merged pull request
 	"Write the intent as a short specification of the desired end-state — what the change is supposed to ACHIEVE, not a " +
 	"summary of which lines changed. 2 to 6 sentences. Be FAITHFUL to the author, not stricter than they were. Treat the " +
 	"commit message as the source of truth for the goal; the diff is only evidence. Output only the intent prose: no " +
-	"preamble, no markdown headers, no fences."
+	"preamble, no markdown headers, no fences. Never infer author acceptance of a regression from the diff. " +
+	"When the author did not state a behavior or tradeoff, describe it as uncertain; do not invent quotations or consent."
 
 // rcReviewSystem is composed from reviewskill/ (review_commit_skill.go).
 
@@ -345,7 +346,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			fastModel, rcFastChallengeModel(model), rcFastHardDeadline)
 		phase := time.Now()
 		raw, challenge, err = rcRunFastReview(ctx, prov, fastModel, rcFastChallengeModel(model), repoRoot, authorContext, stated, intentBody, diff, changedPaths)
-		inc = &rcIncomplete{Execution: &rcExecution{Discovery: "completed", Verification: "completed"}}
+		inc = &rcIncomplete{Execution: &rcExecution{Discovery: "completed", Verification: "completed", AuthorText: authorContext}}
 		if err != nil {
 			inc.ChallengeFailure = err.Error()
 			inc.Execution.Discovery, inc.Execution.Verification = "incomplete", "not_started"
@@ -746,6 +747,7 @@ func rcRepoHeader(repo string) string {
 // rcReviewSystem rides in Options.System underneath the mode prompt.
 func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, hosts, diff string, changed []string, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
 	// The packs for this change's languages and risk areas (review_commit_skill.go).
+	ctx = rcWithAuthorText(ctx, sourceContext)
 	packs := rcPacksFor(diff)
 	if len(packs) > 0 {
 		fmt.Fprintf(os.Stderr, "  review skill packs: %s\n", strings.Join(packs, ", "))
@@ -809,7 +811,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	}
 	user.WriteString(hosts)
 	user.WriteString(rcReviewHints(diff))
-	user.WriteString("INTENT:\n")
+	user.WriteString("INFERRED INTENT (model hypothesis, NOT an author statement or evidence of acceptance):\n")
 	user.WriteString(strings.TrimSpace(intent))
 	user.WriteString("\n\nDIFF:\n")
 	if strings.TrimSpace(diff) == "" {
@@ -853,7 +855,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// read-only tool set (+ kai_impact / kai_diff). ReadOnly is belt and
 		// braces on top of the mode's whitelist.
 		Mode:       agent.ModeReview,
-		System:     rcReviewSystemFor(packs),
+		System:     rcReviewSystemFor(packs) + "\n\n" + rcAuthorPolicy,
 		ReadOnly:   true,
 		EnableBash: false,
 		MaxTurns:   rcReviewMaxTurns(len(changed)),
@@ -910,6 +912,8 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	}
 	raw := rcRestoreCodaMarker(strings.TrimSpace(res.FinalText))
 	inc.recordOutput("main", res.FinalText)
+	inc.Execution.AuthorText = sourceContext
+	inc.Execution.InferredIntent = intent
 
 	// COVERAGE GATE. A review that never opened a changed file is not a
 	// verdict on it, and until now the only consequence was a line in the
@@ -1590,7 +1594,7 @@ func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model
 		defer cancel()
 		return prov.Send(cctx, provider.Request{
 			Model:            model,
-			System:           rcReviewSystem + rcOutputInstruction,
+			System:           rcReviewSystem + rcAuthorPolicy + rcOutputInstruction,
 			OutputJSONSchema: rcOutputSchema(),
 			MaxTokens:        rcTokensFor(2500, rcStageEffort(rcStageConclusion)),
 			Messages:         m,

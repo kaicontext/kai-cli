@@ -145,10 +145,12 @@ type rcOutputAttempt struct {
 	Error string `json:"error,omitempty"`
 }
 type rcExecution struct {
-	Failure      string            `json:"failure,omitempty"`
-	Discovery    string            `json:"discovery"`
-	Verification string            `json:"verification"`
-	Attempts     []rcOutputAttempt `json:"attempts,omitempty"`
+	AuthorText     string            `json:"authorText,omitempty"`
+	InferredIntent string            `json:"inferredIntent,omitempty"`
+	Failure        string            `json:"failure,omitempty"`
+	Discovery      string            `json:"discovery"`
+	Verification   string            `json:"verification"`
+	Attempts       []rcOutputAttempt `json:"attempts,omitempty"`
 }
 
 func (i *rcIncomplete) recordOutput(stage, raw string) {
