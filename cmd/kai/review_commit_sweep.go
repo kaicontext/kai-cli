@@ -61,6 +61,7 @@ var rcSweepSkip = regexp.MustCompile(`(?i)(^|/)(package-lock\.json|yarn\.lock|pn
 // rcSweepResult is what the sweep hands the gate: the defects it proposes,
 // and the diff chunks they were read from, which become citable sources.
 type rcSweepResult struct {
+	Runs    []rcSweepRun
 	Issues  []string
 	Sources []rcSource
 	Chunks  int
@@ -178,14 +179,11 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, effort, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, rcSweepDeadline)
 	defer cancel()
-	changed := map[string]bool{}
-	for _, p := range order {
-		changed[p] = true
-	}
 	type out struct {
-		issues []string
-		source string
-		err    error
+		attempts []rcOutputAttempt
+		issues   []string
+		source   string
+		err      error
 	}
 	outs := make([]out, len(chunks))
 	sem := make(chan struct{}, rcSweepParallel)
@@ -198,11 +196,11 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, effort, 
 			defer func() { <-sem }()
 			var b strings.Builder
 			if strings.TrimSpace(intent) != "" {
-				b.WriteString("WHAT THE CHANGE IS FOR (context, not a claim to verify):\n")
+				b.WriteString("INFERRED INTENT (model hypothesis, never author approval):\n")
 				b.WriteString(rcOneLine(intent, 600))
 				b.WriteString("\n\n")
 			}
-			b.WriteString("FILES IN THIS PART (every ISSUES bullet must begin with one of these paths, verbatim, then :line):\n")
+			b.WriteString("FILES IN THIS PART (each finding.file must be one of these paths):\n")
 			for _, f := range files {
 				fmt.Fprintf(&b, "  %s\n", f)
 			}
@@ -219,37 +217,25 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, effort, 
 				}
 			}
 			b.WriteString(src.String())
-			resp, err := prov.Send(ctx, provider.Request{
+			changed := map[string]bool{}
+			for _, file := range files {
+				changed[file] = true
+			}
+			issues, attempts, err := rcSweepChunk(ctx, prov, provider.Request{
 				Model:           model,
-				System:          system + rcAuthorPolicy + rcOutputInstruction,
+				System:          system + rcAuthorPolicy + rcSweepOutputInstruction,
 				MaxTokens:       rcSweepMaxTokens,
 				ReasoningEffort: effort,
 				Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
-			})
-			if err != nil {
-				outs[i] = out{err: err}
-				return
-			}
-			if resp.FinishReason == message.FinishReasonMaxTokens {
-				fmt.Fprintf(os.Stderr, "  sweep: a chunk hit the %d-token output limit; keeping the issues it finished\n", rcSweepMaxTokens)
-			}
-			var text strings.Builder
-			for _, part := range resp.Parts {
-				if t, ok := part.(message.TextContent); ok {
-					text.WriteString(t.Text)
-				}
-			}
-			decoded, decodeErr := rcDecodeReview(text.String())
-			if decodeErr != nil {
-				outs[i] = out{err: fmt.Errorf("invalid sweep output: %w", decodeErr)}
-				return
-			}
-			outs[i] = out{issues: rcSweepIssues(decoded.draft(), changed), source: src.String()}
+			}, changed, i+1)
+			outs[i] = out{issues: issues, attempts: attempts, source: src.String(), err: err}
 		}(i, files)
 	}
 	wg.Wait()
 	seen := map[string]bool{}
+	run := rcSweepRun{Model: model, Chunks: len(chunks)}
 	for _, o := range outs {
+		run.Attempts = append(run.Attempts, o.attempts...)
 		if o.err != nil {
 			res.Failed++
 			fmt.Fprintf(os.Stderr, "  sweep: a chunk failed (%v) — the review proceeds without it\n", o.err)
@@ -265,6 +251,8 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, effort, 
 			}
 		}
 	}
+	run.Failed = res.Failed
+	res.Runs = append(res.Runs, run)
 	return res
 }
 
@@ -570,11 +558,16 @@ func rcMergeSweeps(a, b rcSweepResult) rcSweepResult {
 	}
 	out := a
 	out.Issues = issues
-	if len(out.Sources) == 0 {
-		out.Sources = b.Sources
-	}
-	if a.Failed > 0 && b.Failed < a.Failed {
-		out.Failed = b.Failed
+	out.Chunks = a.Chunks + b.Chunks
+	out.Failed = a.Failed + b.Failed
+	out.Runs = append(append([]rcSweepRun(nil), a.Runs...), b.Runs...)
+	sourceSeen := map[string]bool{}
+	out.Sources = nil
+	for _, src := range append(append([]rcSource(nil), a.Sources...), b.Sources...) {
+		if !sourceSeen[src.Text] {
+			out.Sources = append(out.Sources, src)
+			sourceSeen[src.Text] = true
+		}
 	}
 	return out
 }
