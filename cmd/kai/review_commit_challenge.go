@@ -1187,10 +1187,16 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	}
 
 	res := &rcChallengeResult{Allegations: results, Decisions: dresults, unassessed: unassessed}
+	// A confirmed nit is published, folded, and never lowers MERGE_READY
+	// ("A NIT never lowers MERGE_READY"), so it is not a supported defect for
+	// the cap below: counting it held a doc-comment-only review at 3/5.
 	supported, refuted, unresolved := 0, 0, 0
 	for _, r := range results {
 		switch r.Status {
 		case rcStatusSupported:
+			if _, nit := rcSplitNit(r.Issue); nit {
+				continue
+			}
 			supported++
 		case rcStatusRefuted:
 			refuted++
