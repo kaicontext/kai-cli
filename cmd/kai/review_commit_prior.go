@@ -14,6 +14,12 @@ package main
 // that changed since that commit when the clone has it, and the rule
 // (rcReviewSystem, "YOU HAVE REVIEWED THIS BEFORE"): keep what still holds,
 // drop what was fixed, and move the score only for a reason you can name.
+//
+// It also carries what people answered: a line comment of Kai's that someone
+// replied to ("intentional", "not an issue"). On kai-server#434 the author
+// answered "intentional" to the only open defect; the next review listed no
+// findings and still scored 3/5, its prose asking for the guard the author
+// had just declined — it knew what it said, not what was said back.
 
 import (
 	"encoding/json"
@@ -32,6 +38,10 @@ type rcPrior struct {
 		Kind string `json:"kind"`
 		Text string `json:"text"`
 	} `json:"points"`
+	Answered []struct {
+		Point string `json:"point"`
+		Reply string `json:"reply"`
+	} `json:"answered"`
 }
 
 // rcPriorFromEnv reads KAI_PRIOR_REVIEW; nil when it is unset or unreadable.
@@ -85,6 +95,12 @@ func rcPriorBlock(p *rcPrior, changed []string, known bool) string {
 	}
 	for _, pt := range p.Points {
 		fmt.Fprintf(&b, "- [%s] %s\n", pt.Kind, strings.TrimSpace(pt.Text))
+	}
+	if len(p.Answered) > 0 {
+		b.WriteString("Answered on the pull request since — see ANSWERED POINTS:\n")
+		for _, a := range p.Answered {
+			fmt.Fprintf(&b, "- you said: %s\n  they replied: %s\n", strings.TrimSpace(a.Point), strings.TrimSpace(a.Reply))
+		}
 	}
 	switch {
 	case !known:
