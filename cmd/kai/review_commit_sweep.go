@@ -55,6 +55,7 @@ Rules:
 - Be concrete: say what is wrong and what it should be. No hedging ("might", "could potentially", "consider"), no general advice, no "add a test" without a specific wrong behaviour it would catch, no praise.
 - Do not report a problem that depends on a future code change.
 - One defect per line of output. If the same mistake repeats, write it once and add "(also: path:line, …)".
+- Mark a defect that cannot change what the program does — a wrong comment, docstring, README or log message, a typo in text nothing parses, a dead duplicate line — with "nit: " before its path. A typo in an identifier, key or user-facing string that something reads is not a nit. When in doubt, it is not a nit.
 - A line can carry more than one defect. After you find one, keep checking the same lines for a DIFFERENT one — a second wrong value, a missing check beside the wrong one, a test that also asserts the wrong thing — and list each on its own bullet. Stopping at the first plausible problem is how real defects are missed.
 - It is fine to report nothing for a chunk that is correct. Do not pad.
 - Never write a bullet for a line you checked and found correct. Think it through before writing; a bullet is a defect, not a note.
@@ -62,6 +63,7 @@ Rules:
 Output ONLY this, nothing before or after:
 ISSUES:
 - <path>:<line> — <the defect, one sentence>
+- nit: <path>:<line> — <a defect that cannot change behaviour>
 or, when there is nothing:
 ISSUES:
 - (none)`

@@ -172,3 +172,19 @@ func TestPromptsAskForOneIssuePerCause(t *testing.T) {
 		t.Error("challenge prompt does not treat also-locations as one allegation")
 	}
 }
+
+// Two identical nits at different places fold into one, like any issue, and
+// the folded bullet is still a nit (kai-cli#163 review).
+func TestIdenticalNitsFoldIntoOne(t *testing.T) {
+	out, _ := rcMergeDuplicateIssues(rcTestReview(
+		"nit: graph/build.rs:80 — the `cargo:rustc-link-search=/usr/lib/llvm-23/lib` line is printed twice, which is harmless but redundant.",
+		"nit: graph/build.rs:84 — the `cargo:rustc-link-search=/usr/lib/llvm-23/lib` line is printed twice, which is harmless but redundant.",
+	))
+	_, issues, _, _, _, _ := rcParseReviewOutput(out)
+	if len(issues) != 1 {
+		t.Fatalf("issues = %d %q, want the two nits folded into one", len(issues), issues)
+	}
+	if _, nit := rcSplitNit(issues[0]); !nit || !strings.Contains(issues[0], "graph/build.rs:84") {
+		t.Errorf("folded issue = %q, want a nit naming both locations", issues[0])
+	}
+}

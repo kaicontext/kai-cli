@@ -179,6 +179,7 @@ func rcIsEmptyListItem(item string) bool {
 var rcIssueLocationRe = regexp.MustCompile(`^\s*` + "`?" + `([A-Za-z0-9_./\-]+\.[A-Za-z0-9]+):(\d+)`)
 
 func rcIssueLocation(item string) (path string, line int, ok bool) {
+	item, _ = rcSplitNit(item)
 	m := rcIssueLocationRe.FindStringSubmatch(item)
 	if m == nil {
 		return "", 0, false
@@ -188,6 +189,27 @@ func rcIssueLocation(item string) (path string, line int, ok bool) {
 		return "", 0, false
 	}
 	return m[1], n, true
+}
+
+// rcNitPrefix marks an ISSUES bullet the reviewer judged a nit: a real defect
+// that cannot change what the program does — a comment, docstring, README or
+// message that is wrong, a typo in text nothing parses, a dead duplicate line.
+// It is fact-checked like any issue, and travels on the claim as "Nit: " (the
+// way a DECISION travels as "Decision: ") so the server can keep it out of the
+// line comments and the defect count. On FalkorDB's first week 80 of 88
+// inline comments read as fix-before-merge, about a third of them about docs.
+const rcNitPrefix = "nit:"
+
+// rcSplitNit strips a leading nit marker (any case, optional backticks or
+// bold) from an ISSUES bullet and reports whether it was there.
+func rcSplitNit(item string) (rest string, nit bool) {
+	t := strings.TrimSpace(item)
+	t = strings.TrimLeft(t, "*_")
+	if len(t) >= len(rcNitPrefix) && strings.EqualFold(t[:len(rcNitPrefix)], rcNitPrefix) {
+		rest = strings.TrimLeft(t[len(rcNitPrefix):], "*_ ")
+		return rest, true
+	}
+	return item, false
 }
 
 // rcFileLines reads path at hash from git (the tree the reviewer was given,
@@ -255,6 +277,9 @@ func rcResolvePath(written string, tree []string) (resolved string, matches int)
 // a short file name resolve to its full path; nil takes the path as written.
 func rcGroundIssue(hash, item string, tree []string, readFile func(hash, path string) ([]string, bool)) finding.Claim {
 	c := finding.Claim{Statement: item, Tag: finding.TagRisk}
+	if rest, nit := rcSplitNit(item); nit {
+		c.Statement = "Nit: " + rest
+	}
 	written, line, ok := rcIssueLocation(item)
 	if !ok {
 		c.Lookup = "no path:line given — held until the reviewer names where"
