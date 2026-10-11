@@ -60,10 +60,7 @@ func TestChangedSinceListsFilesOrSaysUnknown(t *testing.T) {
 
 func TestPriorBlock(t *testing.T) {
 	p := &rcPrior{Head: "19db9fca4cfd10a1b24a", Readiness: 3, Summary: "One fix before merge."}
-	p.Points = append(p.Points, struct {
-		Kind string `json:"kind"`
-		Text string `json:"text"`
-	}{"defect", "internal/retry.go:12 — `lastErr` is swallowed"})
+	p.Points = append(p.Points, rcPriorPoint{Kind: "defect", Text: "internal/retry.go:12 — `lastErr` is swallowed"})
 
 	b := rcPriorBlock(p, []string{"internal/retry.go"}, true)
 	for _, want := range []string{"YOUR PREVIOUS REVIEW OF THIS PULL REQUEST (of commit 19db9fca4cfd, MERGE_READY 3)", "Summary then: One fix before merge.",

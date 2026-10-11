@@ -34,14 +34,19 @@ type rcPrior struct {
 	Head      string `json:"head"`
 	Readiness int    `json:"readiness"`
 	Summary   string `json:"summary"`
-	Points    []struct {
-		Kind string `json:"kind"`
-		Text string `json:"text"`
-	} `json:"points"`
+	Points    []rcPriorPoint `json:"points"`
 	Answered []struct {
 		Point string `json:"point"`
 		Reply string `json:"reply"`
 	} `json:"answered"`
+}
+
+// rcPriorPoint is one earlier point; Ref is set on defects and is what the
+// reviewer tags the point with when it still holds (review_commit_earlier.go).
+type rcPriorPoint struct {
+	Kind string `json:"kind"`
+	Text string `json:"text"`
+	Ref  string `json:"ref"`
 }
 
 // rcPriorFromEnv reads KAI_PRIOR_REVIEW; nil when it is unset or unreadable.
@@ -94,6 +99,10 @@ func rcPriorBlock(p *rcPrior, changed []string, known bool) string {
 		b.WriteString("Summary then: " + s + "\n")
 	}
 	for _, pt := range p.Points {
+		if pt.Ref != "" {
+			fmt.Fprintf(&b, "- [%s, ref %s] %s\n", pt.Kind, pt.Ref, strings.TrimSpace(pt.Text))
+			continue
+		}
 		fmt.Fprintf(&b, "- [%s] %s\n", pt.Kind, strings.TrimSpace(pt.Text))
 	}
 	if len(p.Answered) > 0 {
