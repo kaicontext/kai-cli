@@ -340,3 +340,49 @@ func TestHostIsKnown(t *testing.T) {
 		}
 	}
 }
+
+// A nit is fact-checked like any issue — its location still has to exist —
+// and travels as "Nit: " so the server can keep it out of the line comments
+// and the defect count.
+func TestGroundIssueCarriesTheNitMarker(t *testing.T) {
+	files := map[string][]string{"README.md": {"# x", "Requires LLVM 21."}}
+	read := func(_ string, path string) ([]string, bool) { l, ok := files[path]; return l, ok }
+	hash := "01b3cf323d89eed7aaaaaaaaaaaaaaaaaaaaaaaa"
+
+	for _, item := range []string{
+		"nit: README.md:2 — says LLVM 21 but the Dockerfile installs clang-23",
+		"Nit: README.md:2 — says LLVM 21 but the Dockerfile installs clang-23",
+		"**nit:** README.md:2 — says LLVM 21 but the Dockerfile installs clang-23",
+	} {
+		c := rcGroundIssue(hash, item, nil, read)
+		if c.Statement != "Nit: README.md:2 — says LLVM 21 but the Dockerfile installs clang-23" {
+			t.Errorf("%q: statement = %q", item, c.Statement)
+		}
+		if !c.Resolved || !strings.Contains(c.Lookup, "README.md:2 @") {
+			t.Errorf("%q: a nit's location must still ground: %+v", item, c)
+		}
+	}
+	if c := rcGroundIssue(hash, "nit: README.md:9 — past the end", nil, read); c.Resolved {
+		t.Errorf("a nit on a line that does not exist must be held like any issue: %+v", c)
+	}
+	// Words that merely start like the marker are not one.
+	if c := rcGroundIssue(hash, "README.md:2 — nitpicky wording", nil, read); strings.HasPrefix(c.Statement, "Nit:") {
+		t.Errorf("an ordinary issue was marked a nit: %q", c.Statement)
+	}
+	if p, l, ok := rcIssueLocation("nit: README.md:2 — x"); !ok || p != "README.md" || l != 2 {
+		t.Errorf("rcIssueLocation through the marker = %q %d %v", p, l, ok)
+	}
+}
+
+// Every prompt that writes ISSUES teaches the marker, and the grounded one
+// says a nit never lowers the score.
+func TestPromptsTeachTheNitMarker(t *testing.T) {
+	for name, p := range map[string]string{"grounded": rcReviewSystem, "fast": rcFastReviewSystem, "sweep": rcSweepSystem} {
+		if !strings.Contains(p, `"nit: "`) || !strings.Contains(p, "- nit: ") {
+			t.Errorf("%s prompt does not teach the nit marker and its format", name)
+		}
+	}
+	if !strings.Contains(rcReviewSystem, "A NIT never lowers MERGE_READY") {
+		t.Error("the grounded prompt does not keep nits out of MERGE_READY")
+	}
+}

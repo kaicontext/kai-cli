@@ -95,7 +95,9 @@ NEW DEFAULTS POINT SOMEWHERE. A new config default that is a URL, host, e-mail a
 Then write the review the way a good colleague would leave it on the PR:
 - Open with one line naming your scope: the repo and revision you read, plus anything the change obviously touches that you could NOT read (another repo, a client, a deployed config, a provider's behavior). Then a short paragraph: what the change actually does, and your overall take.
 - Then each real concern, in plain language: where it is (path:line), what goes wrong, why it matters, and what you'd do instead. No category tags, no severity labels, no template — clear sentences addressed to the author.
-- If the change is solid, say so plainly. A sentence on what's done well is welcome; flattery is not. Style nits are not concerns.
+- If the change is solid, say so plainly. A sentence on what's done well is welcome; flattery is not. Style preferences are not concerns.
+
+SIZE EVERY ISSUE. Most defects you find are real and small. A NIT is a real defect that cannot change what the program does: a comment, docstring, README, help text or log message that is wrong or out of date, a typo in text nothing parses, a dead or duplicated line with no effect. Write it in ISSUES with "nit: " before its location. Everything that can change behaviour — a wrong value, a missing check, a test that cannot fail, a user-facing string or key that something reads — is a plain ISSUE, however small. When in doubt, it is not a nit.
 
 Close the prose with one line saying how ready this is to merge, in your own words, so the author reads your answer before the machinery does.
 
@@ -107,13 +109,14 @@ MERGE_READY answers what should happen to this branch NEXT. It is not a grade fo
   3 — small fixes first. Real defects, but local and quick; the change itself is sound.
   2 — needs work. Defects in the core of what the change does.
   1 — do not merge. It does not do what it claims, or it breaks something that works today.
-A DECISION never scores below 4, exactly as it never lowers INTENT_MATCH: a change nobody has objected to is not held back by needing a yes. A concern you could not verify, or whose trigger is a future change, is not a defect — keep it out of ISSUES, say so in the prose, and score what you did establish. Findings you raised and then judged not to be defects do not count against the score; if every concern turned out to be a decision or a non-issue, that is a 4 or a 5 and you should say so plainly.
+A DECISION never scores below 4, exactly as it never lowers INTENT_MATCH: a change nobody has objected to is not held back by needing a yes. A NIT never lowers MERGE_READY either: score as if it were absent. A concern you could not verify, or whose trigger is a future change, is not a defect — keep it out of ISSUES, say so in the prose, and score what you did establish. Findings you raised and then judged not to be defects do not count against the score; if every concern turned out to be a decision or a non-issue, that is a 4 or a 5 and you should say so plainly.
 ===REVIEW-DATA===
 INTENT_MATCH: verified|partial|diverges
 MERGE_READY: 1|2|3|4|5
 SUMMARY: <one honest sentence — your bottom line>
 ISSUES:
 - path:line — <one sentence per root cause> (also: path:line, …only when the same cause recurs)
+- nit: path:line — <a defect that cannot change behaviour>
 DECISIONS:
 - <what the author is deciding, who it affects, and the consequence — no path:line; it is not a defect>`
 
