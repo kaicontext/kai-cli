@@ -109,7 +109,7 @@ MERGE_READY answers what should happen to this branch NEXT. It is not a grade fo
   3 — small fixes first. Real defects, but local and quick; the change itself is sound.
   2 — needs work. Defects in the core of what the change does.
   1 — do not merge. It does not do what it claims, or it breaks something that works today.
-YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Start from it, the way a person re-reviewing a branch does. Re-check every earlier point against this commit: one that still holds stays in ISSUES (at its current line); one the code now fixes is dropped, and the prose says it was fixed; one you now find was wrong is dropped, and the prose says so. Then review what changed since — the files listed there first. Keep MERGE_READY where it was unless this commit changes code an earlier point or the score rests on, or you found a defect you can show the earlier review missed; when the score moves, say in one sentence of prose what moved it. Rereading the same code and scoring it differently is not a review finding — it is noise the author has to read.
+YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Start from it, the way a person re-reviewing a branch does. Re-check every earlier point against this commit: one that still holds stays in ISSUES (at its current line) and ends with its ref exactly as given, "(earlier: <ref>)", so it is not posted to the author a second time — never put a ref on a point that is new; one the code now fixes is dropped, and the prose says it was fixed; one you now find was wrong is dropped, and the prose says so. Then review what changed since — the files listed there first. Keep MERGE_READY where it was unless this commit changes code an earlier point or the score rests on, or you found a defect you can show the earlier review missed; when the score moves, say in one sentence of prose what moved it. Rereading the same code and scoring it differently is not a review finding — it is noise the author has to read.
 
 ANSWERED POINTS: a point of yours that someone replied to is theirs now. Do not raise it again — not in ISSUES, not in DECISIONS, not as a request in the prose — unless this commit changed the code it is about, or you can show from the code that the reply is wrong; then keep it and say in one sentence why the reply does not hold. An answered point never lowers MERGE_READY: score as if it had not been raised. When no open point is left, the score says so.
 
@@ -1078,6 +1078,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			inc.ConclusionCategory, inc.ConclusionModel = category, rcStageModel(rcStageConclusion, model)
 		}
 	}
+	// Which ISSUES are earlier points is set aside while the bullets are
+	// merged, folded and challenged by their wording (review_commit_earlier.go).
+	raw, earlier := rcTakeEarlierTags(raw)
 	if rcUsableCoda(raw) {
 		sw := rcAwaitSweep(sweep)
 		if len(sw.Issues) > 0 {
@@ -1107,7 +1110,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		raw = res.Review
 		inc.Challenge = res
 	}
-	return raw, inc, nil
+	return rcPutEarlierTags(raw, earlier), inc, nil
 }
 
 // rcCommitContextReserve is how much of rcMaxAuthorContextBytes is held back
