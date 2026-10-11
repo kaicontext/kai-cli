@@ -40,6 +40,10 @@ var rcIssueLeadRe = regexp.MustCompile(`^\s*` + "`?" + `[A-Za-z0-9_./\-]+\.[A-Za
 
 // rcIssueSentence is a bullet without its leading location.
 func rcIssueSentence(item string) string {
+	// Through the nit marker, as rcIssueLocation reads it: otherwise the
+	// lead regex cannot find the location and two identical nits on different
+	// lines never fold into one bullet.
+	item, _ = rcSplitNit(item)
 	return strings.TrimSpace(rcIssueLeadRe.ReplaceAllString(item, ""))
 }
 
