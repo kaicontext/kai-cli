@@ -35,11 +35,12 @@ func TestCommentLinePointsBecomeNits(t *testing.T) {
 		"- kailab-control/internal/smoketest/excerpt.go:14 — `text[:limit]` panics on a negative `limit`\n" +
 		"- kailab-control/internal/smoketest/excerpt.go:7 — the doc says characters (also: kailab-control/internal/smoketest/excerpt.go:14)\n" +
 		"- build.go:1 — the build tag excludes darwin\n" +
+		"- kailab-control/internal/smoketest/excerpt.go:8 — the doc names `max` (also: kailab-control/internal/smoketest/excerpt.go:7) — compare build.go:2\n" +
 		"- nit: kailab-control/internal/smoketest/excerpt.go:1 — already a nit\n" +
 		"DECISIONS:\n- kailab-control/internal/smoketest/excerpt.go:8 — not an issue bullet\n"
 	got := rcMarkCommentNits(raw, rcNitRead)
 	_, issues, decisions, _, _, _ := rcParseReviewOutput(got)
-	want := []bool{true, false, false, false, true}
+	want := []bool{true, false, false, false, true, true}
 	if len(issues) != len(want) {
 		t.Fatalf("issues = %q", issues)
 	}

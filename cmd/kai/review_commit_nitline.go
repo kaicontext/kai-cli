@@ -76,7 +76,11 @@ func rcAllCommentLines(item string, readFile func(path string) ([]string, bool))
 	}
 	locs := [][2]string{{path, strconv.Itoa(line)}}
 	if k := strings.Index(item, "(also:"); k >= 0 {
-		for _, m := range rcAlsoLocRe.FindAllStringSubmatch(item[k:], -1) {
+		also := item[k:]
+		if e := strings.Index(also, ")"); e >= 0 {
+			also = also[:e] // the list, not the prose after it
+		}
+		for _, m := range rcAlsoLocRe.FindAllStringSubmatch(also, -1) {
 			locs = append(locs, [2]string{m[1], m[2]})
 		}
 	}
