@@ -429,7 +429,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// The publication gate reads the reviewed commit to settle what the
 		// reviewer's own tool results do not show (review_commit_repo.go).
 		gateCtx := rcWithRepo(ctx, rcNewRepo(reviewCommitBase, ref, hash))
-		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, authorContext, intent, hosts, diff, rcPathsOf(files), sweep)
+		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, hash, authorContext, intent, hosts, diff, rcPathsOf(files), sweep)
 		if err != nil {
 			return err
 		}
@@ -783,7 +783,7 @@ func rcRepoHeader(repo string) string {
 // injection seeds turn 0 with real context, the session store and run log make
 // the run inspectable (`kai run summary`), and ApplyEffort honors KAI_SPEED.
 // rcReviewSystem rides in Options.System underneath the mode prompt.
-func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, sourceContext, intent, hosts, diff string, changed []string, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
+func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, hash, sourceContext, intent, hosts, diff string, changed []string, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
 	publicationCtx := ctx
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
@@ -1089,6 +1089,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			fmt.Fprintf(os.Stderr, "  sweep: %d defect(s) proposed from %d chunk(s) — %d added to the reviewer's %d\n",
 				len(sw.Issues), sw.Chunks, len(rcIssuesOf(raw))-before, before)
 		}
+		// A point whose every cited line is a comment is a nit, whatever
+		// the model called it (review_commit_nitline.go).
+		raw = rcMarkCommentNits(raw, func(path string) ([]string, bool) { return rcFileLines(hash, path) })
 		fmt.Fprintln(os.Stderr, "  challenging proposed defects before publication…")
 		gateModel := rcChallengeModel(model)
 		if gateModel != model {

@@ -318,13 +318,15 @@ func rcSweepIssues(text string, changed map[string]bool) []string {
 		if strings.HasPrefix(item, "(none)") {
 			continue
 		}
-		path := item
-		if i := strings.Index(item, ":"); i > 0 {
-			path = item[:i]
+		// A nit keeps its marker; the location is read past it.
+		body, nit := rcSplitNit(item)
+		path := body
+		if i := strings.Index(body, ":"); i > 0 {
+			path = body[:i]
 		} else {
 			continue
 		}
-		rest := item[len(path)+1:]
+		rest := body[len(path)+1:]
 		if len(rest) == 0 || rest[0] < '0' || rest[0] > '9' {
 			continue
 		}
@@ -333,6 +335,9 @@ func rcSweepIssues(text string, changed map[string]bool) []string {
 		}
 		if rcSweepRetracted.MatchString(item) {
 			continue
+		}
+		if nit {
+			item = "nit: " + body
 		}
 		issues = append(issues, item)
 	}
