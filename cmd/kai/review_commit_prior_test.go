@@ -85,3 +85,26 @@ func TestPriorBlock(t *testing.T) {
 		t.Error("the reviewer prompt lacks the re-review rule")
 	}
 }
+
+// What the author answered reaches the reviewer, with the rule that it is
+// not raised again and does not hold the score down (kai-server#434).
+func TestPriorBlockCarriesTheAnswers(t *testing.T) {
+	t.Setenv("KAI_PRIOR_REVIEW", `{"head":"ea7255b8993d","readiness":3,"answered":[{"point":"internal/smoketest/excerpt.go:12 — `+"`Excerpt`"+` still panics on a negative `+"`limit`"+`","reply":"Intentional — every caller passes a constant."}]}`)
+	p := rcPriorFromEnv()
+	if p == nil || len(p.Answered) != 1 {
+		t.Fatalf("prior = %+v", p)
+	}
+	b := rcPriorBlock(p, nil, true)
+	for _, want := range []string{"see ANSWERED POINTS", "- you said: internal/smoketest/excerpt.go:12 — `Excerpt` still panics", "they replied: Intentional — every caller passes a constant."} {
+		if !strings.Contains(b, want) {
+			t.Errorf("block lacks %q:\n%s", want, b)
+		}
+	}
+	if !strings.Contains(rcReviewSystem, "ANSWERED POINTS:") || !strings.Contains(rcReviewSystem, "An answered point never lowers MERGE_READY") {
+		t.Error("the reviewer prompt lacks the answered-points rule")
+	}
+	p.Answered = nil
+	if strings.Contains(rcPriorBlock(p, nil, true), "ANSWERED") {
+		t.Error("an answered heading with nothing answered")
+	}
+}
