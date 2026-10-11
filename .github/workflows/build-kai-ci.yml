@@ -194,6 +194,11 @@ jobs:
             echo "${m//-/_}_sha=$SHA" >> "$GITHUB_OUTPUT"
           done
           echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+          # The versions the binaries must REPORT: the tag minus its v, which
+          # is the form ci.yml's release builds stamp into kai and the form
+          # kai-tui keeps in kit's source constant.
+          echo "kai_version=${KAI_CLI_REF#v}" >> "$GITHUB_OUTPUT"
+          echo "kit_version=${KAI_TUI_REF#v}" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP (keyless WIF)
         uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
@@ -218,6 +223,11 @@ jobs:
           file: ws/kai-cli/deploy/kai-ci/Dockerfile
           platforms: linux/amd64
           push: true
+          # kai's version is an ldflag; without it the binary reports
+          # cmd/kai/main.go's stale default and every review log claims an
+          # update is available from a version that is not running.
+          build-args: |
+            KAI_VERSION=${{ steps.refs.outputs.kai_version }}
           tags: |
             ${{ env.IMAGE }}:cli-${{ steps.refs.outputs.kai_cli_sha }}
             ${{ env.IMAGE }}:run-${{ github.run_number }}
@@ -230,14 +240,35 @@ jobs:
       # Prove the image can actually run what the workflows invoke. A missing or
       # broken kit surfaces otherwise as a red agent run, minutes into a paid
       # engagement — the failure this whole image exists to avoid.
+      #
+      # And that each binary reports the release it was built from. kai-ci@
+      # sha256:05eecba855ec carried kai-cli v0.36.5 but its kai said 0.34.5
+      # (the ldflag was never passed), so every review log printed "Update
+      # available: 0.34.5 → 0.36.5" and read as if an old binary had run.
+      # Only stdout is compared: the update notice goes to stderr.
       - name: Smoke-test the binaries
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          WANT_KAI: ${{ steps.refs.outputs.kai_version }}
+          WANT_KIT: ${{ steps.refs.outputs.kit_version }}
         run: |
           set -euo pipefail
-          REF="${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
           docker run --rm --platform linux/amd64 "$REF" sh -c '
             set -e
-            for b in kai kit git jq curl; do command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }; done
-            kai --version && kit --version'
+            for b in kai kit git jq curl; do command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }; done'
+          # Cobra prints "<name> version <v>"; compare the last field exactly.
+          check() { # binary, want
+            local out got
+            out="$(docker run --rm --platform linux/amd64 "$REF" "$1" --version)"
+            echo "$out"
+            got="${out##* }"
+            if [ "$got" != "$2" ]; then
+              echo "::error::$1 --version reports '$got', want '$2' (the resolved tag)"
+              exit 1
+            fi
+          }
+          check kai "$WANT_KAI"
+          check kit "$WANT_KIT"
 
       - name: Report the digest to pin
         run: |
@@ -331,7 +362,8 @@ jobs:
           Modules: ${PROVENANCE}
 
           The image was smoke-tested before this PR was opened: kai, kit, git,
-          jq and curl all resolve inside it and both binaries report a version."
+          jq and curl all resolve inside it and both binaries report the
+          versions they were built from."
           git push -q origin "$BR"
 
       - name: Open the pin PR
@@ -366,7 +398,7 @@ jobs:
 
           **Built from:** ${PROVENANCE}
 
-          Smoke-tested inside the image before this was opened: \`kai\`, \`kit\`, \`git\`, \`jq\` and \`curl\` all resolve, and both binaries report a version.
+          Smoke-tested inside the image before this was opened: \`kai\`, \`kit\`, \`git\`, \`jq\` and \`curl\` all resolve, and \`kai --version\` / \`kit --version\` report the tags they were built from.
 
           Pinning stays a human decision on purpose — this PR removes the laptop build and the hand-copied digest, not the review. Check what changed in the binaries before merging: the reviewer's prompts, model choice and budgets live inside this image, so a bump can change what Kai says on every pull request.
           EOF
