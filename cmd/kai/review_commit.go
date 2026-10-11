@@ -109,6 +109,8 @@ MERGE_READY answers what should happen to this branch NEXT. It is not a grade fo
   3 — small fixes first. Real defects, but local and quick; the change itself is sound.
   2 — needs work. Defects in the core of what the change does.
   1 — do not merge. It does not do what it claims, or it breaks something that works today.
+YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Start from it, the way a person re-reviewing a branch does. Re-check every earlier point against this commit: one that still holds stays in ISSUES (at its current line); one the code now fixes is dropped, and the prose says it was fixed; one you now find was wrong is dropped, and the prose says so. Then review what changed since — the files listed there first. Keep MERGE_READY where it was unless this commit changes code an earlier point or the score rests on, or you found a defect you can show the earlier review missed; when the score moves, say in one sentence of prose what moved it. Rereading the same code and scoring it differently is not a review finding — it is noise the author has to read.
+
 A DECISION never scores below 4, exactly as it never lowers INTENT_MATCH: a change nobody has objected to is not held back by needing a yes. A NIT never lowers MERGE_READY either: score as if it were absent. A concern you could not verify, or whose trigger is a future change, is not a defect — keep it out of ISSUES, say so in the prose, and score what you did establish. Findings you raised and then judged not to be defects do not count against the score; if every concern turned out to be a decision or a non-issue, that is a 4 or a 5 and you should say so plainly.
 ===REVIEW-DATA===
 INTENT_MATCH: verified|partial|diverges
@@ -836,6 +838,12 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		user.WriteString(rcDepLimitsBlock(unresolved))
 		fmt.Fprintf(os.Stderr, "  dependencies: %d file(s) fetched, %d module(s) unread (%s)\n",
 			len(src), len(unresolved), time.Since(phase).Round(time.Millisecond))
+	}
+	// What Kai said last time about this pull request (review_commit_prior.go).
+	if prior := rcPriorFromEnv(); prior != nil {
+		changed, known := rcChangedSince(prior.Head)
+		user.WriteString(rcPriorBlock(prior, changed, known))
+		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(changed))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
 	// packages the change newly imports (review_commit_npmdeps.go). They go to
