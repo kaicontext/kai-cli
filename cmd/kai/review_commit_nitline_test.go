@@ -82,3 +82,17 @@ func TestConfirmedNitDoesNotCapReadiness(t *testing.T) {
 		t.Errorf("want the nit published and MERGE_READY 5:\n%s", res.Review)
 	}
 }
+
+// Lines tools read are not comments: a point about one is not a nit.
+func TestDirectivesAreNotComments(t *testing.T) {
+	for _, src := range []string{"#!/bin/sh", "#!/usr/bin/env python3", "//go:build linux", "// +build linux", "//nolint:errcheck", "# type: ignore", "# noqa: E501", "#include <stdio.h>", "/* eslint-disable */", "// @ts-expect-error"} {
+		if rcIsCommentLine(src) {
+			t.Errorf("%q was taken for a plain comment", src)
+		}
+	}
+	for _, src := range []string{"// Excerpt returns at most limit characters", "# Retries three times", " * the max argument", "-- counts rows"} {
+		if !rcIsCommentLine(src) {
+			t.Errorf("%q was not taken for a comment", src)
+		}
+	}
+}
