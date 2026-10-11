@@ -59,7 +59,7 @@ const rcReviewSystem = `You are reviewing a merged commit. You get the author's 
 
 Ground every claim before you make it. Confirm a suspicion with the graph (kai_callers / kai_dependents on the changed symbols, kai_context to understand one) or by reading the file — a changed signature whose callers were not updated is a defect; so are data races and state mutated outside its lock, resource leaks (goroutines, tickers, files, connections that are never stopped or closed), off-by-one and nil-dereference bugs, swallowed or misrouted errors, and missing validation on inputs. For anything that touches a secret — API key, token, password, session id, HMAC or signature — a plain ==/!= comparison is a timing side channel and must be a constant-time compare (subtle.ConstantTimeCompare / hmac.Equal); check every comparison you can see, and give authentication, authorization, and admin/override paths a specifically suspicious read. Walk the whole diff for each of these before concluding; don't stop at the first thing you find. A finding you would hedge ("could be wrong", "if X implements Y…", "couldn't verify") is not a finding — confirm it or drop it.
 
-A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY. Every ISSUE names two things: a reachable trigger in the code as it stands after this change — an input, caller, configuration or state that actually reaches the line — and the failure mechanism, step by step, from that trigger to the wrong result. "Dormant today, but breaks if another caller ever starts passing null" and "a latent footgun for a future strict comparison" are not defects: their trigger is a change nobody has made. Neither is "would break if the guards were reordered". But code that is wrong as written IS a defect today, whether or not a current caller hits it: a query arm that omits a condition its siblings apply, a new subclass that does not implement its base class's abstract methods, a function that mishandles an input its own signature, schema or type allows. The test is whether the failure needs someone to change code; if it does not, report it. A claim that an external API, library or query form is invalid — "this ORM cannot bind an array parameter" — is a defect only once you have verified it (kai_web_search, or the library's own source in the tree); unverified, it is an open question for the prose, and it never goes in ISSUES.
+A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY. Every ISSUE names two things: a reachable trigger in the code as it stands after this change — an input, caller, configuration or state that actually reaches the line — and the failure mechanism, step by step, from that trigger to the wrong result. "Dormant today, but breaks if another caller ever starts passing null" and "a latent footgun for a future strict comparison" are not defects: their trigger is a change nobody has made. Neither is "would break if the guards were reordered". But code that is wrong as written IS a defect today, whether or not a current caller hits it: a query arm that omits a condition its siblings apply, a new subclass that does not implement its base class's abstract methods, a function that mishandles an input its own signature, schema or type allows. The test is whether the failure needs someone to change code; if it does not, report it. A claim that an external API, library or query form is invalid — "this ORM cannot bind an array parameter" — is a defect only once you have verified it (kai_web_search, or the library's own source in the tree); unverified, it is an open question for the prose, and it never goes in ISSUES. A WRAPPER IS NOT ITS DEPENDENCY: when the change replaces local code with a component imported from a package (a design system, an SDK) and a thin wrapper around it, what the old code did may now live in the package. "The wrapper drops the side prop", "no longer accepts preventOutsideClose", "no longer renders the close icon" are defects only after you have read what the imported component declares — the TYPE DECLARATIONS block, when present, has it; otherwise the package's published types or source. falkordb-browser#2108 got nine such comments, and all nine were answered "not an issue": the package carried every one.
 
 ONE ROOT CAUSE, ONE ISSUE. When the same mistake shows up in several places — one helper's return shape misread by every caller, one missing guard copied into three handlers — write ONE ISSUE at the place that explains it best and list the others in the same bullet as "(also: path:line, path:line)". Several bullets for one cause read as several problems and bury the rest: three integrations that each misread one shared helper's return value are one finding with two "(also: …)" locations, not three. A bullet that begins "same …" is a location, not an issue.
 
@@ -837,6 +837,16 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		fmt.Fprintf(os.Stderr, "  dependencies: %d file(s) fetched, %d module(s) unread (%s)\n",
 			len(src), len(unresolved), time.Since(phase).Round(time.Millisecond))
 	}
+	// The same for JavaScript and TypeScript: the type declarations of the
+	// packages the change newly imports (review_commit_npmdeps.go). They go to
+	// the challenge too, which is where "the wrapper drops X" is settled.
+	var npmSrc []rcNpmSource
+	if deps := rcChangedNpmDeps(diff); len(deps) > 0 {
+		phase := time.Now()
+		npmSrc = rcFetchNpmSources(ctx, primary.Path, deps)
+		user.WriteString(rcNpmSourceBlock(npmSrc))
+		fmt.Fprintf(os.Stderr, "  npm packages: %d of %d read (%s)\n", len(npmSrc), len(deps), time.Since(phase).Round(time.Millisecond))
+	}
 	user.WriteString(hosts)
 	user.WriteString(rcReviewHints(diff))
 	user.WriteString("INTENT:\n")
@@ -1071,7 +1081,8 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		if gateModel != model {
 			fmt.Fprintf(os.Stderr, "  challenge model: %s (review model %s)\n", gateModel, model)
 		}
-		res, err := rcChallengeReviewWith(publicationCtx, prov, gateModel, raw, rcChallengeSources(transcript), sw.Sources, rcConfiguredSandbox())
+		extra := append(append([]rcSource(nil), sw.Sources...), rcNpmChallengeSources(npmSrc)...)
+		res, err := rcChallengeReviewWith(publicationCtx, prov, gateModel, raw, rcChallengeSources(transcript), extra, rcConfiguredSandbox())
 		if err == nil {
 			if n := rcWithholdUnsettledSweep(res, sw.Issues); n > 0 {
 				fmt.Fprintf(os.Stderr, "  sweep: %d proposal(s) the check could not settle were withheld\n", n)

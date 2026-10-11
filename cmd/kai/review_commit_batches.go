@@ -177,7 +177,7 @@ func rcBatchSources(sources, extra []rcSource, issues []string) []rcSource {
 	for _, s := range extra {
 		relevant := false
 		for p := range paths {
-			if strings.Contains(s.Text, "+++ b/"+p) || strings.Contains(s.Text, "--- a/"+p) {
+			if strings.Contains(s.Text, "+++ b/"+p) || strings.Contains(s.Text, "--- a/"+p) || rcContains(s.ForPaths, p) {
 				relevant = true
 				break
 			}
