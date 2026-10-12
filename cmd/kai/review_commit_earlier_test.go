@@ -51,3 +51,23 @@ func TestPriorBlockShowsRefsAndThePromptAsksForThem(t *testing.T) {
 		t.Error("the reviewer prompt does not ask for the tag")
 	}
 }
+
+// kai-cli#171: a decision that still stands carries its ref through the
+// challenge, keyed by its wording since it has no location.
+func TestEarlierTagsOnDecisions(t *testing.T) {
+	draft := rcReviewDataMarker + "\nMERGE_READY: 4\nISSUES:\n(none)\nDECISIONS:\n" +
+		"- The fact-check now supports a defect whose consequence is unverified; every review publishes more findings. (earlier: 0123456789ab)\n" +
+		"- A brand-new decision.\n"
+	stripped, refs := rcTakeEarlierTags(draft)
+	if strings.Contains(stripped, "(earlier:") || len(refs) != 1 {
+		t.Fatalf("stripped:\n%s\nrefs=%v", stripped, refs)
+	}
+	// The challenge re-quotes the bullet with other backticks and punctuation.
+	final := rcReviewDataMarker + "\nMERGE_READY: 4\nDECISIONS:\n" +
+		"- The fact-check now supports a defect whose consequence is unverified; every review publishes more findings\n" +
+		"- A brand-new decision.\n"
+	_, _, decisions, _, _, _ := rcParseReviewOutput(rcPutEarlierTags(final, refs))
+	if len(decisions) != 2 || !strings.HasSuffix(decisions[0], "(earlier: 0123456789ab)") || strings.Contains(decisions[1], "(earlier:") {
+		t.Errorf("decisions = %q", decisions)
+	}
+}
