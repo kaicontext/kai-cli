@@ -37,6 +37,8 @@ REFUTE an allegation that is only generic advice — "add a test", "consider han
 
 An ISSUE may name more places after "(also: …)": they are the same defect at other locations, one allegation, and one check.
 
+JUDGE THE DEFECT, NOT EVERY CONSEQUENCE IT ADDS. An ISSUE names what the code does wrong and often adds what follows outside it — what a database, library, platform or caller then does. When the sources establish the code defect, SUPPORT the allegation even if a further consequence rests on behaviour they do not show: write the finding from what the sources establish, and say in the finding which further consequence is unverified. Mark the check unverified only when the defect itself — the code doing the wrong thing — cannot be established. ("reply[:280] slices bytes, so a reply with a multi-byte character at the cut stores invalid UTF-8, and Postgres rejects it": the byte slice and the invalid string are in the code; that is supported, with the Postgres rejection named as unverified.)
+
 Trace the actual state and control flow through a concrete example. Distinguish persistent state from the scope of a condition. Check the draft for contradictions, including contradictions between its concerns and its decisions. A comment or reconstructed intent describes a goal; it is not proof of runtime behavior. Check that any suggested repair preserves the supported input shapes. Before you submit, reread each reason against its verdict: a reason that concludes the allegation is correct belongs to a supported verdict, never a refuted one.`
 
 // The shell paragraph depends on whether a sandbox is configured. Telling the

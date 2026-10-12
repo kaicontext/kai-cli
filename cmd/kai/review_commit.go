@@ -1080,6 +1080,12 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	}
 	// Which ISSUES are earlier points is set aside while the bullets are
 	// merged, folded and challenged by their wording (review_commit_earlier.go).
+	// Findings written as prose bullets with no ISSUES section in the coda
+	// (review_commit_prose_issues.go).
+	if recovered, n := rcRecoverProseIssues(raw); n > 0 {
+		fmt.Fprintf(os.Stderr, "  coda had no ISSUES section — %d located bullet(s) taken from the prose\n", n)
+		raw = recovered
+	}
 	raw, earlier := rcTakeEarlierTags(raw)
 	if rcUsableCoda(raw) {
 		sw := rcAwaitSweep(sweep)
