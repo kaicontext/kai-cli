@@ -9,6 +9,7 @@ package main
 // reviewer knows better — it is re-checking its previous review — so each
 // earlier defect arrives with a ref (KAI_PRIOR_REVIEW, rcPriorBlock), and the
 // reviewer ends an ISSUES bullet that is one of them with "(earlier: <ref>)".
+// Decisions too (kai-cli#171 re-announced its two decisions on every push).
 //
 // The tag is bookkeeping, not text: the sweep merge, the duplicate fold and
 // the challenge all match bullets by their wording, and the challenge's
@@ -27,58 +28,86 @@ import (
 var rcEarlierTagRe = regexp.MustCompile(`\s*\(earlier:\s*([0-9a-f]{12})\)`)
 
 // rcTakeEarlierTags strips every tag from a draft and returns the refs of the
-// ISSUES bullets that carried one, keyed by path:line.
+// bullets that carried one: an ISSUES bullet keyed by its path:line, a
+// DECISIONS bullet (which has no location) by its wording.
 func rcTakeEarlierTags(raw string) (string, map[string]string) {
 	if !strings.Contains(raw, "(earlier:") {
 		return raw, nil
 	}
 	refs := map[string]string{}
 	lines := strings.Split(raw, "\n")
+	section := ""
 	for i, l := range lines {
+		section = rcEarlierSection(section, l)
 		m := rcEarlierTagRe.FindStringSubmatch(l)
 		if m == nil {
 			continue
 		}
 		l = rcEarlierTagRe.ReplaceAllString(l, "")
 		lines[i] = l
-		if t := strings.TrimSpace(l); strings.HasPrefix(t, "- ") {
-			if key, ok := rcEarlierKey(strings.TrimPrefix(t, "- ")); ok {
-				refs[key] = m[1]
-			}
+		if key, ok := rcEarlierBulletKey(section, l); ok {
+			refs[key] = m[1]
 		}
 	}
 	return strings.Join(lines, "\n"), refs
 }
 
-// rcPutEarlierTags appends each remembered ref to the ISSUES bullet at its
-// location in the final review.
+// rcPutEarlierTags appends each remembered ref to the ISSUES or DECISIONS
+// bullet it belongs to in the final review.
 func rcPutEarlierTags(raw string, refs map[string]string) string {
 	if len(refs) == 0 {
 		return raw
 	}
 	lines := strings.Split(raw, "\n")
-	inIssues := false
+	section := ""
 	for i, l := range lines {
-		t := strings.TrimSpace(l)
-		switch {
-		case t == "ISSUES:":
-			inIssues = true
-			continue
-		case !inIssues:
-			continue
-		case t == "":
-			continue
-		case !strings.HasPrefix(t, "- "):
-			inIssues = false
+		section = rcEarlierSection(section, l)
+		if section == "" || strings.Contains(l, "(earlier:") {
 			continue
 		}
-		if key, ok := rcEarlierKey(strings.TrimPrefix(t, "- ")); ok {
-			if ref := refs[key]; ref != "" && !strings.Contains(l, "(earlier:") {
+		if key, ok := rcEarlierBulletKey(section, l); ok {
+			if ref := refs[key]; ref != "" {
 				lines[i] = strings.TrimRight(l, " ") + " (earlier: " + ref + ")"
 			}
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// rcEarlierSection tracks which coda list a line is in: "issues",
+// "decisions", or "" outside both.
+func rcEarlierSection(section, line string) string {
+	t := strings.TrimSpace(line)
+	if t == "" || strings.HasPrefix(t, "- ") {
+		return section
+	}
+	if key, _, labelled := rcMachineLine(t); labelled {
+		switch key {
+		case "issues", "findings":
+			return "issues"
+		case "decisions":
+			return "decisions"
+		}
+	}
+	return ""
+}
+
+// rcEarlierBulletKey is the key a tagged bullet is remembered by.
+func rcEarlierBulletKey(section, line string) (string, bool) {
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, "- ") {
+		return "", false
+	}
+	item := strings.TrimPrefix(t, "- ")
+	switch section {
+	case "issues":
+		return rcEarlierKey(item)
+	case "decisions":
+		if k := rcIssueKey(item); k != "" {
+			return "decision:" + k, true
+		}
+	}
+	return "", false
 }
 
 // rcEarlierKey is a bullet's path:line.

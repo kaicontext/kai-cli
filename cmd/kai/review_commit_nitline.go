@@ -10,7 +10,8 @@ package main
 //
 // Where a point is can settle what the model would not: a bullet whose
 // path:line (and every "also:" location) is a comment line is about the
-// comment, and a comment does not run. So it is marked a nit before the
+// comment, and a comment does not run — unless the bullet is plainly about
+// the code beside it (rcAboutTheCode). So it is marked a nit before the
 // challenge counts it. Directives that do change the build or the tools —
 // //go:build, // +build, //go:generate, //nolint, // eslint-…, # type:,
 // # noqa, #! — are not comments for this purpose.
@@ -60,11 +61,53 @@ func rcMarkCommentNits(raw string, readFile func(path string) ([]string, bool)) 
 		if _, nit := rcSplitNit(item); nit {
 			continue
 		}
-		if rcAllCommentLines(item, readFile) {
+		if rcAllCommentLines(item, readFile) && !rcAboutTheCode(item, readFile) {
 			lines[j] = strings.Replace(ln, "- "+item, "- nit: "+item, 1)
 		}
 	}
 	return head + strings.Join(lines, "\n")
+}
+
+// rcCodeExprRe finds `code spans` that hold an expression rather than a bare
+// name: something with an operator, a call, an index or a slice. A dot, a
+// slash or a hyphen is not one: `opts.limit` and `a/b.go` are names.
+var rcCodeExprRe = regexp.MustCompile("`([^`]*[\\[\\]()<>=!+*%&|][^`]*)`")
+
+// rcBehaviourRe names a runtime effect. A point that claims one is about what
+// the code does, whichever line it cites.
+var rcBehaviourRe = regexp.MustCompile(`(?i)\b(panic|panics|crash|crashes|out of range|out of bounds|nil pointer|null pointer|invalid utf-?8|mid-rune|data race|deadlock|leak|leaks|overflow|off-by-one|race condition)\b`)
+
+// rcAboutTheCode reports whether a bullet that cites a comment is really
+// about the code beside it: it quotes an expression that appears on a
+// non-comment line of the cited file, or it names a runtime effect. "The
+// docstring says characters, but the implementation slices by bytes
+// (`text[:limit]`)" cites the doc line and is a defect; "the docstring
+// names `max` but the parameter is `limit`" names identifiers only and is a
+// nit. (The 2026-10-12 repeat-run study caught the first downgraded.)
+func rcAboutTheCode(item string, readFile func(path string) ([]string, bool)) bool {
+	if rcBehaviourRe.MatchString(item) {
+		return true
+	}
+	path, _, ok := rcIssueLocation(item)
+	if !ok {
+		return false
+	}
+	src, ok := readFile(path)
+	if !ok {
+		return false
+	}
+	for _, m := range rcCodeExprRe.FindAllStringSubmatch(item, -1) {
+		expr := strings.TrimSpace(m[1])
+		if len(expr) < 3 {
+			continue
+		}
+		for _, l := range src {
+			if !rcIsCommentLine(l) && strings.Contains(l, expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rcAllCommentLines reports whether the bullet's location and each "also:"
