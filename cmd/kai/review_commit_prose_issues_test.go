@@ -12,7 +12,8 @@ func TestProseIssuesAreRecoveredWhenTheCodaHasNone(t *testing.T) {
 		"- Examined kailab-control/internal/api/review_answered.go in full.\n" +
 		"- nit: kailab-control/internal/api/github_pr_review.go:1157-1158 — `splitAnswered` is called twice; a comment would carry why.\n" +
 		"- kailab-control/internal/db/pr_review_comments.go:268 — `reply[:answerExcerptMax]` can split a rune.\n" +
-		"- kailab-control/internal/db/pr_review_comments.go:268 — `reply[:answerExcerptMax]` can split a rune.\n\n" +
+		"- kailab-control/internal/db/pr_review_comments.go:268 — `reply[:answerExcerptMax]` can split a rune.\n" +
+		"- kailab-control/internal/db/db.go:633 — the duplicate-column error is swallowed, so this is fine.\n\n" +
 		rcReviewDataMarker + "\nINTENT_MATCH: verified\nMERGE_READY: 5"
 	got, n := rcRecoverProseIssues(raw)
 	if n != 2 {

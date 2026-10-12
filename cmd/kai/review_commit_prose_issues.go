@@ -46,6 +46,13 @@ func rcRecoverProseIssues(raw string) (string, int) {
 		if _, _, ok := rcIssueLocation(item); !ok || seen[item] {
 			continue
 		}
+		// The prompt asks for an empty list to be left out, so a coda with
+		// no ISSUES can mean "none", and the prose then walks through code
+		// the reviewer found fine. A bullet that says so is not a finding:
+		// the sweep's retraction filter reads it the same way.
+		if rcSweepRetracted.MatchString(item) {
+			continue
+		}
 		seen[item] = true
 		found = append(found, item)
 	}
