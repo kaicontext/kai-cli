@@ -260,17 +260,7 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 // from its allegations and decisions, with the caps rcValidateChallenge
 // applies. Used after batches are merged and after allegations change status.
 func rcFinalize(merged *rcChallengeResult) {
-	supported, refuted, unresolved := 0, 0, 0
-	for _, a := range merged.Allegations {
-		switch a.Status {
-		case rcStatusSupported:
-			supported++
-		case rcStatusRefuted:
-			refuted++
-		default:
-			unresolved++
-		}
-	}
+	supported, refuted, unresolved := rcCountAllegations(merged.Allegations)
 	kept, openDecisions := 0, 0
 	for _, d := range merged.Decisions {
 		switch d.Status {

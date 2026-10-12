@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/kaicontext/kai-engine/finding"
 	"strings"
 	"testing"
 )
@@ -95,5 +96,27 @@ func TestDirectivesAreNotComments(t *testing.T) {
 		if !rcIsCommentLine(src) {
 			t.Errorf("%q was not taken for a comment", src)
 		}
+	}
+}
+
+// The batched path re-caps readiness in rcFinalize; a confirmed nit must not
+// cap it there either (Kai's review of kai-cli#169 found the guard missing).
+func TestFinalizeDoesNotCapOnANit(t *testing.T) {
+	res := &rcChallengeResult{
+		Allegations: []rcAllegationResult{
+			{ID: 1, Issue: "nit: a.go:3 — the comment names `max`", Status: rcStatusSupported, Finding: "f"},
+			{ID: 2, Issue: "a.go:9 — `n` is unchecked", Status: rcStatusRefuted, Reason: "it is checked"},
+		},
+		match:    finding.MatchVerified,
+		proposed: finding.Readiness(5),
+	}
+	rcFinalize(res)
+	if !strings.Contains(res.Review, "MERGE_READY: 5") {
+		t.Errorf("a confirmed nit capped the batched review:\n%s", res.Review)
+	}
+	res.Allegations = append(res.Allegations, rcAllegationResult{ID: 3, Issue: "a.go:12 — `x` is nil", Status: rcStatusSupported, Finding: "g"})
+	rcFinalize(res)
+	if !strings.Contains(res.Review, "MERGE_READY: 3") {
+		t.Errorf("a confirmed defect did not cap the batched review:\n%s", res.Review)
 	}
 }

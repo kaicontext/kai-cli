@@ -1187,23 +1187,7 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 	}
 
 	res := &rcChallengeResult{Allegations: results, Decisions: dresults, unassessed: unassessed}
-	// A confirmed nit is published, folded, and never lowers MERGE_READY
-	// ("A NIT never lowers MERGE_READY"), so it is not a supported defect for
-	// the cap below: counting it held a doc-comment-only review at 3/5.
-	supported, refuted, unresolved := 0, 0, 0
-	for _, r := range results {
-		switch r.Status {
-		case rcStatusSupported:
-			if _, nit := rcSplitNit(r.Issue); nit {
-				continue
-			}
-			supported++
-		case rcStatusRefuted:
-			refuted++
-		default:
-			unresolved++
-		}
-	}
+	supported, refuted, unresolved := rcCountAllegations(results)
 	keptDecisions, unresolvedDecisions := 0, 0
 	for _, d := range dresults {
 		switch d.Status {
@@ -1376,6 +1360,29 @@ func rcAssembleReview(scope, limitations []string, results []rcAllegationResult,
 // lower case, no markdown quoting, collapsed whitespace, no trailing
 // punctuation. Two bullets that differ only cosmetically share a key; the
 // first one keeps it.
+// rcCountAllegations counts the checked allegations for the readiness caps.
+// A confirmed nit is published, folded, and never lowers MERGE_READY ("A NIT
+// never lowers MERGE_READY"), so it is not a supported defect: counting it
+// held a doc-comment-only review at 3/5. rcValidateChallenge and rcFinalize
+// (batched reviews, and every re-cap after a status change) both count here,
+// so the two cannot drift apart again — the guard once existed in only one.
+func rcCountAllegations(results []rcAllegationResult) (supported, refuted, unresolved int) {
+	for _, r := range results {
+		switch r.Status {
+		case rcStatusSupported:
+			if _, nit := rcSplitNit(r.Issue); nit {
+				continue
+			}
+			supported++
+		case rcStatusRefuted:
+			refuted++
+		default:
+			unresolved++
+		}
+	}
+	return supported, refuted, unresolved
+}
+
 func rcIssueKey(issue string) string {
 	s := strings.ToLower(issue)
 	s = strings.NewReplacer("`", "", "\u201c", "\"", "\u201d", "\"", "\u2018", "'", "\u2019", "'", "**", "", "\u2014", "-", "\u2013", "-").Replace(s)
