@@ -133,9 +133,10 @@ func TestCommentLinePointAboutTheCodeStaysADefect(t *testing.T) {
 	raw := "x\n" + rcReviewDataMarker + "\nMERGE_READY: 3\nISSUES:\n" +
 		"- smoketest/excerpt.go:7 — the docstring states \"limit characters of text\", but the implementation slices by bytes (`text[:limit]`), which can split a multi-byte rune\n" +
 		"- smoketest/excerpt.go:8 — the doc promises a positive limit but a negative one panics\n" +
-		"- smoketest/excerpt.go:8 — the docstring refers to a `max` argument, but the actual parameter is named `limit`\n"
+		"- smoketest/excerpt.go:8 — the docstring refers to a `max` argument, but the actual parameter is named `limit`\n" +
+		"- smoketest/excerpt.go:7 — the doc names `strings.Trim` but the code calls `strings.TrimSpace`\n"
 	_, issues, _, _, _, _ := rcParseReviewOutput(rcMarkCommentNits(raw, read))
-	want := []bool{false, false, true}
+	want := []bool{false, false, true, true}
 	for i, w := range want {
 		if _, nit := rcSplitNit(issues[i]); nit != w {
 			t.Errorf("issue %d nit=%v, want %v: %q", i, nit, w, issues[i])

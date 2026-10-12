@@ -69,8 +69,9 @@ func rcMarkCommentNits(raw string, readFile func(path string) ([]string, bool)) 
 }
 
 // rcCodeExprRe finds `code spans` that hold an expression rather than a bare
-// name: something with an operator, a call, an index or a slice.
-var rcCodeExprRe = regexp.MustCompile("`([^`]*[\\[\\]().<>=!+*/%&|-][^`]*)`")
+// name: something with an operator, a call, an index or a slice. A dot, a
+// slash or a hyphen is not one: `opts.limit` and `a/b.go` are names.
+var rcCodeExprRe = regexp.MustCompile("`([^`]*[\\[\\]()<>=!+*%&|][^`]*)`")
 
 // rcBehaviourRe names a runtime effect. A point that claims one is about what
 // the code does, whichever line it cites.
