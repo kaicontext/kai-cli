@@ -22,10 +22,11 @@ func TestEarlierTagsLeaveAndReturn(t *testing.T) {
 		t.Fatalf("refs = %v", refs)
 	}
 
-	// The challenge rewrote the bullet's words and folded an "(also: …)" on.
+	// The challenge keeps each bullet's own words (check.Issue = issues[id]);
+	// the duplicate fold may add an "(also: …)".
 	final := "## Findings\n\n### internal/smoketest/excerpt.go:13 — panics on a non-positive limit\n" +
 		"===REVIEW-DATA===\nISSUES:\n" +
-		"- internal/smoketest/excerpt.go:13 — `Excerpt` panics on a non-positive `limit` (also: internal/smoketest/excerpt.go:15)\n" +
+		"- internal/smoketest/excerpt.go:13 — when `limit <= 0`, `r[:limit]` panics (also: internal/smoketest/excerpt.go:15)\n" +
 		"- internal/smoketest/excerpt.go:20 — `ctx.Done` is never checked\n" +
 		"DECISIONS:\n- internal/smoketest/excerpt.go:13 — not an issue line\n"
 	got := rcPutEarlierTags(final, refs)
@@ -146,5 +147,24 @@ func TestLocationFallbackOnlyForALoneBullet(t *testing.T) {
 	_, risks, _, _, _, _ = rcParseReviewOutput(got)
 	if len(risks) != 1 || strings.Contains(risks[0], "severity") || !strings.HasSuffix(risks[0], "(earlier: 0123456789ab)") {
 		t.Errorf("nit = %q", risks)
+	}
+}
+
+// From Kai's review of kai-cli#174: the location fallback never carries an
+// earlier-ref — a new defect alone on a line where a carried point was
+// refuted must not be taken for that point and suppressed.
+func TestLocationFallbackNeverCarriesAnEarlierRef(t *testing.T) {
+	refs := map[string]string{}
+	rcRememberTags(refs, "issues", "- a.go:30 — the token is logged", "(severity: high) (earlier: 0123456789ab)")
+	got := rcPutEarlierTags(rcReviewDataMarker+"\nISSUES:\n- a.go:30 — the retry loop never backs off\n", refs)
+	_, risks, _, _, _, _ := rcParseReviewOutput(got)
+	if len(risks) != 1 || strings.Contains(risks[0], "earlier") {
+		t.Errorf("a different defect took the earlier-ref: %q", risks)
+	}
+	// The exact bullet still gets both back.
+	got = rcPutEarlierTags(rcReviewDataMarker+"\nISSUES:\n- a.go:30 — the token is logged\n", refs)
+	_, risks, _, _, _, _ = rcParseReviewOutput(got)
+	if len(risks) != 1 || !strings.HasSuffix(risks[0], "(severity: high) (earlier: 0123456789ab)") {
+		t.Errorf("the exact bullet lost its tags: %q", risks)
 	}
 }

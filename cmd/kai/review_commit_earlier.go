@@ -106,7 +106,8 @@ func rcPutEarlierTags(raw string, refs map[string]string) string {
 	section := ""
 	for _, l := range lines {
 		section = rcEarlierSection(section, l)
-		if _, loc, ok := rcEarlierBulletKey(section, l); ok && loc != "" {
+		bare, _ := rcSplitTags(l)
+		if _, loc, ok := rcEarlierBulletKey(section, bare); ok && loc != "" {
 			atLoc[loc]++
 		}
 	}
@@ -116,13 +117,26 @@ func rcPutEarlierTags(raw string, refs map[string]string) string {
 		if section == "" {
 			continue
 		}
-		key, loc, ok := rcEarlierBulletKey(section, l)
+		bare, _ := rcSplitTags(l) // a bullet's key is its words, not its tags
+		key, loc, ok := rcEarlierBulletKey(section, bare)
 		if !ok {
 			continue
 		}
 		tags := refs[key]
 		if tags == "" && loc != "" && refs[loc] != rcAmbiguous && atLoc[loc] == 1 {
-			tags = refs[loc]
+			// The fallback carries the severity only. An earlier-ref makes
+			// kai-server treat the bullet as a point already on the PR and
+			// not post it, so it needs the exact bullet: the one bullet on
+			// a line could be a new defect where the earlier one was
+			// refuted. (The challenge keeps each bullet's own wording, so
+			// a carried point still matches exactly.)
+			var sev []string
+			for _, t := range rcEarlierTagRe.FindAllString(refs[loc], -1) {
+				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(t)), "(severity") {
+					sev = append(sev, strings.TrimSpace(t))
+				}
+			}
+			tags = strings.Join(sev, " ")
 		}
 		if tags == "" {
 			continue
