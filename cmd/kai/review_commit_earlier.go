@@ -24,14 +24,17 @@ import (
 	"strings"
 )
 
-// rcEarlierTagRe is the tag; the ref is kai-server's 12-hex fingerprint.
-var rcEarlierTagRe = regexp.MustCompile(`\s*\(earlier:\s*([0-9a-f]{12})\)`)
+// rcEarlierTagRe is a bookkeeping tag kai-server reads off a statement: the
+// earlier-ref (its 12-hex fingerprint) or the reviewer's severity. Both ride
+// the same way — off while bullets are matched by wording, back on at the end.
+var rcEarlierTagRe = regexp.MustCompile(`(?i)\s*\((?:earlier:\s*[0-9a-f]{12}|severity:\s*(?:high|medium|low))\)`)
 
-// rcTakeEarlierTags strips every tag from a draft and returns the refs of the
-// bullets that carried one: an ISSUES bullet keyed by its path:line, a
-// DECISIONS bullet (which has no location) by its wording.
+// rcTakeEarlierTags strips every tag from a draft and returns the tags of the
+// bullets that carried them ("(severity: low) (earlier: …)"): an ISSUES bullet
+// keyed by its path:line, a DECISIONS bullet (which has no location) by its
+// wording.
 func rcTakeEarlierTags(raw string) (string, map[string]string) {
-	if !strings.Contains(raw, "(earlier:") {
+	if !rcEarlierTagRe.MatchString(raw) {
 		return raw, nil
 	}
 	refs := map[string]string{}
@@ -39,14 +42,17 @@ func rcTakeEarlierTags(raw string) (string, map[string]string) {
 	section := ""
 	for i, l := range lines {
 		section = rcEarlierSection(section, l)
-		m := rcEarlierTagRe.FindStringSubmatch(l)
-		if m == nil {
+		tags := rcEarlierTagRe.FindAllString(l, -1)
+		if len(tags) == 0 {
 			continue
 		}
 		l = rcEarlierTagRe.ReplaceAllString(l, "")
 		lines[i] = l
 		if key, ok := rcEarlierBulletKey(section, l); ok {
-			refs[key] = m[1]
+			for i := range tags {
+				tags[i] = strings.ToLower(strings.TrimSpace(tags[i]))
+			}
+			refs[key] = strings.Join(tags, " ")
 		}
 	}
 	return strings.Join(lines, "\n"), refs
@@ -62,12 +68,12 @@ func rcPutEarlierTags(raw string, refs map[string]string) string {
 	section := ""
 	for i, l := range lines {
 		section = rcEarlierSection(section, l)
-		if section == "" || strings.Contains(l, "(earlier:") {
+		if section == "" || rcEarlierTagRe.MatchString(l) {
 			continue
 		}
 		if key, ok := rcEarlierBulletKey(section, l); ok {
-			if ref := refs[key]; ref != "" {
-				lines[i] = strings.TrimRight(l, " ") + " (earlier: " + ref + ")"
+			if tags := refs[key]; tags != "" {
+				lines[i] = strings.TrimRight(l, " ") + " " + tags
 			}
 		}
 	}

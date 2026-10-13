@@ -59,10 +59,12 @@ Rules:
 - A line can carry more than one defect. After you find one, keep checking the same lines for a DIFFERENT one — a second wrong value, a missing check beside the wrong one, a test that also asserts the wrong thing — and list each on its own bullet. Stopping at the first plausible problem is how real defects are missed.
 - It is fine to report nothing for a chunk that is correct. Do not pad.
 - Never write a bullet for a line you checked and found correct. Think it through before writing; a bullet is a defect, not a note.
+- Two bullets about one root cause are one defect: describe it once, on the line where it starts, and do not restate it on the next line.
+- End every bullet that is not a nit with "(severity: high)" (breaks on ordinary input: a crash, lost data, a security hole, a wrong result most users hit), "(severity: medium)" (a plausible but less common input) or "(severity: low)" (only on unusual input).
 
 Output ONLY this, nothing before or after:
 ISSUES:
-- <path>:<line> — <the defect, one sentence>
+- <path>:<line> — <the defect, one sentence> (severity: high|medium|low)
 - nit: <path>:<line> — <a defect that cannot change behaviour>
 or, when there is nothing:
 ISSUES:
