@@ -57,3 +57,12 @@ func TestStakelessDecisionsLeaveTheDraftBeforeTheCheck(t *testing.T) {
 		t.Error("the fact-check prompt lacks the stake rule")
 	}
 }
+
+// The summary carries no 1-5: kai-server shows a score out of 10, and a
+// "readiness 4/5" beside it reads as a second score.
+func TestSummaryCarriesNoOneToFive(t *testing.T) {
+	got := rcDeriveSummary(1, 2, 0, 0, "verified", 4)
+	if strings.Contains(got, "/5") || !strings.HasSuffix(got, "Intent verified.") {
+		t.Errorf("summary = %q", got)
+	}
+}

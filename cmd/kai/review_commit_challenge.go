@@ -1278,7 +1278,10 @@ func rcDeriveSummary(supported, refuted, unresolved, unresolvedDecisions int, ma
 	if n := unresolved + unresolvedDecisions; n > 0 {
 		fmt.Fprintf(&b, " %d item%s could not be verified and %s withheld.", n, plural(n), map[bool]string{true: "is", false: "are"}[n == 1])
 	}
-	fmt.Fprintf(&b, " Intent %s; readiness %d/5.", string(match), int(readiness))
+	// The 1-5 is not printed: kai-server shows a score out of 10 worked out
+	// from the findings, and a "readiness 4/5" beside "(9/10)" reads as a
+	// second, disagreeing score. The readiness still travels in the bundle.
+	fmt.Fprintf(&b, " Intent %s.", string(match))
 	return b.String()
 }
 
