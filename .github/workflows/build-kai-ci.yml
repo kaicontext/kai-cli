@@ -12,11 +12,26 @@ name: build-kai-ci
 # branch. That is not a convenience problem, it is a provenance one: the binary
 # deciding what Kai says on a customer's pull request was not reproducible.
 #
-# WHY IT IS DISPATCH-ONLY. The image spans FOUR repos (kai-cli and kai-tui
-# supply the binaries, kai-engine and kai-core the libraries), so no single
-# repo's push means "the image is stale" — a kai-tui change invalidates it just
-# as much as a kai-cli one. Rather than guess, the refs are inputs. That also
-# makes every build answer "built from what?" in its own run log.
+# WHAT TRIGGERS IT. The image spans FOUR repos (kai-cli and kai-tui supply the
+# binaries, kai-engine and kai-core the libraries), so no single repo's push
+# means "the image is stale". A RELEASE does: the build takes the newest tag of
+# each repo, so the image only goes stale when kai-cli or kai-tui cuts one.
+# (kai-core and kai-engine releases reach the image only through the kai-cli
+# and kai-tui releases their adopt-engine bots cut.) So both repos' release
+# workflows end by sending a `kai-ci-rebuild` repository_dispatch here, and a
+# release produces a pin PR without anyone remembering to click "Run". Manual
+# dispatch still works, for a rebuild or a pin=agent/both/none run.
+#
+# A RELEASE-TRIGGERED RUN differs from a manual one in three ways, all because
+# one engine release cuts a kai-cli AND a kai-tui release within minutes:
+#   - it waits DEBOUNCE_SECONDS before resolving tags, so the sibling release
+#     usually lands in time and one image carries both;
+#   - it skips the build when production or an open pin PR already carries
+#     exactly these versions (the second dispatch of a pair, usually);
+#   - its PR closes earlier release-triggered pin PRs it supersedes. Manual
+#     pin PRs are never closed.
+# It pins the REVIEW image only, as every pin since 2026-10-03 has; the agent
+# image is still pinned by hand (pin=agent or pin=both).
 #
 # WHY IT OPENS A PR RATHER THAN PUSHING. The pin is deliberately a human act.
 # From review_default_workflow.go: ":latest meant each rebuild upgraded
@@ -42,7 +57,14 @@ on:
         type: choice
         default: both
         options: [both, agent, review, none]
+  # Sent by kai-cli's ci.yml and kai-tui's release.yml after a versioned
+  # release publishes. client_payload: {source, version}, for the PR body only.
+  repository_dispatch:
+    types: [kai-ci-rebuild]
 
+# Not cancel-in-progress: cancelling mid-pin can leave a pushed branch with no
+# PR. GitHub keeps one pending run per group, so a burst of dispatches while a
+# run is in flight collapses into a single follow-up run.
 concurrency:
   group: build-kai-ci
   cancel-in-progress: false
@@ -50,6 +72,9 @@ concurrency:
 env:
   AR: us-central1-docker.pkg.dev/kaicontext/kai
   IMAGE: us-central1-docker.pkg.dev/kaicontext/kai/kai-ci
+  # Release-triggered runs only. Long enough for the sibling release of an
+  # engine cascade (kai-cli and kai-tui each take several minutes to publish).
+  DEBOUNCE_SECONDS: 600
   WIF_PROVIDER: projects/180761347860/locations/global/workloadIdentityPools/github/providers/github
   WIF_SA: gh-deployer@kaicontext.iam.gserviceaccount.com
 
@@ -64,14 +89,27 @@ permissions:
   id-token: write # required for Workload Identity Federation
 
 jobs:
-  build:
+  # Decides WHAT to build (the newest tag of each module) and WHETHER to: a
+  # release-triggered run skips when those versions are already pinned or
+  # already up for review. Its own job so the skip is one `if:` on build.
+  resolve:
     runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      provenance: ${{ steps.refs.outputs.summary }}
+      kai_cli_ref: ${{ steps.resolve.outputs.kai_cli_ref }}
+      kai_tui_ref: ${{ steps.resolve.outputs.kai_tui_ref }}
+      kai_engine_ref: ${{ steps.resolve.outputs.kai_engine_ref }}
+      kai_core_ref: ${{ steps.resolve.outputs.kai_core_ref }}
+      build: ${{ github.event_name != 'repository_dispatch' || steps.dedupe.outputs.build == 'true' }}
     steps:
-      # One token for every private checkout below. Scoped to the four module
-      # repos, same pattern as ci.yml's builds.
+      - name: Wait for the sibling release (release-triggered runs only)
+        if: github.event_name == 'repository_dispatch'
+        env:
+          SOURCE: ${{ github.event.client_payload.source }}
+          VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          echo "Triggered by the $SOURCE $VERSION release; waiting ${DEBOUNCE_SECONDS}s for any sibling release"
+          sleep "$DEBOUNCE_SECONDS"
+
       - name: Mint App token for the private repos
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: token
@@ -126,6 +164,85 @@ jobs:
             echo "$(echo "$m" | tr 'a-z-' 'a-z_')_ref=$want" >> "$GITHUB_OUTPUT"
           done
 
+      - name: Mint App token for kai-server (release-triggered runs only)
+        if: github.event_name == 'repository_dispatch'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: server_token
+        with:
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-server
+
+      # Compared by VERSION, from the "Built from" line every pin PR carries
+      # (kai-cli=v0.36.3@ca4a621e60a5 …). Two candidates make a build pointless:
+      # the merged pin that set the production review image, and any open pin
+      # PR — the latter is what catches the second dispatch of an engine
+      # cascade, which arrives after the first has already built and opened.
+      # A manual run never skips: rebuilding the same versions is a legitimate
+      # thing to ask for (a base-image fix, say).
+      - name: Skip versions already pinned or up for review
+        id: dedupe
+        if: github.event_name == 'repository_dispatch'
+        env:
+          GH_TOKEN: ${{ steps.server_token.outputs.token }}
+          KAI_CLI_REF: ${{ steps.resolve.outputs.kai_cli_ref }}
+          KAI_TUI_REF: ${{ steps.resolve.outputs.kai_tui_ref }}
+          KAI_ENGINE_REF: ${{ steps.resolve.outputs.kai_engine_ref }}
+          KAI_CORE_REF: ${{ steps.resolve.outputs.kai_core_ref }}
+        run: |
+          set -euo pipefail
+          versions() { grep -oE 'kai-(cli|tui|engine|core)=v[^@ ]+' | sort | tr '\n' ' '; }
+          WANT="$(printf '%s\n' "kai-cli=$KAI_CLI_REF" "kai-tui=$KAI_TUI_REF" \
+                    "kai-engine=$KAI_ENGINE_REF" "kai-core=$KAI_CORE_REF" | versions)"
+          echo "want: $WANT"
+
+          # One line per candidate, "#<number> <body on one line>".
+          # Production: the newest merged pin PR that moved the REVIEW image
+          # (titles have read "pin review image", "pin both image" and "pin the
+          # review image"; an agent-only pin says nothing about reviews).
+          # Same newest-first assumption as the baseline lookup in the pin job.
+          ONE_LINE='"#\(.number) \(.body | gsub("\n"; " "))"'
+          CANDIDATES="$(
+            gh pr list --repo kaicontext/kai-server --state merged --limit 50 \
+              --json number,title,headRefName,body \
+              --jq "[.[] | select(.headRefName | startswith(\"kai-ci/pin-\"))
+                         | select(.title | test(\"pin (the )?(review|both) image\"))][:1][]
+                    | $ONE_LINE"
+            gh pr list --repo kaicontext/kai-server --state open --limit 50 \
+              --json number,headRefName,body \
+              --jq ".[] | select(.headRefName | startswith(\"kai-ci/pin-\")) | $ONE_LINE"
+          )"
+
+          while IFS= read -r pr; do
+            [ -n "$pr" ] || continue
+            if [ "$(versions <<<"$pr" || true)" = "$WANT" ]; then
+              echo "::notice::kai-server ${pr%% *} already carries $WANT — nothing to build"
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done <<<"$CANDIDATES"
+          echo "build=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      provenance: ${{ steps.refs.outputs.summary }}
+    steps:
+      # One token for every private checkout below. Scoped to the four module
+      # repos, same pattern as ci.yml's builds.
+      - name: Mint App token for the private repos
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: token
+        with:
+          client-id: ${{ secrets.KAI_CORE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAI_CORE_APP_PRIVATE_KEY }}
+          owner: kaicontext
+          repositories: kai-cli,kai-tui,kai-engine,kai-core
+
       # The Dockerfile's build context is a WORKSPACE ROOT holding the four
       # module dirs side by side, because it rewrites the pinned versions with
       # `go mod edit -replace` to point at them. Reproducing that layout here is
@@ -133,25 +250,25 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-cli
-          ref: ${{ steps.resolve.outputs.kai_cli_ref }}
+          ref: ${{ needs.resolve.outputs.kai_cli_ref }}
           path: ws/kai-cli
           token: ${{ steps.token.outputs.token }}
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-tui
-          ref: ${{ steps.resolve.outputs.kai_tui_ref }}
+          ref: ${{ needs.resolve.outputs.kai_tui_ref }}
           path: ws/kai-tui
           token: ${{ steps.token.outputs.token }}
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-engine
-          ref: ${{ steps.resolve.outputs.kai_engine_ref }}
+          ref: ${{ needs.resolve.outputs.kai_engine_ref }}
           path: ws/kai-engine
           token: ${{ steps.token.outputs.token }}
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: kaicontext/kai-core
-          ref: ${{ steps.resolve.outputs.kai_core_ref }}
+          ref: ${{ needs.resolve.outputs.kai_core_ref }}
           path: ws/kai-core
           token: ${{ steps.token.outputs.token }}
 
@@ -168,10 +285,10 @@ jobs:
         # can poison the image build" is not a defence a provenance workflow
         # gets to make.
         env:
-          KAI_CLI_REF: ${{ steps.resolve.outputs.kai_cli_ref }}
-          KAI_TUI_REF: ${{ steps.resolve.outputs.kai_tui_ref }}
-          KAI_ENGINE_REF: ${{ steps.resolve.outputs.kai_engine_ref }}
-          KAI_CORE_REF: ${{ steps.resolve.outputs.kai_core_ref }}
+          KAI_CLI_REF: ${{ needs.resolve.outputs.kai_cli_ref }}
+          KAI_TUI_REF: ${{ needs.resolve.outputs.kai_tui_ref }}
+          KAI_ENGINE_REF: ${{ needs.resolve.outputs.kai_engine_ref }}
+          KAI_CORE_REF: ${{ needs.resolve.outputs.kai_core_ref }}
         run: |
           set -euo pipefail
           {
@@ -254,7 +371,8 @@ jobs:
   # above has already pushed and smoke-tested it.
   pin:
     needs: build
-    if: ${{ inputs.pin != 'none' }}
+    # A release-triggered run has no inputs; it pins the review image.
+    if: ${{ (inputs.pin || 'review') != 'none' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -279,7 +397,7 @@ jobs:
           DIGEST: ${{ needs.build.outputs.digest }}
           PROVENANCE: ${{ needs.build.outputs.provenance }}
           IMAGE: ${{ env.IMAGE }}
-          PIN: ${{ inputs.pin }}
+          PIN: ${{ inputs.pin || 'review' }}
         run: |
           set -euo pipefail
           NEW="${IMAGE}@${DIGEST}"
@@ -340,10 +458,23 @@ jobs:
           DIGEST: ${{ needs.build.outputs.digest }}
           PROVENANCE: ${{ needs.build.outputs.provenance }}
           IMAGE: ${{ env.IMAGE }}
-          PIN: ${{ inputs.pin }}
+          PIN: ${{ inputs.pin || 'review' }}
+          SOURCE: ${{ github.event.client_payload.source }}
+          VERSION: ${{ github.event.client_payload.version }}
         run: |
           set -euo pipefail
           BR="kai-ci/pin-${DIGEST:7:12}"
+
+          # The marker is how a later release-triggered run recognises this PR
+          # as one it may supersede; manual pin PRs never carry it.
+          TRIGGER=""
+          if [ "$GITHUB_EVENT_NAME" = repository_dispatch ]; then
+            # Payload text lands in the PR body; keep it to a repo name and tag.
+            WHAT="a release (unrecognised dispatch payload)"
+            [[ "$SOURCE" =~ ^kai-(cli|tui)$ && "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              && WHAT="the **${SOURCE} ${VERSION}** release"
+            TRIGGER="Opened automatically after ${WHAT}. <!-- kai-ci:auto -->"
+          fi
 
           # Same idempotency question, other end: a re-run whose branch already
           # carries a PR must not fail trying to open a second one.
@@ -366,11 +497,37 @@ jobs:
 
           **Built from:** ${PROVENANCE}
 
+          ${TRIGGER}
+
           Smoke-tested inside the image before this was opened: \`kai\`, \`kit\`, \`git\`, \`jq\` and \`curl\` all resolve, and both binaries report a version.
 
           Pinning stays a human decision on purpose — this PR removes the laptop build and the hand-copied digest, not the review. Check what changed in the binaries before merging: the reviewer's prompts, model choice and budgets live inside this image, so a bump can change what Kai says on every pull request.
           EOF
           )"
+
+      # A release-triggered pin PR replaces any earlier release-triggered one
+      # still open: it carries the newest tag of every module, so it is a
+      # superset, and two open pins invite merging the stale one. Only PRs
+      # with the kai-ci:auto marker are touched — never a manual pin PR.
+      - name: Close the release-triggered pin PRs this one supersedes
+        if: github.event_name == 'repository_dispatch'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          set -uo pipefail
+          BR="kai-ci/pin-${DIGEST:7:12}"
+          NEW="$(gh pr list --repo kaicontext/kai-server --head "$BR" --state open --json number --jq '.[0].number // empty')"
+          [ -n "$NEW" ] || { echo "::warning::no open PR for $BR; closing nothing"; exit 0; }
+          gh pr list --repo kaicontext/kai-server --state open --limit 50 --json number,headRefName,body \
+            --jq ".[] | select(.headRefName | startswith(\"kai-ci/pin-\"))
+                      | select(.body | contains(\"<!-- kai-ci:auto -->\"))
+                      | select(.number != $NEW) | .number" |
+          while read -r old; do
+            gh pr close "$old" --repo kaicontext/kai-server --delete-branch \
+              --comment "Superseded by #$NEW, built from newer releases." \
+              || echo "::warning::could not close #$old"
+          done
 
       # Measure the repin before anyone merges it: replay the regression
       # corpus on the kai-cli this image carries and on the one production pins
