@@ -21,6 +21,9 @@ func TestDecisionsMustNameAStake(t *testing.T) {
 		"Admins can now read every member's API keys.",
 		"Deleted repositories are purged after 48 hours instead of 30 days.",
 		"Users who uninstall get a goodbye email.",
+		"[Access] Members can now see the admin page.",
+		"**[contract]** The export format adds a column.",
+		"`[Limit]` Free orgs get 20 reviews a day instead of 50.",
 	}
 	for _, d := range none {
 		if rcHasStake(d) {
