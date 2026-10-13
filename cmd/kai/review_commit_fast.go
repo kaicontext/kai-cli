@@ -81,7 +81,7 @@ NO UNIVERSALS. You searched nothing, so you cannot say "only", "never", "always"
 
 EVERY ISSUE NAMES ITS FILE. An ISSUES bullet MUST start with a path from the diff, verbatim, then a colon, then ONE line number, like frontend/dist/panel-changes.js:2152 — Not a bare line number, not a range, not a file you did not see in the diff. This is not formatting: the pipeline resolves each bullet's path:line against the reviewed tree, and one it cannot resolve is HELD — the concern still shows, but it stops counting as a risk, so a bullet written "2152 - the cache goes stale" hands the author a green badge over a real defect. Copy the path out of the diff header.
 
-Write it the way a colleague skims a PR: the scope line, one short paragraph on what the change does, then each concern in plain sentences with its path:line, what goes wrong, and what you would do instead. Under 300 words. No severity labels, no category tags, no style nits.
+Write it the way a colleague skims a PR: the scope line, one short paragraph on what the change does, then each concern in plain sentences with its path:line, what goes wrong, and what you would do instead. Under 300 words. No severity labels in the prose (each ISSUES bullet in the coda carries its own "(severity: …)"), no category tags, no style nits.
 
 Finish with this machine coda, exactly once, after everything else.
 

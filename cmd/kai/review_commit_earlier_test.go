@@ -18,7 +18,7 @@ func TestEarlierTagsLeaveAndReturn(t *testing.T) {
 	if strings.Contains(stripped, "(earlier:") {
 		t.Fatalf("a tag survived into the draft the sweep and challenge read:\n%s", stripped)
 	}
-	if refs["internal/smoketest/excerpt.go:13"] != "(earlier: 0123456789ab)" || len(refs) != 1 {
+	if refs["loc:internal/smoketest/excerpt.go:13"] != "(earlier: 0123456789ab)" {
 		t.Fatalf("refs = %v", refs)
 	}
 
@@ -79,7 +79,7 @@ func TestSeverityTagsLeaveAndReturn(t *testing.T) {
 		"- a.go:30 — the token is logged (severity: high) (earlier: 0123456789ab)\n" +
 		"- nit: a.go:3 — the doc names `max`\n"
 	stripped, refs := rcTakeEarlierTags(draft)
-	if strings.Contains(stripped, "(severity:") || refs["a.go:14"] != "(severity: medium)" || refs["a.go:30"] != "(severity: high) (earlier: 0123456789ab)" {
+	if strings.Contains(stripped, "(severity:") || refs["loc:a.go:14"] != "(severity: medium)" || refs["loc:a.go:30"] != "(severity: high) (earlier: 0123456789ab)" {
 		t.Fatalf("stripped:\n%s\nrefs=%v", stripped, refs)
 	}
 	_, risks, _, _, _, _ := rcParseReviewOutput(rcPutEarlierTags(stripped, refs))
@@ -93,5 +93,27 @@ func TestSeverityTagsLeaveAndReturn(t *testing.T) {
 	}
 	if !strings.Contains(rcChallengeSystemHead, "ONE ROOT CAUSE, ONE FINDING") || !strings.Contains(rcChallengeSystemHead, "Duplicate of issue N") {
 		t.Error("the fact-check prompt lacks the duplicate rule")
+	}
+}
+
+// From Kai's review of kai-cli#174: two different defects on one line keep
+// their own severities, and a bullet that already has one tag still gets the
+// other back.
+func TestTagsStayWithTheirOwnDefect(t *testing.T) {
+	draft := rcReviewDataMarker + "\nISSUES:\n" +
+		"- a.go:14 — `b.Len()` counts bytes, not letters (severity: medium)\n" +
+		"- a.go:14 — the limit is checked before the rune is written, one too late (severity: low)\n"
+	stripped, refs := rcTakeEarlierTags(draft)
+	_, risks, _, _, _, _ := rcParseReviewOutput(rcPutEarlierTags(stripped, refs))
+	if len(risks) != 2 || !strings.HasSuffix(risks[0], "(severity: medium)") || !strings.HasSuffix(risks[1], "(severity: low)") {
+		t.Errorf("risks = %q", risks)
+	}
+
+	refs = map[string]string{}
+	rcRememberTags(refs, "issues", "- a.go:30 — the token is logged", "(severity: high) (earlier: 0123456789ab)")
+	got := rcPutEarlierTags(rcReviewDataMarker+"\nISSUES:\n- a.go:30 — the token is logged (severity: high)\n", refs)
+	_, risks, _, _, _, _ = rcParseReviewOutput(got)
+	if len(risks) != 1 || !strings.HasSuffix(risks[0], "(severity: high) (earlier: 0123456789ab)") || strings.Count(risks[0], "severity") != 1 {
+		t.Errorf("a bullet with its severity did not get its earlier-ref back once: %q", risks)
 	}
 }

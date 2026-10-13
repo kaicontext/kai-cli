@@ -1092,19 +1092,22 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		sw := rcAwaitSweep(sweep)
 		if len(sw.Issues) > 0 {
 			before := len(rcIssuesOf(raw))
-			raw = rcDraftWithSweep(raw, sw.Issues)
-			// The sweep's bullets carry their own severity tags; they come
-			// off for the check like the reviewer's did.
-			var more map[string]string
-			raw, more = rcTakeEarlierTags(raw)
-			for k, v := range more {
-				if earlier == nil {
-					earlier = map[string]string{}
-				}
-				if earlier[k] == "" {
-					earlier[k] = v
+			// The sweep's bullets carry their own severity tags. They come
+			// off before anything matches them by wording — the merge into
+			// the draft, the duplicate check, and withholding unsettled
+			// proposals after the challenge — and are remembered like the
+			// reviewer's (review_commit_earlier.go).
+			for i, is := range sw.Issues {
+				stripped, tags := rcSplitTags(is)
+				sw.Issues[i] = strings.TrimSpace(stripped)
+				if tags != "" {
+					if earlier == nil {
+						earlier = map[string]string{}
+					}
+					rcRememberTags(earlier, "issues", "- "+sw.Issues[i], tags)
 				}
 			}
+			raw = rcDraftWithSweep(raw, sw.Issues)
 			fmt.Fprintf(os.Stderr, "  sweep: %d defect(s) proposed from %d chunk(s) — %d added to the reviewer's %d\n",
 				len(sw.Issues), sw.Chunks, len(rcIssuesOf(raw))-before, before)
 		}

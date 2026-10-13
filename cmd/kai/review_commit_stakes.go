@@ -26,7 +26,7 @@ import (
 // rcStakeTagRe reads a decision's leading stake tag.
 // Any case, and through the markdown a model wraps a label in (**[money]**,
 // `[access]`).
-var rcStakeTagRe = regexp.MustCompile(`(?i)^[\s*_`+"`"+`]*\[(money|limit|sends|deletes|access|contract)\]`)
+var rcStakeTagRe = regexp.MustCompile(`(?i)^[\s*_` + "`" + `]*\[(money|limit|sends|deletes|access|contract)\]`)
 
 // rcStakeWordsRe finds a stake in an untagged decision's own words.
 var rcStakeWordsRe = regexp.MustCompile(`(?i)\b(charg(e|es|ed|ing)|billing|billed|pric(e|es|ing)|credits?|debit\w*|refund\w*|invoice\w*|payments?|subscriptions?|surcharge\w*|balance|quota\w*|rate[- ]limit\w*|spend(ing)? (cap|limit)|emails?|notifications?|webhooks?|sms|push notification\w*|delet(e|es|ed|ion)|purg(e|es|ed)|retention|erase\w*|permissions?|roles?|authenticat\w*|authoriz\w*|oauth|sso|api keys?|access tokens?|secrets?|public api|breaking change|schema|migrations?)\b`)
