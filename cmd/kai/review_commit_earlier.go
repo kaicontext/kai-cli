@@ -92,14 +92,25 @@ func rcRememberTags(refs map[string]string, section, line, tags string) {
 
 // rcPutEarlierTags appends each remembered tag to the ISSUES or DECISIONS
 // bullet it belongs to in the final review — matched by location and
-// wording, or by location alone when only one tagged bullet was there — and
-// only the tags the bullet does not already carry.
+// wording, or by location alone only when one tagged bullet was there AND the
+// final review has one bullet there (the fact-check reworded it); another
+// bullet on a shared line, untagged, stays untagged — and only the tags the
+// bullet does not already carry. A nit takes no severity: it is not scored by
+// one.
 func rcPutEarlierTags(raw string, refs map[string]string) string {
 	if len(refs) == 0 {
 		return raw
 	}
 	lines := strings.Split(raw, "\n")
+	atLoc := map[string]int{}
 	section := ""
+	for _, l := range lines {
+		section = rcEarlierSection(section, l)
+		if _, loc, ok := rcEarlierBulletKey(section, l); ok && loc != "" {
+			atLoc[loc]++
+		}
+	}
+	section = ""
 	for i, l := range lines {
 		section = rcEarlierSection(section, l)
 		if section == "" {
@@ -110,16 +121,21 @@ func rcPutEarlierTags(raw string, refs map[string]string) string {
 			continue
 		}
 		tags := refs[key]
-		if tags == "" && loc != "" && refs[loc] != rcAmbiguous {
+		if tags == "" && loc != "" && refs[loc] != rcAmbiguous && atLoc[loc] == 1 {
 			tags = refs[loc]
 		}
 		if tags == "" {
 			continue
 		}
 		have := strings.ToLower(l)
+		_, nit := rcSplitNit(strings.TrimPrefix(strings.TrimSpace(l), "- "))
 		var add []string
 		for _, t := range rcEarlierTagRe.FindAllString(tags, -1) {
-			if t = strings.TrimSpace(t); !strings.Contains(have, strings.ToLower(t)) {
+			t = strings.TrimSpace(t)
+			if nit && strings.HasPrefix(strings.ToLower(t), "(severity") {
+				continue
+			}
+			if !strings.Contains(have, strings.ToLower(t)) {
 				add = append(add, t)
 			}
 		}

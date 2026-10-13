@@ -117,3 +117,34 @@ func TestTagsStayWithTheirOwnDefect(t *testing.T) {
 		t.Errorf("a bullet with its severity did not get its earlier-ref back once: %q", risks)
 	}
 }
+
+// From Kai's review of kai-cli#174: the location fallback only serves one
+// bullet the fact-check reworded; an untagged bullet sharing the line stays
+// untagged, and a nit takes no severity.
+func TestLocationFallbackOnlyForALoneBullet(t *testing.T) {
+	refs := map[string]string{}
+	rcRememberTags(refs, "issues", "- a.go:14 — `b.Len()` counts bytes", "(severity: medium)")
+
+	// Reworded by the fact-check, alone on its line: the fallback finds it.
+	got := rcPutEarlierTags(rcReviewDataMarker+"\nISSUES:\n- a.go:14 — the length check counts bytes, not letters\n", refs)
+	_, risks, _, _, _, _ := rcParseReviewOutput(got)
+	if len(risks) != 1 || !strings.HasSuffix(risks[0], "(severity: medium)") {
+		t.Errorf("a lone reworded bullet lost its tag: %q", risks)
+	}
+
+	// A different, untagged bullet on the same line beside it: no tag for it.
+	got = rcPutEarlierTags(rcReviewDataMarker+"\nISSUES:\n- a.go:14 — `b.Len()` counts bytes\n- a.go:14 — the check runs before the write\n", refs)
+	_, risks, _, _, _, _ = rcParseReviewOutput(got)
+	if len(risks) != 2 || !strings.HasSuffix(risks[0], "(severity: medium)") || strings.Contains(risks[1], "severity") {
+		t.Errorf("risks = %q", risks)
+	}
+
+	// A bullet that became a nit keeps its earlier-ref but takes no severity.
+	refs = map[string]string{}
+	rcRememberTags(refs, "issues", "- a.go:3 — the doc names `max`", "(severity: low) (earlier: 0123456789ab)")
+	got = rcPutEarlierTags(rcReviewDataMarker+"\nISSUES:\n- nit: a.go:3 — the doc names `max`\n", refs)
+	_, risks, _, _, _, _ = rcParseReviewOutput(got)
+	if len(risks) != 1 || strings.Contains(risks[0], "severity") || !strings.HasSuffix(risks[0], "(earlier: 0123456789ab)") {
+		t.Errorf("nit = %q", risks)
+	}
+}
