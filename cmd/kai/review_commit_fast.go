@@ -81,7 +81,7 @@ NO UNIVERSALS. You searched nothing, so you cannot say "only", "never", "always"
 
 EVERY ISSUE NAMES ITS FILE. An ISSUES bullet MUST start with a path from the diff, verbatim, then a colon, then ONE line number, like frontend/dist/panel-changes.js:2152 — Not a bare line number, not a range, not a file you did not see in the diff. This is not formatting: the pipeline resolves each bullet's path:line against the reviewed tree, and one it cannot resolve is HELD — the concern still shows, but it stops counting as a risk, so a bullet written "2152 - the cache goes stale" hands the author a green badge over a real defect. Copy the path out of the diff header.
 
-Write it the way a colleague skims a PR: the scope line, one short paragraph on what the change does, then each concern in plain sentences with its path:line, what goes wrong, and what you would do instead. Under 300 words. No severity labels, no category tags, no style nits.
+Write it the way a colleague skims a PR: the scope line, one short paragraph on what the change does, then each concern in plain sentences with its path:line, what goes wrong, and what you would do instead. Under 300 words. No severity labels in the prose (each ISSUES bullet in the coda carries its own "(severity: …)"), no category tags, no style nits.
 
 Finish with this machine coda, exactly once, after everything else.
 
@@ -93,13 +93,15 @@ MERGE_READY answers what should happen to this branch NEXT, and on a fast pass i
   2 — defects in the core of what the change does.
   1 — do not merge. It does not do what it claims, or it breaks something that works today.
 
+Size every plain ISSUE with "(severity: high|medium|low)" at its end: high breaks on ordinary input (a crash, lost data, a security hole, a wrong result most users hit), medium on a plausible but less common input, low only on unusual input.
+
 DECISIONS is for a change that is correct and still needs a human's yes — follow the changed values outward to anything that CHARGES a customer, LIMITS one, SENDS or PUBLISHES on their behalf, DELETES, or changes who can access what, and say who it affects and what the consequence is. When money moves, name who is debited and who is credited. A DECISION MUST NAME ITS STAKE: begin the bullet with exactly one tag — [money] (charges, credits, prices, refunds), [limit] (a quota, cap or rate limit on a customer), [sends] (email, notifications, webhooks, messages or publishing to people outside the system), [deletes] (data removed or retention shortened), [access] (who can see or do what: auth, roles, permissions, tokens), [contract] (a public API, a database schema others read, or a published file format changes shape). A change to how a tool, a reviewer, a default, a heuristic, a threshold, a log, a UI or an internal workflow behaves is NOT a decision unless it reaches one of those for real people. When unsure, it is not a decision: leave it out. A DECISION is not a defect: it carries no path:line and never lowers INTENT_MATCH or MERGE_READY. A NIT — a real defect that cannot change what the program does: a wrong comment, docstring, README or log message, a typo in text nothing parses, a dead duplicate line — goes in ISSUES with "nit: " before its location and never lowers MERGE_READY. When in doubt, it is not a nit. Omit either list entirely when it is empty.
 ===REVIEW-DATA===
 INTENT_MATCH: verified|partial|diverges
 MERGE_READY: 1|2|3|4
 SUMMARY: <one honest sentence — your bottom line, and that this was a fast pass>
 ISSUES:
-- <path from the diff>:<line> — <one sentence per root cause> (also: <path>:<line>, …only when the same cause recurs)
+- <path from the diff>:<line> — <one sentence per root cause> (also: <path>:<line>, …only when the same cause recurs) (severity: high|medium|low)
 - nit: <path>:<line> — <a defect that cannot change behaviour>
 DECISIONS:
 - [money|limit|sends|deletes|access|contract] <what the author is deciding, who it affects, and the consequence — no path:line>`

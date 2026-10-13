@@ -94,10 +94,10 @@ NEW DEFAULTS POINT SOMEWHERE. A new config default that is a URL, host, e-mail a
 
 Then write the review the way a good colleague would leave it on the PR:
 - Open with one line naming your scope: the repo and revision you read, plus anything the change obviously touches that you could NOT read (another repo, a client, a deployed config, a provider's behavior). Then a short paragraph: what the change actually does, and your overall take.
-- Then each real concern, in plain language: where it is (path:line), what goes wrong, why it matters, and what you'd do instead. No category tags, no severity labels, no template — clear sentences addressed to the author.
+- Then each real concern, in plain language: where it is (path:line), what goes wrong, why it matters, and what you'd do instead. No category tags, no severity labels in the prose (each ISSUES bullet in the coda carries its own "(severity: …)"), no template — clear sentences addressed to the author.
 - If the change is solid, say so plainly. A sentence on what's done well is welcome; flattery is not. Style preferences are not concerns.
 
-SIZE EVERY ISSUE. Most defects you find are real and small. A NIT is a real defect that cannot change what the program does: a comment, docstring, README, help text or log message that is wrong or out of date, a typo in text nothing parses, a dead or duplicated line with no effect. Write it in ISSUES with "nit: " before its location. Everything that can change behaviour — a wrong value, a missing check, a test that cannot fail, a user-facing string or key that something reads — is a plain ISSUE, however small. When in doubt, it is not a nit.
+SIZE EVERY ISSUE. Most defects you find are real and small. A NIT is a real defect that cannot change what the program does: a comment, docstring, README, help text or log message that is wrong or out of date, a typo in text nothing parses, a dead or duplicated line with no effect. Write it in ISSUES with "nit: " before its location. Everything that can change behaviour — a wrong value, a missing check, a test that cannot fail, a user-facing string or key that something reads — is a plain ISSUE, however small. When in doubt, it is not a nit. Then SIZE ITS SEVERITY: end every plain ISSUE (not a nit) with "(severity: high)", "(severity: medium)" or "(severity: low)". high — it breaks on ordinary input: a crash, lost or corrupted data, a security hole, a wrong result most users will hit. medium — a wrong result on a plausible but less common input, or a test that cannot catch what it claims to. low — an edge case on unusual input (decomposed Unicode, an empty list nobody passes, a value outside the documented range). The severity is how much a reader should care, so be honest about how often it would happen.
 
 Close the prose with one line saying how ready this is to merge, in your own words, so the author reads your answer before the machinery does.
 
@@ -119,7 +119,7 @@ INTENT_MATCH: verified|partial|diverges
 MERGE_READY: 1|2|3|4|5
 SUMMARY: <one honest sentence — your bottom line>
 ISSUES:
-- path:line — <one sentence per root cause> (also: path:line, …only when the same cause recurs)
+- path:line — <one sentence per root cause> (also: path:line, …only when the same cause recurs) (severity: high|medium|low)
 - nit: path:line — <a defect that cannot change behaviour>
 DECISIONS:
 - [money|limit|sends|deletes|access|contract] <what the author is deciding, who it affects, and the consequence — no path:line; it is not a defect>`
@@ -1092,6 +1092,21 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		sw := rcAwaitSweep(sweep)
 		if len(sw.Issues) > 0 {
 			before := len(rcIssuesOf(raw))
+			// The sweep's bullets carry their own severity tags. They come
+			// off before anything matches them by wording — the merge into
+			// the draft, the duplicate check, and withholding unsettled
+			// proposals after the challenge — and are remembered like the
+			// reviewer's (review_commit_earlier.go).
+			for i, is := range sw.Issues {
+				stripped, tags := rcSplitTags(is)
+				sw.Issues[i] = strings.TrimSpace(stripped)
+				if tags != "" {
+					if earlier == nil {
+						earlier = map[string]string{}
+					}
+					rcRememberTags(earlier, "issues", "- "+sw.Issues[i], tags)
+				}
+			}
 			raw = rcDraftWithSweep(raw, sw.Issues)
 			fmt.Fprintf(os.Stderr, "  sweep: %d defect(s) proposed from %d chunk(s) — %d added to the reviewer's %d\n",
 				len(sw.Issues), sw.Chunks, len(rcIssuesOf(raw))-before, before)

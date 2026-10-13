@@ -31,11 +31,11 @@ import (
 
 // rcPrior is Kai's previous review of this pull request.
 type rcPrior struct {
-	Head      string `json:"head"`
-	Readiness int    `json:"readiness"`
-	Summary   string `json:"summary"`
+	Head      string         `json:"head"`
+	Readiness int            `json:"readiness"`
+	Summary   string         `json:"summary"`
 	Points    []rcPriorPoint `json:"points"`
-	Answered []struct {
+	Answered  []struct {
 		Point string `json:"point"`
 		Reply string `json:"reply"`
 	} `json:"answered"`

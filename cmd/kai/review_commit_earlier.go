@@ -11,6 +11,9 @@ package main
 // reviewer ends an ISSUES bullet that is one of them with "(earlier: <ref>)".
 // Decisions too (kai-cli#171 re-announced its two decisions on every push).
 //
+// The reviewer's "(severity: high|medium|low)" on a defect is the same kind of
+// tag and rides the same way (kai-server reads both; review_earlier.go).
+//
 // The tag is bookkeeping, not text: the sweep merge, the duplicate fold and
 // the challenge all match bullets by their wording, and the challenge's
 // "## Findings" headings are prose. So it comes off right after the reviewer
@@ -24,14 +27,18 @@ import (
 	"strings"
 )
 
-// rcEarlierTagRe is the tag; the ref is kai-server's 12-hex fingerprint.
-var rcEarlierTagRe = regexp.MustCompile(`\s*\(earlier:\s*([0-9a-f]{12})\)`)
+// rcEarlierTagRe is a bookkeeping tag kai-server reads off a statement: the
+// earlier-ref (its 12-hex fingerprint) or the reviewer's severity. Both ride
+// the same way — off while bullets are matched by wording, back on at the end.
+var rcEarlierTagRe = regexp.MustCompile(`(?i)\s*\((?:earlier:\s*[0-9a-f]{12}|severity:\s*(?:high|medium|low))\)`)
 
-// rcTakeEarlierTags strips every tag from a draft and returns the refs of the
-// bullets that carried one: an ISSUES bullet keyed by its path:line, a
-// DECISIONS bullet (which has no location) by its wording.
+// rcTakeEarlierTags strips every tag from a draft and returns the tags of the
+// bullets that carried them ("(severity: low) (earlier: …)"), keyed by
+// rcEarlierBulletKey: an ISSUES bullet by its location and wording, with its
+// location alone as a fallback; a DECISIONS bullet (which has no location) by
+// its wording.
 func rcTakeEarlierTags(raw string) (string, map[string]string) {
-	if !strings.Contains(raw, "(earlier:") {
+	if !rcEarlierTagRe.MatchString(raw) {
 		return raw, nil
 	}
 	refs := map[string]string{}
@@ -39,36 +46,115 @@ func rcTakeEarlierTags(raw string) (string, map[string]string) {
 	section := ""
 	for i, l := range lines {
 		section = rcEarlierSection(section, l)
-		m := rcEarlierTagRe.FindStringSubmatch(l)
-		if m == nil {
+		stripped, tags := rcSplitTags(l)
+		if tags == "" {
 			continue
 		}
-		l = rcEarlierTagRe.ReplaceAllString(l, "")
-		lines[i] = l
-		if key, ok := rcEarlierBulletKey(section, l); ok {
-			refs[key] = m[1]
-		}
+		lines[i] = stripped
+		rcRememberTags(refs, section, stripped, tags)
 	}
 	return strings.Join(lines, "\n"), refs
 }
 
-// rcPutEarlierTags appends each remembered ref to the ISSUES or DECISIONS
-// bullet it belongs to in the final review.
+// rcSplitTags strips a line's tags and returns them, normalised and in order.
+func rcSplitTags(line string) (string, string) {
+	tags := rcEarlierTagRe.FindAllString(line, -1)
+	if len(tags) == 0 {
+		return line, ""
+	}
+	for i := range tags {
+		tags[i] = strings.ToLower(strings.TrimSpace(tags[i]))
+	}
+	return rcEarlierTagRe.ReplaceAllString(line, ""), strings.Join(tags, " ")
+}
+
+// rcAmbiguous marks a location two differently tagged bullets share: there,
+// only an exact wording match may take a tag.
+const rcAmbiguous = "\x00"
+
+// rcRememberTags files one bullet's tags under its keys.
+func rcRememberTags(refs map[string]string, section, line, tags string) {
+	key, loc, ok := rcEarlierBulletKey(section, line)
+	if !ok {
+		return
+	}
+	if _, seen := refs[key]; !seen {
+		refs[key] = tags // the first teller wins: the reviewer before the sweep
+	}
+	if loc != "" {
+		if prev, seen := refs[loc]; seen && prev != tags {
+			refs[loc] = rcAmbiguous
+		} else {
+			refs[loc] = tags
+		}
+	}
+}
+
+// rcPutEarlierTags appends each remembered tag to the ISSUES or DECISIONS
+// bullet it belongs to in the final review — matched by location and
+// wording, or by location alone only when one tagged bullet was there AND the
+// final review has one bullet there (the fact-check reworded it); another
+// bullet on a shared line, untagged, stays untagged — and only the tags the
+// bullet does not already carry. A nit takes no severity: it is not scored by
+// one.
 func rcPutEarlierTags(raw string, refs map[string]string) string {
 	if len(refs) == 0 {
 		return raw
 	}
 	lines := strings.Split(raw, "\n")
+	atLoc := map[string]int{}
 	section := ""
+	for _, l := range lines {
+		section = rcEarlierSection(section, l)
+		bare, _ := rcSplitTags(l)
+		if _, loc, ok := rcEarlierBulletKey(section, bare); ok && loc != "" {
+			atLoc[loc]++
+		}
+	}
+	section = ""
 	for i, l := range lines {
 		section = rcEarlierSection(section, l)
-		if section == "" || strings.Contains(l, "(earlier:") {
+		if section == "" {
 			continue
 		}
-		if key, ok := rcEarlierBulletKey(section, l); ok {
-			if ref := refs[key]; ref != "" {
-				lines[i] = strings.TrimRight(l, " ") + " (earlier: " + ref + ")"
+		bare, _ := rcSplitTags(l) // a bullet's key is its words, not its tags
+		key, loc, ok := rcEarlierBulletKey(section, bare)
+		if !ok {
+			continue
+		}
+		tags := refs[key]
+		if tags == "" && loc != "" && refs[loc] != rcAmbiguous && atLoc[loc] == 1 {
+			// The fallback carries the severity only. An earlier-ref makes
+			// kai-server treat the bullet as a point already on the PR and
+			// not post it, so it needs the exact bullet: the one bullet on
+			// a line could be a new defect where the earlier one was
+			// refuted. (The challenge keeps each bullet's own wording, so
+			// a carried point still matches exactly.)
+			var sev []string
+			for _, t := range rcEarlierTagRe.FindAllString(refs[loc], -1) {
+				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(t)), "(severity") {
+					sev = append(sev, strings.TrimSpace(t))
+				}
 			}
+			tags = strings.Join(sev, " ")
+		}
+		if tags == "" {
+			continue
+		}
+		have := strings.ToLower(l)
+		_, nit := rcSplitNit(strings.TrimPrefix(strings.TrimSpace(l), "- "))
+		var add []string
+		for _, t := range rcEarlierTagRe.FindAllString(tags, -1) {
+			t = strings.TrimSpace(t)
+			if nit && strings.HasPrefix(strings.ToLower(t), "(severity") {
+				continue
+			}
+			if !strings.Contains(have, strings.ToLower(t)) {
+				add = append(add, t)
+			}
+		}
+		if len(add) > 0 {
+			lines[i] = strings.TrimRight(l, " ") + " " + strings.Join(add, " ")
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -92,22 +178,33 @@ func rcEarlierSection(section, line string) string {
 	return ""
 }
 
-// rcEarlierBulletKey is the key a tagged bullet is remembered by.
-func rcEarlierBulletKey(section, line string) (string, bool) {
+// rcAlsoListRe is a bullet's "(also: …)" list, which the duplicate fold
+// adds after the reviewer wrote it.
+var rcAlsoListRe = regexp.MustCompile(`\s*\(also:[^)]*\)`)
+
+// rcEarlierBulletKey is the key a tagged bullet is remembered by, and for an
+// ISSUES bullet also its location key ("loc:path:line"): two different
+// defects on one line must not share a severity.
+func rcEarlierBulletKey(section, line string) (key, loc string, ok bool) {
 	t := strings.TrimSpace(line)
 	if !strings.HasPrefix(t, "- ") {
-		return "", false
+		return "", "", false
 	}
 	item := strings.TrimPrefix(t, "- ")
 	switch section {
 	case "issues":
-		return rcEarlierKey(item)
+		where, ok := rcEarlierKey(item)
+		if !ok {
+			return "", "", false
+		}
+		sentence := rcIssueKey(rcIssueSentence(rcAlsoListRe.ReplaceAllString(item, "")))
+		return where + "|" + sentence, "loc:" + where, true
 	case "decisions":
 		if k := rcIssueKey(item); k != "" {
-			return "decision:" + k, true
+			return "decision:" + k, "", true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // rcEarlierKey is a bullet's path:line.
