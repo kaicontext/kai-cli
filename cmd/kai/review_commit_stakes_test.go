@@ -40,10 +40,12 @@ func TestDecisionsMustNameAStake(t *testing.T) {
 func TestStakelessDecisionsLeaveTheDraftBeforeTheCheck(t *testing.T) {
 	raw := "Prose.\n" + rcReviewDataMarker + "\nMERGE_READY: 4\nISSUES:\n- a.go:3 — `x` is nil\nDECISIONS:\n" +
 		"- The reviewer now folds nits into one section.\n" +
-		"- [money] Every run is debited 5% more from the customer's balance.\n"
+		"Note that this applies to every review:\n" +
+		"- [money] Every run is debited 5% more from the customer's balance.\n" +
+		"- The fast pass now skips vendored files.\n"
 	got, n := rcDropStakelessDecisions(raw)
 	_, issues, decisions, _, _, _ := rcParseReviewOutput(got)
-	if n != 1 || len(decisions) != 1 || !strings.HasPrefix(decisions[0], "[money]") || len(issues) != 1 {
+	if n != 2 || len(decisions) != 1 || !strings.HasPrefix(decisions[0], "[money]") || len(issues) != 1 {
 		t.Errorf("dropped %d; issues %q decisions %q", n, issues, decisions)
 	}
 	for _, prompt := range []string{rcReviewSystem, rcFastReviewSystem} {

@@ -51,8 +51,14 @@ func rcDropStakelessDecisions(raw string) (string, int) {
 		t := strings.TrimSpace(ln)
 		bullet := rcUnwrapMachineBullet(t)
 		if !strings.HasPrefix(bullet, "-") {
+			// Only the coda's own headers move between lists, exactly as
+			// rcParseReviewOutput reads them: a stray "Note that X:" line is
+			// not a header.
 			if key, _, labelled := rcMachineLine(t); labelled {
-				section = key
+				switch key {
+				case "issues", "findings", "decisions", "intent_match", "merge_ready", "summary", "note":
+					section = key
+				}
 			}
 			out = append(out, ln)
 			continue
