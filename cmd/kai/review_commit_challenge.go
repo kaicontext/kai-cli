@@ -70,7 +70,7 @@ There must be exactly one check per supplied issue. Both supported and refuted c
 
 A remedy belongs to its allegation. Put a proposed fix ONLY in that allegation's "remedy" field; it is published only when the allegation is supported. Do not place repair advice anywhere else.
 
-Assess every DECISIONS bullet in the draft the same way, one "decisions" entry each, and an empty array when the draft has none. A decision is a genuine choice the change already makes that still needs a human's yes; it is never a place to propose a repair. Do not add decisions the draft did not make.
+Assess every DECISIONS bullet in the draft the same way, one "decisions" entry each, and an empty array when the draft has none. A decision is a genuine choice the change already makes that still needs a human's yes; it is never a place to propose a repair. Do not add decisions the draft did not make. REFUTE a decision whose consequence does not reach real people through money, a limit, something sent to them, deleted data, access, or a public contract (an API, a schema others read, a published format) — a change to how a tool, a default, a heuristic or an internal workflow behaves is not one.
 
 Set intent_match and merge_ready from the SUPPORTED findings only. A fast draft remains a fast, limited review, with merge_ready at most 4.`
 
@@ -560,6 +560,12 @@ func rcChallengeReview(ctx context.Context, prov provider.Provider, model, draft
 // the diff sweep's chunks — that each batch receives only when its
 // allegations name a file the source covers.
 func rcChallengeReviewWith(ctx context.Context, prov provider.Provider, model, draft string, sources, extra []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
+	// A decision that names no stake never reaches the check or the score
+	// (review_commit_stakes.go).
+	if d, n := rcDropStakelessDecisions(draft); n > 0 {
+		fmt.Fprintf(os.Stderr, "  decisions: %d dropped before the check — no stake named (money, limit, sends, deletes, access, contract)\n", n)
+		draft = d
+	}
 	// An allegation whose trigger is a future change is refuted before the
 	// gate sees it (rcWithoutSpeculativeIssues). When the gate answers, the
 	// refutations are recorded with its result so the bundle says what was
