@@ -17,7 +17,7 @@ import (
 // are right — a wrong "supported" is published exactly as faithfully as a
 // correct one.
 
-const rcTestDecision = `The play button now changes the terminal's working directory for every command it runs.`
+const rcTestDecision = `[access] The play button now runs every command with the signed-in user's credentials instead of a sandboxed account.`
 
 func rcMustValidate(t *testing.T, a rcChallengeAnswer, decisions []string) *rcChallengeResult {
 	t.Helper()
