@@ -91,6 +91,13 @@ func TestSeverityTagsLeaveAndReturn(t *testing.T) {
 		if !strings.Contains(prompt, "(severity: high|medium|low)") {
 			t.Errorf("the %s prompt does not ask for a severity", name)
 		}
+		// Nothing in it may forbid the tag outright (Kai's review of
+		// kai-cli#174 found "no severity labels" left in two prompts).
+		for _, s := range strings.Split(prompt, "no severity labels")[1:] {
+			if !strings.HasPrefix(s, " in the prose") {
+				t.Errorf("the %s prompt still forbids severity labels outright", name)
+			}
+		}
 	}
 	if !strings.Contains(rcChallengeSystemHead, "ONE ROOT CAUSE, ONE FINDING") || !strings.Contains(rcChallengeSystemHead, "Duplicate of issue N") {
 		t.Error("the fact-check prompt lacks the duplicate rule")
