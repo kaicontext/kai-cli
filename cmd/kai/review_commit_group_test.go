@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/kaicontext/kai-engine/message"
+	"github.com/kaicontext/kai-engine/provider"
 )
 
 // kai-api#4's shape: three bugs, each confirmed twice, the pairs sharing no
@@ -103,5 +107,51 @@ func TestGroupingMergesAlsoLists(t *testing.T) {
 	_, risks, _, _, _, _ := rcParseReviewOutput(got)
 	if n != 1 || len(risks) != 1 || !strings.Contains(risks[0], "(also: a.go:9, a.go:5, b.go:2)") || strings.Count(risks[0], "a.go:9") != 1 {
 		t.Errorf("risks = %q", risks)
+	}
+}
+
+// kai-server#467: six confirmed findings, two of them said twice. The answer
+// folds them whether the model writes "5 = 2" or "- 5 = 2." as a list.
+func TestGroupingOnTheTruncateSample(t *testing.T) {
+	raw := rcReviewDataMarker + "\nISSUES:\n" +
+		"- kailab-control/internal/textutil/truncate.go:21 — TruncateWords always backs up to the last space even when the cut lands on a word boundary\n" +
+		"- kailab-control/internal/textutil/truncate.go:8 — Both functions use byte length and byte slicing while documenting \"characters\"\n" +
+		"- kailab-control/internal/textutil/truncate.go:11 — max <= 0 with a non-empty string makes s[:max-1] panic (also: kailab-control/internal/textutil/truncate.go:20)\n" +
+		"- kailab-control/internal/textutil/truncate.go:22 — runs of consecutive spaces leave trailing whitespace before the \"…\"\n" +
+		"- kailab-control/internal/textutil/truncate.go:11 — `len` and `s[:max-1]` count bytes, not characters\n" +
+		"- kailab-control/internal/textutil/truncate.go:11 — `max <= 0` with a non-empty `s` slices with `max-1 < 0` and panics\n"
+	for _, reply := range []string{"5 = 2\n6 = 3", "- 5 = 2.\n- 6 = 3.", "#5 = #2\n#6 = #3\n"} {
+		got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return reply, nil })
+		_, risks, _, _, _, _ := rcParseReviewOutput(got)
+		if n != 2 || len(risks) != 4 {
+			t.Errorf("answer %q: folded %d, %d findings left", reply, n, len(risks))
+			continue
+		}
+		if !strings.Contains(risks[1], "(also: kailab-control/internal/textutil/truncate.go:11)") || strings.Count(risks[2], "truncate.go:11") != 1 {
+			t.Errorf("answer %q: %q", reply, risks)
+		}
+	}
+}
+
+// The call leaves room for the model to reason before it answers (on
+// kai-server#467 a 400-token cap left none), and a reply with no text is a
+// failed call, not "no repeats".
+func TestGroupingCallLeavesRoomToReason(t *testing.T) {
+	raw := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — x is nil\n- a.go:2 — x can be nil here\n"
+	var req provider.Request
+	reply := ""
+	prov := rcChallengeProvider{send: func(_ context.Context, r provider.Request) (provider.Response, error) {
+		req = r
+		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: reply}}, OutputTokens: 400}, nil
+	}}
+	if got, n := rcGroupDuplicateIssues(context.Background(), prov, "z-ai/glm-5.2", raw, nil); n != 0 || got != raw {
+		t.Errorf("an empty answer changed the review: %d", n)
+	}
+	if req.MaxTokens < 4096 || req.ReasoningEffort != "low" {
+		t.Errorf("max tokens %d, effort %q: no room to reason and answer", req.MaxTokens, req.ReasoningEffort)
+	}
+	reply = "2 = 1"
+	if _, n := rcGroupDuplicateIssues(context.Background(), prov, "z-ai/glm-5.2", raw, nil); n != 1 {
+		t.Errorf("folded %d, want 1", n)
 	}
 }
