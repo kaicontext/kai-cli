@@ -69,8 +69,12 @@ func rcParseEarlierSection(raw string) map[string]rcEarlierClaim {
 			continue
 		}
 		if !strings.HasPrefix(t, "-") {
-			key, _, labelled := rcMachineLine(t)
-			in = labelled && key == "earlier"
+			// Only a coda header moves in or out of the list; any other
+			// line inside it (a wrapped note, "the guard: now …") is part of
+			// it and must not end it (Kai's review of kai-cli#182).
+			if key, ok := rcCodaHeader(t); ok {
+				in = key == "earlier"
+			}
 			continue
 		}
 		if !in {
@@ -128,22 +132,35 @@ func rcTakeEarlierSection(raw string) (string, map[string]rcEarlierClaim) {
 	in := false
 	for _, ln := range lines {
 		t := strings.TrimSpace(ln)
-		if t != "" && !strings.HasPrefix(t, "-") {
-			key, _, labelled := rcMachineLine(t)
-			if labelled && key == "earlier" {
-				in = true
+		if key, ok := rcCodaHeader(t); ok {
+			in = key == "earlier"
+			if in {
 				continue
 			}
-			if labelled {
-				in = false
-			}
 		}
-		if in && (t == "" || strings.HasPrefix(t, "-")) {
-			continue
+		if in {
+			continue // a bullet, a continuation or a blank inside EARLIER
 		}
 		out = append(out, ln)
 	}
 	return head + strings.Join(out, "\n"), claims
+}
+
+// rcCodaHeaders are the coda's own section headers — the ones
+// rcParseReviewOutput switches on — plus EARLIER.
+var rcCodaHeaders = map[string]bool{"issues": true, "findings": true, "decisions": true, "intent_match": true, "merge_ready": true, "summary": true, "note": true, "earlier": true}
+
+// rcCodaHeader reports whether a line is one of the coda's headers, and which.
+// A line with a colon in it is not a header unless its label is one of them.
+func rcCodaHeader(t string) (string, bool) {
+	if t == "" || strings.HasPrefix(t, "-") {
+		return "", false
+	}
+	key, _, labelled := rcMachineLine(t)
+	if !labelled || !rcCodaHeaders[key] {
+		return "", false
+	}
+	return key, true
 }
 
 // rcEarlierStatuses decides each earlier ref's status from the reviewer's

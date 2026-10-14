@@ -72,6 +72,32 @@ func TestTakeEarlierSectionHidesItFromLaterPasses(t *testing.T) {
 	}
 }
 
+// A wrapped note inside EARLIER ("the guard: …" on its own line) is part of
+// the list: it must not end it, and it must leave the draft with it.
+func TestEarlierContinuationLines(t *testing.T) {
+	draft := "x\n" + rcReviewDataMarker + `
+INTENT_MATCH: verified
+MERGE_READY: 4
+SUMMARY: fine
+ISSUES:
+- src/a.go:1 — still wrong
+EARLIER:
+- aaaaaaaaaaaa: fixed at src/b.go:22 — the guard
+  now returns an error. Note: the caller checks it.
+- bbbbbbbbbbbb: wrong — the length is validated first
+`
+	stripped, claims := rcTakeEarlierSection(draft)
+	if claims["aaaaaaaaaaaa"].status != rcEarlierFixed || claims["bbbbbbbbbbbb"].status != rcEarlierWithdrawn {
+		t.Fatalf("a continuation line ended the list: %+v", claims)
+	}
+	if strings.Contains(stripped, "caller checks it") || strings.Contains(stripped, "bbbbbbbbbbbb") {
+		t.Fatalf("EARLIER content left in the draft:\n%s", stripped)
+	}
+	if _, _, _, _, _, note := rcParseReviewOutput(stripped); note != "fine" {
+		t.Errorf("summary note = %q, want fine", note)
+	}
+}
+
 func TestEarlierStatuses(t *testing.T) {
 	prior := &rcPrior{Head: "abc", Points: []rcPriorPoint{
 		{Kind: "defect", Ref: "111111111111"}, // re-raised → open, even though EARLIER says fixed
