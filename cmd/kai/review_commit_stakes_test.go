@@ -66,3 +66,13 @@ func TestSummaryCarriesNoOneToFive(t *testing.T) {
 		t.Errorf("summary = %q", got)
 	}
 }
+
+// [contract] was stretched to a docs claim (kai-server#425) and an internal
+// build check (kai-cli#166); the definition now says what it is not.
+func TestContractStakeSaysWhatItIsNot(t *testing.T) {
+	for name, p := range map[string]string{"review": rcReviewSystem, "fast": rcFastReviewSystem} {
+		if !strings.Contains(p, "not documentation, wording, build or CI steps, or internal behaviour") {
+			t.Errorf("the %s prompt's [contract] does not say what it is not", name)
+		}
+	}
+}
