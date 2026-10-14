@@ -12,7 +12,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/exp/teatest v0.0.0-20260511125431-fe5d686e0c99
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/kaicontext/kai-core v0.1.0
+	github.com/kaicontext/kai-core v0.1.1
 	github.com/mattn/go-isatty v0.0.20
 	github.com/sergi/go-diff v1.4.0
 	github.com/spf13/cobra v1.10.1
@@ -61,7 +61,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
-	github.com/kaicontext/kai-engine v0.6.76
+	github.com/kaicontext/kai-engine v0.6.77
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
