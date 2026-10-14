@@ -17,7 +17,7 @@ func TestGroupingFoldsRepeatsTheModelNames(t *testing.T) {
 		"- nit: internal/store/billing.go:3 — the comment names the wrong table\n" +
 		"DECISIONS:\n- [money] tenants are charged gateway cost +10%\n"
 	var asked string
-	got, n := rcGroupDuplicateIssuesWith(raw, func(user string) (string, error) {
+	got, n := rcGroupDuplicateIssuesWith(raw, nil, func(user string) (string, error) {
 		asked = user
 		return "3 = 1\n4 = 2\n", nil
 	})
@@ -37,16 +37,16 @@ func TestGroupingFoldsRepeatsTheModelNames(t *testing.T) {
 func TestGroupingLeavesTheReviewAloneOnABadAnswer(t *testing.T) {
 	raw := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — one\n- a.go:9 — two\n"
 	for name, reply := range map[string]string{"none": "NONE", "self": "1 = 1", "forward": "1 = 2", "out of range": "7 = 1", "prose": "Findings 2 and 1 look similar."} {
-		if got, n := rcGroupDuplicateIssuesWith(raw, func(string) (string, error) { return reply, nil }); n != 0 || got != raw {
+		if got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return reply, nil }); n != 0 || got != raw {
 			t.Errorf("%s: folded %d", name, n)
 		}
 	}
-	if got, n := rcGroupDuplicateIssuesWith(raw, func(string) (string, error) { return "", errors.New("timeout") }); n != 0 || got != raw {
+	if got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return "", errors.New("timeout") }); n != 0 || got != raw {
 		t.Error("a failed call changed the review")
 	}
 	one := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — one\n"
 	called := false
-	rcGroupDuplicateIssuesWith(one, func(string) (string, error) { called = true; return "", nil })
+	rcGroupDuplicateIssuesWith(one, nil, func(string) (string, error) { called = true; return "", nil })
 	if called {
 		t.Error("asked about a review with one finding")
 	}
@@ -55,9 +55,42 @@ func TestGroupingLeavesTheReviewAloneOnABadAnswer(t *testing.T) {
 // A repeat of a repeat folds into the first.
 func TestGroupingChainsFoldIntoTheFirst(t *testing.T) {
 	raw := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — x is nil\n- a.go:2 — x can be nil here\n- a.go:3 — nil x is dereferenced\n"
-	got, n := rcGroupDuplicateIssuesWith(raw, func(string) (string, error) { return "2 = 1\n3 = 2", nil })
+	got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return "2 = 1\n3 = 2", nil })
 	_, risks, _, _, _, _ := rcParseReviewOutput(got)
 	if n != 2 || len(risks) != 1 || !strings.Contains(risks[0], "a.go:2") || !strings.Contains(risks[0], "a.go:3") {
 		t.Errorf("folded %d, risks = %q", n, risks)
+	}
+}
+
+// The also-list reads in finding order on every run, and a repeat on the
+// kept finding's own line adds no location.
+func TestGroupingIsStableAndSkipsItsOwnLine(t *testing.T) {
+	raw := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — x is nil\n- a.go:5 — x can be nil\n- a.go:1 — nil x is dereferenced\n- a.go:9 — x is unchecked\n- a.go:7 — x may be nil\n"
+	for i := 0; i < 20; i++ {
+		got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return "5 = 1\n2 = 1\n3 = 1\n4 = 1", nil })
+		_, risks, _, _, _, _ := rcParseReviewOutput(got)
+		if n != 4 || len(risks) != 1 || !strings.Contains(risks[0], "(also: a.go:5, a.go:9, a.go:7)") {
+			t.Fatalf("run %d: %q", i, risks)
+		}
+	}
+}
+
+// A folded repeat's earlier-ref moves to the finding kept (so kai-server
+// does not post an already-raised point as new), with the higher severity.
+func TestGroupingCarriesTheRepeatsTags(t *testing.T) {
+	draft := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — x is nil (severity: low)\n- a.go:5 — x can be nil here (severity: high) (earlier: 0123456789ab)\n"
+	raw, refs := rcTakeEarlierTags(draft)
+	got, n := rcGroupDuplicateIssuesWith(raw, refs, func(string) (string, error) { return "2 = 1", nil })
+	_, risks, _, _, _, _ := rcParseReviewOutput(rcPutEarlierTags(got, refs))
+	if n != 1 || len(risks) != 1 || !strings.Contains(risks[0], "(earlier: 0123456789ab)") || !strings.Contains(risks[0], "(severity: high)") || strings.Contains(risks[0], "low") {
+		t.Errorf("risks = %q, want the kept finding with the repeat's ref and the higher severity", risks)
+	}
+
+	// The kept finding's own ref stays.
+	draft = rcReviewDataMarker + "\nISSUES:\n- a.go:1 — x is nil (earlier: aaaaaaaaaaaa)\n- a.go:5 — x can be nil here (earlier: 0123456789ab)\n"
+	raw, refs = rcTakeEarlierTags(draft)
+	got, _ = rcGroupDuplicateIssuesWith(raw, refs, func(string) (string, error) { return "2 = 1", nil })
+	if _, risks, _, _, _, _ = rcParseReviewOutput(rcPutEarlierTags(got, refs)); len(risks) != 1 || !strings.Contains(risks[0], "aaaaaaaaaaaa") || strings.Contains(risks[0], "0123456789ab") {
+		t.Errorf("risks = %q, want the kept finding's own ref", risks)
 	}
 }

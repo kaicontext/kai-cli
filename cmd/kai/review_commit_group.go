@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,8 +45,10 @@ var rcGroupLineRe = regexp.MustCompile(`^\s*(\d+)\s*=\s*(\d+)\s*$`)
 
 // rcGroupDuplicateIssues asks the model which confirmed ISSUES repeat an
 // earlier one and folds them. It returns the review and how many it folded.
-func rcGroupDuplicateIssues(ctx context.Context, prov provider.Provider, model, raw string) (string, int) {
-	return rcGroupDuplicateIssuesWith(raw, func(user string) (string, error) {
+// refs are the tags taken off the draft (rcTakeEarlierTags); a folded
+// repeat's tags move to the finding it is folded into.
+func rcGroupDuplicateIssues(ctx context.Context, prov provider.Provider, model, raw string, refs map[string]string) (string, int) {
+	return rcGroupDuplicateIssuesWith(raw, refs, func(user string) (string, error) {
 		cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		resp, err := prov.Send(cctx, provider.Request{
@@ -68,7 +72,7 @@ func rcGroupDuplicateIssues(ctx context.Context, prov provider.Provider, model, 
 
 // rcGroupDuplicateIssuesWith is rcGroupDuplicateIssues with the call as a
 // seam, for tests.
-func rcGroupDuplicateIssuesWith(raw string, ask func(user string) (string, error)) (string, int) {
+func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(user string) (string, error)) (string, int) {
 	i := strings.Index(raw, rcReviewDataMarker)
 	if i < 0 {
 		return raw, 0
@@ -144,15 +148,31 @@ func rcGroupDuplicateIssuesWith(raw string, ask func(user string) (string, error
 	if len(into) == 0 {
 		return raw, 0
 	}
+	// In order, so the also-lists and the log read the same on every run.
+	repeats := make([]int, 0, len(into))
+	for n := range into {
+		repeats = append(repeats, n)
+	}
+	sort.Ints(repeats)
 	also := map[int][]string{}
+	var targets []int
 	drop := map[int]bool{}
-	for n, t := range into {
-		also[t] = append(also[t], bullets[n-1].loc)
+	for _, n := range repeats {
+		t := into[n]
+		if _, seen := also[t]; !seen {
+			also[t] = nil
+			targets = append(targets, t)
+		}
+		// A repeat on the finding's own line adds no location.
+		if loc := bullets[n-1].loc; loc != bullets[t-1].loc && !slices.Contains(also[t], loc) {
+			also[t] = append(also[t], loc)
+		}
 		drop[bullets[n-1].line] = true
+		rcFoldTags(refs, bullets[t-1].item, bullets[n-1].item)
 		fmt.Fprintf(os.Stderr, "  grouping: %s repeats %s — folded\n", bullets[n-1].loc, bullets[t-1].loc)
 	}
-	for t, locs := range also {
-		lines[bullets[t-1].line] = "- " + rcWithAlso(bullets[t-1].item, locs)
+	for _, t := range targets {
+		lines[bullets[t-1].line] = "- " + rcWithAlso(bullets[t-1].item, also[t])
 	}
 	kept := lines[:0:0]
 	for j, l := range lines {
@@ -161,4 +181,49 @@ func rcGroupDuplicateIssuesWith(raw string, ask func(user string) (string, error
 		}
 	}
 	return head + strings.Join(kept, "\n"), len(into)
+}
+
+// rcFoldTags gives the finding kept the tags of a repeat folded into it: the
+// repeat's earlier-ref when the kept one has none, so kai-server still sees a
+// point already on the pull request, and the higher of the two severities.
+func rcFoldTags(refs map[string]string, keptItem, dropItem string) {
+	if refs == nil {
+		return
+	}
+	keptKey, _, ok1 := rcEarlierBulletKey("issues", "- "+keptItem)
+	dropKey, _, ok2 := rcEarlierBulletKey("issues", "- "+dropItem)
+	if !ok1 || !ok2 || refs[dropKey] == "" {
+		return
+	}
+	earlier, sev := rcTagParts(refs[keptKey])
+	dEarlier, dSev := rcTagParts(refs[dropKey])
+	if earlier == "" {
+		earlier = dEarlier
+	}
+	rank := map[string]int{"(severity: low)": 1, "(severity: medium)": 2, "(severity: high)": 3}
+	if rank[dSev] > rank[sev] {
+		sev = dSev
+	}
+	var tags []string
+	for _, t := range []string{sev, earlier} {
+		if t != "" {
+			tags = append(tags, t)
+		}
+	}
+	refs[keptKey] = strings.Join(tags, " ")
+}
+
+// rcTagParts splits a remembered tag string into its earlier-ref and its
+// severity, each normalised ("(earlier: …)", "(severity: high)").
+func rcTagParts(tags string) (earlier, severity string) {
+	for _, t := range rcEarlierTagRe.FindAllString(tags, -1) {
+		t = strings.ToLower(strings.TrimSpace(t))
+		t = "(" + strings.Join(strings.Fields(strings.Replace(strings.Trim(t, "()"), ":", ": ", 1)), " ") + ")"
+		if strings.HasPrefix(t, "(severity") {
+			severity = t
+		} else {
+			earlier = t
+		}
+	}
+	return earlier, severity
 }
