@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/kaicontext/kai-engine/message"
+	"github.com/kaicontext/kai-engine/provider"
 )
 
 // kai-api#4's shape: three bugs, each confirmed twice, the pairs sharing no
@@ -103,5 +107,91 @@ func TestGroupingMergesAlsoLists(t *testing.T) {
 	_, risks, _, _, _, _ := rcParseReviewOutput(got)
 	if n != 1 || len(risks) != 1 || !strings.Contains(risks[0], "(also: a.go:9, a.go:5, b.go:2)") || strings.Count(risks[0], "a.go:9") != 1 {
 		t.Errorf("risks = %q", risks)
+	}
+}
+
+// kai-server#467: six confirmed findings, two of them said twice. The answer
+// folds them whether the model writes "5 = 2" or "- 5 = 2." as a list.
+func TestGroupingOnTheTruncateSample(t *testing.T) {
+	raw := rcReviewDataMarker + "\nISSUES:\n" +
+		"- kailab-control/internal/textutil/truncate.go:21 — TruncateWords always backs up to the last space even when the cut lands on a word boundary\n" +
+		"- kailab-control/internal/textutil/truncate.go:8 — Both functions use byte length and byte slicing while documenting \"characters\"\n" +
+		"- kailab-control/internal/textutil/truncate.go:11 — max <= 0 with a non-empty string makes s[:max-1] panic (also: kailab-control/internal/textutil/truncate.go:20)\n" +
+		"- kailab-control/internal/textutil/truncate.go:22 — runs of consecutive spaces leave trailing whitespace before the \"…\"\n" +
+		"- kailab-control/internal/textutil/truncate.go:11 — `len` and `s[:max-1]` count bytes, not characters\n" +
+		"- kailab-control/internal/textutil/truncate.go:11 — `max <= 0` with a non-empty `s` slices with `max-1 < 0` and panics\n"
+	for _, reply := range []string{"5 = 2\n6 = 3", "- 5 = 2.\n- 6 = 3.", "#5 = #2\n#6 = #3\n"} {
+		got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return reply, nil })
+		_, risks, _, _, _, _ := rcParseReviewOutput(got)
+		if n != 2 || len(risks) != 4 {
+			t.Errorf("answer %q: folded %d, %d findings left", reply, n, len(risks))
+			continue
+		}
+		if !strings.Contains(risks[1], "(also: kailab-control/internal/textutil/truncate.go:11)") || strings.Count(risks[2], "truncate.go:11") != 1 {
+			t.Errorf("answer %q: %q", reply, risks)
+		}
+	}
+}
+
+// The call leaves room for the model to reason before it answers (on
+// kai-server#467 a 400-token cap left none), and a reply with no text is a
+// failed call, not "no repeats".
+func TestGroupingCallLeavesRoomToReason(t *testing.T) {
+	raw := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — x is nil\n- a.go:2 — x can be nil here\n"
+	var req provider.Request
+	reply := ""
+	prov := rcChallengeProvider{send: func(_ context.Context, r provider.Request) (provider.Response, error) {
+		req = r
+		return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: reply}}, OutputTokens: 400}, nil
+	}}
+	if got, n := rcGroupDuplicateIssues(context.Background(), prov, "z-ai/glm-5.2", raw, nil); n != 0 || got != raw {
+		t.Errorf("an empty answer changed the review: %d", n)
+	}
+	if req.MaxTokens < 4096 || req.ReasoningEffort != "low" {
+		t.Errorf("max tokens %d, effort %q: no room to reason and answer", req.MaxTokens, req.ReasoningEffort)
+	}
+	reply = "2 = 1"
+	if _, n := rcGroupDuplicateIssues(context.Background(), prov, "z-ai/glm-5.2", raw, nil); n != 1 {
+		t.Errorf("folded %d, want 1", n)
+	}
+}
+
+// The read-through folds the same way: a repeat's "### " section goes, the
+// finding it repeats carries the also-list, and the rest is untouched
+// (kai-server#467 showed all eight write-ups under four findings).
+func TestGroupingFoldsTheReadThrough(t *testing.T) {
+	a := "a.go:8 — slices by bytes, not characters"
+	b := "a.go:11 — max <= 0 panics"
+	c := "a.go:10 — `Truncate` counts and slices bytes"
+	d := "a.go:10 — `s[:max-1]` panics when max <= 0"
+	raw := "## Scope\n- a.go\n\n## Findings\n" +
+		"\n### " + a + "\nbyte prose\n\n**Remedy:** use runes\n" +
+		"\n### " + b + "\npanic prose\n" +
+		"\n### " + c + "\nrepeat of the byte prose\n#include is not a heading\n" +
+		"\n### " + d + "\nrepeat of the panic prose\n" +
+		"\n## Limitations\n- none\n\n" + rcReviewDataMarker + "\nISSUES:\n- " + a + "\n- " + b + "\n- " + c + "\n- " + d + "\n"
+	got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return "3 = 1\n4 = 2", nil })
+	prose := got[:strings.Index(got, rcReviewDataMarker)]
+	if n != 2 || strings.Contains(prose, "repeat of") || strings.Contains(prose, "#include") || strings.Count(prose, "### ") != 2 {
+		t.Fatalf("folded %d; prose:\n%s", n, prose)
+	}
+	for _, want := range []string{"### a.go:8 — slices by bytes, not characters (also: a.go:10).", "byte prose", "**Remedy:** use runes",
+		"### a.go:11 — max <= 0 panics (also: a.go:10).", "panic prose", "## Limitations\n- none", "## Scope\n- a.go"} {
+		if !strings.Contains(prose, want) {
+			t.Errorf("prose lost %q:\n%s", want, prose)
+		}
+	}
+}
+
+// A repeat word for word the same as the finding it repeats: one section
+// stays, and only one.
+func TestGroupingFoldsAnIdenticalRepeatsProse(t *testing.T) {
+	a := "a.go:8 — slices by bytes"
+	raw := "## Findings\n\n### " + a + "\nfirst prose\n\n### " + a + "\nsecond prose\n\n## Limitations\n- none\n\n" +
+		rcReviewDataMarker + "\nISSUES:\n- " + a + "\n- " + a + "\n- b.go:3 — another bug\n"
+	got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return "2 = 1", nil })
+	prose := got[:strings.Index(got, rcReviewDataMarker)]
+	if n != 1 || strings.Count(prose, "### "+a) != 1 || !strings.Contains(prose, "first prose") || strings.Contains(prose, "second prose") {
+		t.Errorf("folded %d; prose:\n%s", n, prose)
 	}
 }

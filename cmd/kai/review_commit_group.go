@@ -17,7 +17,12 @@ package main
 // confirmed findings, numbered; which ones repeat an earlier one? The answer
 // folds each repeat into the finding it repeats, as an "(also: path:line)".
 // Any failure — the call, the reply, a bad number — leaves the review as it
-// was.
+// was, and says so in the log.
+//
+// The fact-check model reasons before it answers, with no off switch (GLM):
+// on kai-server#467 a 400-token cap left no room for the answer, and two
+// repeats went out unfolded with nothing in the log. So the call caps the
+// reasoning, leaves room past it, and logs what came back every time.
 
 import (
 	"context"
@@ -41,7 +46,13 @@ Reply with one line per repeat, "N = M", meaning finding N repeats the earlier f
 // rcGroupMaxIssues bounds the call; a review with more is left as it is.
 const rcGroupMaxIssues = 40
 
-var rcGroupLineRe = regexp.MustCompile(`^\s*(\d+)\s*=\s*(\d+)\s*$`)
+// rcGroupMaxTokens leaves room for the model's reasoning as well as the
+// answer, which is a few short lines.
+const rcGroupMaxTokens = 4096
+
+// rcGroupLineRe is one "N = M" line, also as a list item ("- 5 = 2") or with
+// trailing punctuation ("5 = 2.").
+var rcGroupLineRe = regexp.MustCompile(`^\s*(?:[-*]\s*)?#?(\d+)\s*=\s*#?(\d+)\s*[.,;]?\s*$`)
 
 // rcGroupDuplicateIssues asks the model which confirmed ISSUES repeat an
 // earlier one and folds them. It returns the review and how many it folded.
@@ -52,10 +63,11 @@ func rcGroupDuplicateIssues(ctx context.Context, prov provider.Provider, model, 
 		cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		resp, err := prov.Send(cctx, provider.Request{
-			Model:     model,
-			System:    rcGroupSystem,
-			MaxTokens: 400,
-			Messages:  []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user}}}},
+			Model:           model,
+			System:          rcGroupSystem,
+			MaxTokens:       rcGroupMaxTokens,
+			ReasoningEffort: "low",
+			Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user}}}},
 		})
 		if err != nil {
 			return "", err
@@ -65,6 +77,9 @@ func rcGroupDuplicateIssues(ctx context.Context, prov provider.Provider, model, 
 			if t, ok := part.(message.TextContent); ok {
 				text.WriteString(t.Text)
 			}
+		}
+		if strings.TrimSpace(text.String()) == "" {
+			return "", fmt.Errorf("no answer (finish %s, %d output tokens)", resp.FinishReason, resp.OutputTokens)
 		}
 		return text.String(), nil
 	})
@@ -109,7 +124,11 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 		}
 		bullets = append(bullets, bullet{line: j, item: item, loc: fmt.Sprintf("%s:%d", path, ln)})
 	}
-	if len(bullets) < 2 || len(bullets) > rcGroupMaxIssues {
+	if len(bullets) < 2 {
+		return raw, 0
+	}
+	if len(bullets) > rcGroupMaxIssues {
+		fmt.Fprintf(os.Stderr, "  grouping: %d findings, more than %d; left as they are\n", len(bullets), rcGroupMaxIssues)
 		return raw, 0
 	}
 
@@ -146,6 +165,7 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 		into[n] = t
 	}
 	if len(into) == 0 {
+		fmt.Fprintf(os.Stderr, "  grouping: %d findings, no repeats (answer %q)\n", len(bullets), rcClip(strings.TrimSpace(reply), 120))
 		return raw, 0
 	}
 	// In order, so the also-lists and the log read the same on every run.
@@ -175,8 +195,15 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 		rcFoldTags(refs, bullets[t-1].item, bullets[n-1].item)
 		fmt.Fprintf(os.Stderr, "  grouping: %s repeats %s — folded\n", bullets[n-1].loc, bullets[t-1].loc)
 	}
+	renamed := map[string]string{}
 	for _, t := range targets {
-		lines[bullets[t-1].line] = "- " + rcWithAlso(bullets[t-1].item, also[t])
+		item := rcWithAlso(bullets[t-1].item, also[t])
+		renamed[bullets[t-1].item] = item
+		lines[bullets[t-1].line] = "- " + item
+	}
+	dropped := map[string]int{}
+	for _, n := range repeats {
+		dropped[bullets[n-1].item]++
 	}
 	kept := lines[:0:0]
 	for j, l := range lines {
@@ -184,7 +211,43 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 			kept = append(kept, l)
 		}
 	}
-	return head + strings.Join(kept, "\n"), len(into)
+	return rcFoldProse(head, dropped, renamed) + strings.Join(kept, "\n"), len(into)
+}
+
+// rcFoldProse does to the read-through what the fold did to ISSUES: each
+// confirmed finding has a "### <its ISSUES text>" section under "## Findings"
+// (rcAssembleReview), and kai-server shows that prose as the full read-
+// through. A repeat's section goes; the finding it repeats gets its
+// also-list in its heading. Sections are matched on their exact text, in
+// order: a finding comes before its repeats, so when a repeat has the very
+// same text, the first section with it is the one kept. One that matches
+// nothing is left alone.
+func rcFoldProse(head string, dropped map[string]int, renamed map[string]string) string {
+	lines := strings.Split(head, "\n")
+	out := lines[:0:0]
+	skipping := false
+	keptOnce := map[string]bool{}
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "## ") || strings.HasPrefix(t, "### ") || t == rcReviewDataMarker {
+			skipping = false
+		}
+		if title, ok := strings.CutPrefix(t, "### "); ok {
+			title = strings.TrimSpace(title)
+			if r, ok := renamed[title]; ok && !keptOnce[title] {
+				keptOnce[title] = true
+				l = "### " + r
+			} else if dropped[title] > 0 {
+				dropped[title]--
+				skipping = true
+				continue
+			}
+		}
+		if !skipping {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // rcAlsoLocs is the locations a bullet's "(also: …)" list names.
