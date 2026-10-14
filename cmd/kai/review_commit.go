@@ -109,7 +109,7 @@ MERGE_READY answers what should happen to this branch NEXT. It is not a grade fo
   3 — small fixes first. Real defects, but local and quick; the change itself is sound.
   2 — needs work. Defects in the core of what the change does.
   1 — do not merge. It does not do what it claims, or it breaks something that works today.
-YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Start from it, the way a person re-reviewing a branch does. Re-check every earlier point against this commit: one that still holds stays in ISSUES (at its current line) and ends with its ref exactly as given, "(earlier: <ref>)", so it is not posted to the author a second time (a DECISION from that review that still stands ends with its ref the same way) — never put a ref on a point that is new; one the code now fixes is dropped, and the prose says it was fixed; one you now find was wrong is dropped, and the prose says so. Then review what changed since — the files listed there first. Keep MERGE_READY where it was unless this commit changes code an earlier point or the score rests on, or you found a defect you can show the earlier review missed; when the score moves, say in one sentence of prose what moved it. Rereading the same code and scoring it differently is not a review finding — it is noise the author has to read.
+YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Start from it, the way a person re-reviewing a branch does. Re-check every earlier point against this commit: one that still holds stays in ISSUES (at its current line) and ends with its ref exactly as given, "(earlier: <ref>)", so it is not posted to the author a second time (a DECISION from that review that still stands ends with its ref the same way) — never put a ref on a point that is new; one the code now fixes is dropped, and the prose says it was fixed; one you now find was wrong is dropped, and the prose says so. Account for EVERY earlier ref under EARLIER in the coda, one line each: "- <ref>: open" for a point that still holds (it is also in ISSUES or DECISIONS with its tag), "- <ref>: fixed at path:line — what fixed it" naming the line in THIS commit that fixes it, or "- <ref>: wrong — why the earlier point did not hold". Mark a point fixed only when you opened that line in this commit and it removes the defect; if you could not check, say "- <ref>: open". The author's thread is resolved on "fixed", so a wrong "fixed" hides a live bug. Then review what changed since — the files listed there first. Keep MERGE_READY where it was unless this commit changes code an earlier point or the score rests on, or you found a defect you can show the earlier review missed; when the score moves, say in one sentence of prose what moved it. Rereading the same code and scoring it differently is not a review finding — it is noise the author has to read.
 
 ANSWERED POINTS: a point of yours that someone replied to is theirs now. Do not raise it again — not in ISSUES, not in DECISIONS, not as a request in the prose — unless this commit changed the code it is about, or you can show from the code that the reply is wrong; then keep it and say in one sentence why the reply does not hold. An answered point never lowers MERGE_READY: score as if it had not been raised. When no open point is left, the score says so.
 
@@ -122,7 +122,9 @@ ISSUES:
 - path:line — <one sentence per root cause> (also: path:line, …only when the same cause recurs) (severity: high|medium|low)
 - nit: path:line — <a defect that cannot change behaviour>
 DECISIONS:
-- [money|limit|sends|deletes|access|contract] <what the author is deciding, who it affects, and the consequence — no path:line; it is not a defect>`
+- [money|limit|sends|deletes|access|contract] <what the author is deciding, who it affects, and the consequence — no path:line; it is not a defect>
+EARLIER: (only when YOUR PREVIOUS REVIEW is present — one line per earlier ref)
+- <ref>: open | fixed at path:line — <what fixed it> | wrong — <why>`
 
 const rcMaxAuthorContextBytes = 8 * 1024
 
@@ -615,7 +617,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// IncompleteReason says, in fixed labels, why an incomplete
 			// review stopped, so the server need not infer it from Review.
 			IncompleteReason *rcIncompleteReason `json:"incompleteReason,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason}, "", "  ")
+			// Earlier is one status per point of the previous review —
+			// open, fixed, withdrawn or unknown — for kai-server to close
+			// the threads of fixed and withdrawn points. Only on a review
+			// that published: an unfinished run settles nothing.
+			Earlier []rcEarlierStatus `json:"earlier,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete)}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -843,10 +850,13 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			len(src), len(unresolved), time.Since(phase).Round(time.Millisecond))
 	}
 	// What Kai said last time about this pull request (review_commit_prior.go).
-	if prior := rcPriorFromEnv(); prior != nil {
-		changed, known := rcChangedSince(prior.Head)
-		user.WriteString(rcPriorBlock(prior, changed, known))
-		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(changed))
+	prior := rcPriorFromEnv()
+	var priorChanged []string
+	var priorKnown bool
+	if prior != nil {
+		priorChanged, priorKnown = rcChangedSince(prior.Head)
+		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
+		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
 	// packages the change newly imports (review_commit_npmdeps.go). They go to
@@ -1088,6 +1098,10 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// Which ISSUES are earlier points is set aside while the bullets are
 	// merged, folded and challenged by their wording (review_commit_earlier.go).
 	raw, earlier := rcTakeEarlierTags(raw)
+	// The reviewer's account of the previous review's points
+	// (review_commit_status.go): read now, because the published review is
+	// reassembled from the fact-check and carries no EARLIER list.
+	earlierClaims := rcParseEarlierSection(raw)
 	if rcUsableCoda(raw) {
 		sw := rcAwaitSweep(sweep)
 		if len(sw.Issues) > 0 {
@@ -1141,7 +1155,17 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			raw = grouped
 		}
 	}
-	return rcPutEarlierTags(raw, earlier), inc, nil
+	final := rcPutEarlierTags(raw, earlier)
+	if prior != nil {
+		inc.Earlier = rcEarlierStatuses(prior, earlierClaims, final, inc.Challenge, earlier, priorChanged, priorKnown)
+		counts := map[string]int{}
+		for _, e := range inc.Earlier {
+			counts[e.Status]++
+		}
+		fmt.Fprintf(os.Stderr, "  earlier points: %d fixed, %d withdrawn, %d open, %d unknown\n",
+			counts[rcEarlierFixed], counts[rcEarlierWithdrawn], counts[rcEarlierOpen], counts[rcEarlierUnknown])
+	}
+	return final, inc, nil
 }
 
 // rcCommitContextReserve is how much of rcMaxAuthorContextBytes is held back
@@ -1491,6 +1515,18 @@ type rcIncomplete struct {
 	// Unlike ChallengeFailure, the review body is real and kept; items it
 	// could not settle are listed in it under "Could not verify".
 	Challenge *rcChallengeResult
+	// Earlier is what became of each point of the previous review
+	// (review_commit_status.go); nil when there was none.
+	Earlier []rcEarlierStatus
+}
+
+// rcEarlierOf is the earlier-point statuses a bundle carries: none from a
+// review that did not finish.
+func rcEarlierOf(inc *rcIncomplete, incomplete bool) []rcEarlierStatus {
+	if inc == nil || incomplete {
+		return nil
+	}
+	return inc.Earlier
 }
 
 // rcCoverage is the machine-written record of what a review actually did:
@@ -1861,6 +1897,12 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 		case labelled && key == "decisions":
 			section = "decisions"
 			sawMachineLine = true
+		case labelled && key == "earlier":
+			// Statuses of the previous review's points (review_commit_status.go),
+			// read separately. Never findings: a bullet here must not be
+			// filed under the ISSUES or DECISIONS before it.
+			section = "earlier"
+			sawMachineLine = true
 		case labelled && key == "intent_match":
 			section = ""
 			sawMachineLine = true
@@ -1890,9 +1932,10 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 			// rc-d93f2dc3595c38e0 shipped one as a verified claim).
 			bullet := rcUnwrapMachineBullet(t)
 			if item := strings.TrimSpace(strings.TrimPrefix(bullet, "-")); item != "" && !rcIsEmptyListItem(item) {
-				if section == "decisions" {
+				switch section {
+				case "decisions":
 					decisions = append(decisions, item)
-				} else {
+				case "issues":
 					risks = append(risks, item)
 				}
 			}
