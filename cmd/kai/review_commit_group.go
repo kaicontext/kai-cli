@@ -163,9 +163,13 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 			also[t] = nil
 			targets = append(targets, t)
 		}
-		// A repeat on the finding's own line adds no location.
-		if loc := bullets[n-1].loc; loc != bullets[t-1].loc && !slices.Contains(also[t], loc) {
-			also[t] = append(also[t], loc)
+		// The repeat brings its own location and any it already listed; a
+		// location the kept finding names (its own line, or its also-list)
+		// is not added again.
+		for _, loc := range append([]string{bullets[n-1].loc}, rcAlsoLocs(bullets[n-1].item)...) {
+			if loc != bullets[t-1].loc && !slices.Contains(rcAlsoLocs(bullets[t-1].item), loc) && !slices.Contains(also[t], loc) {
+				also[t] = append(also[t], loc)
+			}
 		}
 		drop[bullets[n-1].line] = true
 		rcFoldTags(refs, bullets[t-1].item, bullets[n-1].item)
@@ -181,6 +185,20 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 		}
 	}
 	return head + strings.Join(kept, "\n"), len(into)
+}
+
+// rcAlsoLocs is the locations a bullet's "(also: …)" list names.
+func rcAlsoLocs(item string) []string {
+	var out []string
+	for _, m := range rcAlsoListRe.FindAllString(item, -1) {
+		inner := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(m), "(also:"), ")")
+		for _, loc := range strings.Split(inner, ",") {
+			if loc = strings.TrimSpace(loc); loc != "" {
+				out = append(out, loc)
+			}
+		}
+	}
+	return out
 }
 
 // rcFoldTags gives the finding kept the tags of a repeat folded into it: the

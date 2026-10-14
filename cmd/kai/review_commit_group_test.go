@@ -94,3 +94,14 @@ func TestGroupingCarriesTheRepeatsTags(t *testing.T) {
 		t.Errorf("risks = %q, want the kept finding's own ref", risks)
 	}
 }
+
+// Also-lists merge: the repeat's own also-locations are kept, and one the
+// kept finding already lists is not added twice.
+func TestGroupingMergesAlsoLists(t *testing.T) {
+	raw := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — x is nil (also: a.go:9).\n- a.go:5 — x can be nil here (also: b.go:2, a.go:9).\n"
+	got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return "2 = 1", nil })
+	_, risks, _, _, _, _ := rcParseReviewOutput(got)
+	if n != 1 || len(risks) != 1 || !strings.Contains(risks[0], "(also: a.go:9, a.go:5, b.go:2)") || strings.Count(risks[0], "a.go:9") != 1 {
+		t.Errorf("risks = %q", risks)
+	}
+}
