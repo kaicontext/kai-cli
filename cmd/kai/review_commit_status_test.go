@@ -121,6 +121,48 @@ DECISIONS:
 	}
 }
 
+// Kai's review of #182: a wrapped "Note: …" / "Summary: …" line inside
+// EARLIER is a continuation, not a header; the capitalised header still is.
+func TestEarlierNoteContinuationIsNotAHeader(t *testing.T) {
+	draft := "x\n" + rcReviewDataMarker + `
+INTENT_MATCH: verified
+MERGE_READY: 4
+EARLIER:
+- aaaaaaaaaaaa: fixed at src/b.go:22 — the guard returns an error.
+  Note: the caller checks it.
+  Summary: covered by TestGuard.
+- bbbbbbbbbbbb: wrong — validated first
+SUMMARY: fine
+`
+	stripped, claims := rcTakeEarlierSection(draft)
+	if claims["bbbbbbbbbbbb"].status != rcEarlierWithdrawn {
+		t.Fatalf("a Note:/Summary: continuation ended EARLIER: %+v", claims)
+	}
+	if strings.Contains(stripped, "caller checks") || strings.Contains(stripped, "TestGuard") {
+		t.Fatalf("continuation left in the draft:\n%s", stripped)
+	}
+	if _, _, _, _, _, note := rcParseReviewOutput(stripped); note != "fine" {
+		t.Errorf("summary = %q, want fine", note)
+	}
+}
+
+// Fix locations with no extension or with brackets, and "./" paths.
+func TestEarlierFixLocations(t *testing.T) {
+	draft := "x\n" + rcReviewDataMarker + "\nEARLIER:\n- aaaaaaaaaaaa: fixed at Makefile:3 — x\n- bbbbbbbbbbbb: fixed at `app/[id]/page.tsx:12` — y\n- cccccccccccc: fixed at ./src/c.go:5 — z\n"
+	claims := rcParseEarlierSection(draft)
+	for ref, want := range map[string]string{"aaaaaaaaaaaa": "Makefile:3", "bbbbbbbbbbbb": "app/[id]/page.tsx:12", "cccccccccccc": "./src/c.go:5"} {
+		if claims[ref].where != want {
+			t.Errorf("%s where = %q, want %q", ref, claims[ref].where, want)
+		}
+	}
+	prior := &rcPrior{Points: []rcPriorPoint{{Ref: "aaaaaaaaaaaa"}, {Ref: "bbbbbbbbbbbb"}, {Ref: "cccccccccccc"}}}
+	for _, s := range rcEarlierStatuses(prior, claims, "", nil, nil, []string{"Makefile", "app/[id]/page.tsx", "src/c.go"}, true) {
+		if s.Status != rcEarlierFixed {
+			t.Errorf("%s: %s (%s), want fixed", s.Ref, s.Status, s.Note)
+		}
+	}
+}
+
 func TestEarlierStatuses(t *testing.T) {
 	prior := &rcPrior{Head: "abc", Points: []rcPriorPoint{
 		{Kind: "defect", Ref: "111111111111"}, // re-raised → open, even though EARLIER says fixed
@@ -177,10 +219,10 @@ func TestEarlierStatuses(t *testing.T) {
 	}
 
 	// When the previous head is not in this clone, a "fixed" cannot be
-	// checked against the changed files and is taken as written.
+	// checked against the changed files, so it does not close the thread.
 	for _, s := range rcEarlierStatuses(prior, claims, final, res, tags, nil, false) {
-		if s.Ref == "444444444444" && s.Status != rcEarlierFixed {
-			t.Errorf("unknown change set: %s, want fixed", s.Status)
+		if (s.Ref == "333333333333" || s.Ref == "444444444444") && s.Status != rcEarlierUnknown {
+			t.Errorf("unknown change set: %s is %s, want unknown", s.Ref, s.Status)
 		}
 	}
 	if rcEarlierStatuses(nil, claims, final, res, tags, nil, true) != nil {

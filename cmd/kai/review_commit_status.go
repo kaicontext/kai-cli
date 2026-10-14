@@ -25,6 +25,7 @@ package main
 //   - not accounted for: unknown. Silence is never "fixed".
 
 import (
+	"path"
 	"regexp"
 	"strings"
 )
@@ -51,7 +52,7 @@ type rcEarlierClaim struct {
 
 var (
 	rcEarlierLineRe  = regexp.MustCompile(`^-\s*` + "`?" + `([0-9a-f]{12})` + "`?" + `\s*:\s*(.*)$`)
-	rcEarlierWhereRe = regexp.MustCompile("(?i)^fixed\\s+at\\s+`?([A-Za-z0-9_./\\-]+\\.[A-Za-z0-9]+:\\d+)`?")
+	rcEarlierWhereRe = regexp.MustCompile("(?i)^fixed\\s+at\\s+`?([^\\s`]+:\\d+)`?")
 	rcEarlierNoteRe  = regexp.MustCompile(`^\s*(?:—|–|-|:)\s*`)
 )
 
@@ -176,6 +177,12 @@ var rcCodaHeaders = map[string]bool{"issues": true, "findings": true, "decisions
 
 // rcCodaHeader reports whether a line is one of the coda's headers, and which.
 // A line with a colon in it is not a header unless its label is one of them.
+//
+// "Note" and "Summary" are also ordinary words a wrapped note can start with
+// ("Note: the caller checks it"), so those two count as headers only in the
+// capitals the coda template writes them in. The others are headers in any
+// case: mistaking a real "issues:" header for a continuation would swallow
+// findings into the EARLIER list.
 func rcCodaHeader(t string) (string, bool) {
 	if t == "" || strings.HasPrefix(t, "-") {
 		return "", false
@@ -183,6 +190,12 @@ func rcCodaHeader(t string) (string, bool) {
 	key, _, labelled := rcMachineLine(t)
 	if !labelled || !rcCodaHeaders[key] {
 		return "", false
+	}
+	if key == "note" || key == "summary" {
+		label := strings.Trim(strings.TrimSpace(t[:strings.Index(t, ":")]), "#*` ")
+		if label != strings.ToUpper(label) {
+			return "", false
+		}
 	}
 	return key, true
 }
@@ -217,7 +230,7 @@ func rcEarlierStatuses(prior *rcPrior, claims map[string]rcEarlierClaim, final s
 	}
 	changedSet := map[string]bool{}
 	for _, p := range changed {
-		changedSet[p] = true
+		changedSet[rcCleanRepoPath(p)] = true
 	}
 	var out []rcEarlierStatus
 	seen := map[string]bool{}
@@ -236,7 +249,11 @@ func rcEarlierStatuses(prior *rcPrior, claims map[string]rcEarlierClaim, final s
 			st.Status, st.Note = rcEarlierWithdrawn, "the fact-check found it no longer holds: "+rcClip(refuted[ref], 300)
 		case c.status == rcEarlierFixed && c.where == "":
 			st.Status, st.Note = rcEarlierUnknown, "said fixed without naming the line that fixes it"
-		case c.status == rcEarlierFixed && known && !changedSet[rcPathOf(c.where)]:
+		case c.status == rcEarlierFixed && !known:
+			// A fix that cannot be checked against the changed files does
+			// not close the author's thread (Kai's review of kai-cli#182).
+			st.Status, st.Note = rcEarlierUnknown, "said fixed at "+c.where+", but the previous review's commit is not in this clone, so the fix could not be checked"
+		case c.status == rcEarlierFixed && !changedSet[rcCleanRepoPath(rcPathOf(c.where))]:
 			st.Status, st.Note = rcEarlierUnknown, "said fixed at "+c.where+", but that file has not changed since the previous review"
 		case c.status == rcEarlierFixed:
 			st.Status, st.Where, st.Note = rcEarlierFixed, c.where, c.note
@@ -254,6 +271,13 @@ func rcEarlierStatuses(prior *rcPrior, claims map[string]rcEarlierClaim, final s
 
 // rcEarlierRefRe reads the ref out of an earlier-tag.
 var rcEarlierRefRe = regexp.MustCompile(`\(earlier:\s*([0-9a-f]{12})\)`)
+
+// rcCleanRepoPath normalises a repo-relative path for comparison:
+// "./a/b.go" and "a//b.go" are a/b.go.
+func rcCleanRepoPath(p string) string {
+	p = strings.TrimPrefix(strings.TrimSpace(p), "./")
+	return strings.TrimPrefix(path.Clean(p), "./")
+}
 
 // rcPathOf is the path of "path:line".
 func rcPathOf(where string) string {
