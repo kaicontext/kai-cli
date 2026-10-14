@@ -45,6 +45,12 @@ func TestShipServerFiles_ModesAndNewDirs(t *testing.T) {
 	os.Chmod(filepath.Join(ws, "tool.sh"), 0o755)
 	os.MkdirAll(filepath.Join(ws, "bin", "sub"), 0o755)
 	os.WriteFile(filepath.Join(ws, "bin", "sub", "new.sh"), []byte("#!/bin/sh\n"), 0o755)
+	// Names git would C-quote without -z, and group/other-only exec
+	// (git calls that 100644: only the owner bit counts).
+	os.WriteFile(filepath.Join(ws, "bin", "sub", "naïve \"x\".txt"), []byte("q\n"), 0o644)
+	os.WriteFile(filepath.Join(ws, "bin", " lead.txt"), []byte("l\n"), 0o644)
+	os.WriteFile(filepath.Join(ws, "bin", "grp.sh"), []byte("#!/bin/sh\n"), 0o644)
+	os.Chmod(filepath.Join(ws, "bin", "grp.sh"), 0o655)
 	if err := os.Symlink("a.txt", filepath.Join(ws, "alias.txt")); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
@@ -71,6 +77,7 @@ func TestShipServerFiles_ModesAndNewDirs(t *testing.T) {
 	}
 	for path, mode := range map[string]string{
 		"a.txt": "100644", "tool.sh": "100755", "bin/sub/new.sh": "100755",
+		"bin/sub/naïve \"x\".txt": "100644", "bin/ lead.txt": "100644", "bin/grp.sh": "100644",
 		"alias.txt": "120000", "dangling": "120000",
 	} {
 		f, ok := got[path]

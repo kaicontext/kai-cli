@@ -67,7 +67,9 @@ func shipEntryMode(fi os.FileInfo) string {
 		return "120000"
 	case runtime.GOOS == "windows":
 		return ""
-	case fi.Mode().Perm()&0o111 != 0:
+	case fi.Mode().Perm()&0o100 != 0:
+		// Owner execute only, as git decides it: a file executable just
+		// by group/other is 100644 to git.
 		return "100755"
 	default:
 		return "100644"
@@ -624,12 +626,14 @@ func expandUntrackedDirs(cwd string, paths []string) []string {
 			out = append(out, p)
 			continue
 		}
-		listed, err := gitOut(cwd, "ls-files", "--others", "--exclude-standard", "--", p)
+		// -z: unquoted, NUL-separated and untrimmed, so non-ASCII,
+		// special-character and leading-space names come back verbatim.
+		listed, err := gitOutput(cwd, "ls-files", "-z", "--others", "--exclude-standard", "--", p)
 		if err != nil {
 			out = append(out, p) // surface the original error downstream
 			continue
 		}
-		for _, f := range strings.Split(listed, "\n") {
+		for _, f := range strings.Split(string(listed), "\x00") {
 			if f != "" {
 				out = append(out, f)
 			}
