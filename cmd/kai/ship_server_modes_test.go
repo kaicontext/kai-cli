@@ -51,6 +51,11 @@ func TestShipServerFiles_ModesAndNewDirs(t *testing.T) {
 	os.WriteFile(filepath.Join(ws, "bin", " lead.txt"), []byte("l\n"), 0o644)
 	os.WriteFile(filepath.Join(ws, "bin", "grp.sh"), []byte("#!/bin/sh\n"), 0o644)
 	os.Chmod(filepath.Join(ws, "bin", "grp.sh"), 0o655)
+	// A new directory named like a glob next to a sibling it would match.
+	os.MkdirAll(filepath.Join(ws, "a*"), 0o755)
+	os.WriteFile(filepath.Join(ws, "a*", "in.txt"), []byte("i\n"), 0o644)
+	os.MkdirAll(filepath.Join(ws, "abc"), 0o755)
+	os.WriteFile(filepath.Join(ws, "abc", "sib.txt"), []byte("s\n"), 0o644)
 	if err := os.Symlink("a.txt", filepath.Join(ws, "alias.txt")); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
@@ -61,10 +66,20 @@ func TestShipServerFiles_ModesAndNewDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	sort.Strings(changed)
+	count := map[string]int{}
 	for _, p := range changed {
 		if strings.HasSuffix(p, "/") {
 			t.Fatalf("directory entry %q left in the delta: %v", p, changed)
 		}
+		count[p]++
+	}
+	for p, n := range count {
+		if n > 1 {
+			t.Errorf("%s listed %d times in the delta: %v", p, n, changed)
+		}
+	}
+	if count["a*/in.txt"] != 1 || count["abc/sib.txt"] != 1 {
+		t.Errorf("glob-named dir: delta %v", changed)
 	}
 
 	files, err := shipBuildFiles(ws, nil, "", "HEAD", changed)

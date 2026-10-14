@@ -621,22 +621,29 @@ func shipBuildFiles(cwd string, entry *spawnpkg.Entry, baseSHA, baseline string,
 // Shipping the directory entry itself failed with "is a directory".
 func expandUntrackedDirs(cwd string, paths []string) []string {
 	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
 	for _, p := range paths {
 		if !strings.HasSuffix(p, "/") {
-			out = append(out, p)
+			add(p)
 			continue
 		}
 		// -z: unquoted, NUL-separated and untrimmed, so non-ASCII,
 		// special-character and leading-space names come back verbatim.
-		listed, err := gitOutput(cwd, "ls-files", "-z", "--others", "--exclude-standard", "--", p)
+		// --literal-pathspecs: a directory named like a glob ("a*/")
+		// must not match its siblings.
+		listed, err := gitOutput(cwd, "--literal-pathspecs", "ls-files", "-z", "--others", "--exclude-standard", "--", p)
 		if err != nil {
-			out = append(out, p) // surface the original error downstream
+			add(p) // surface the original error downstream
 			continue
 		}
 		for _, f := range strings.Split(string(listed), "\x00") {
-			if f != "" {
-				out = append(out, f)
-			}
+			add(f)
 		}
 	}
 	return out
