@@ -109,6 +109,43 @@ func rcParseEarlierSection(raw string) map[string]rcEarlierClaim {
 	return out
 }
 
+// rcTakeEarlierSection reads the EARLIER list and removes it from the draft.
+// Every later pass that walks the coda tracks its own sections by header —
+// the stakeless-decision filter, the speculation filter, the sweep merge —
+// and one that did not know EARLIER read its bullets as part of the list
+// before it: after DECISIONS they were dropped as decisions with no stake,
+// with a false "N decisions dropped" (Kai's review of kai-cli#182). Taking
+// the section out right after reading it means none of them can see it.
+func rcTakeEarlierSection(raw string) (string, map[string]rcEarlierClaim) {
+	claims := rcParseEarlierSection(raw)
+	i := strings.Index(raw, rcReviewDataMarker)
+	if i < 0 {
+		return raw, claims
+	}
+	head, coda := raw[:i+len(rcReviewDataMarker)], raw[i+len(rcReviewDataMarker):]
+	lines := strings.Split(coda, "\n")
+	out := lines[:0]
+	in := false
+	for _, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if t != "" && !strings.HasPrefix(t, "-") {
+			key, _, labelled := rcMachineLine(t)
+			if labelled && key == "earlier" {
+				in = true
+				continue
+			}
+			if labelled {
+				in = false
+			}
+		}
+		if in && (t == "" || strings.HasPrefix(t, "-")) {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return head + strings.Join(out, "\n"), claims
+}
+
 // rcEarlierStatuses decides each earlier ref's status from the reviewer's
 // claims and what was published (see the file comment). final is the
 // published review with its tags back on; tags maps a bullet to the tags it

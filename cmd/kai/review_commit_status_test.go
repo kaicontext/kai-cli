@@ -48,6 +48,30 @@ func TestEarlierBulletsAreNotFindings(t *testing.T) {
 	}
 }
 
+// Kai's review of kai-cli#182: with EARLIER after DECISIONS, the
+// stakeless-decision filter read its bullets as decisions and dropped them
+// with a false count. Taken out right after it is read, no later coda pass
+// sees it, and the rest of the draft is unchanged.
+func TestTakeEarlierSectionHidesItFromLaterPasses(t *testing.T) {
+	stripped, claims := rcTakeEarlierSection(rcStatusDraft)
+	if len(claims) != 4 {
+		t.Fatalf("parsed %d claims, want 4", len(claims))
+	}
+	if strings.Contains(stripped, "EARLIER:") || strings.Contains(stripped, "aaaaaaaaaaaa") {
+		t.Fatalf("EARLIER still in the draft:\n%s", stripped)
+	}
+	if _, n := rcDropStakelessDecisions(stripped); n != 0 {
+		t.Errorf("the stakeless filter dropped %d decisions; only the [limit] one is left and it has a stake", n)
+	}
+	if _, n := rcDropStakelessDecisions(rcStatusDraft); n == 0 {
+		t.Error("precondition: on the unstripped draft the filter mistakes EARLIER bullets for decisions")
+	}
+	_, issues, decisions, _, _, _ := rcParseReviewOutput(stripped)
+	if len(issues) != 1 || len(decisions) != 1 || !strings.Contains(stripped, "MERGE_READY: 3") {
+		t.Errorf("the rest of the draft changed: issues=%q decisions=%q", issues, decisions)
+	}
+}
+
 func TestEarlierStatuses(t *testing.T) {
 	prior := &rcPrior{Head: "abc", Points: []rcPriorPoint{
 		{Kind: "defect", Ref: "111111111111"}, // re-raised → open, even though EARLIER says fixed

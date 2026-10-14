@@ -1101,7 +1101,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// The reviewer's account of the previous review's points
 	// (review_commit_status.go): read now, because the published review is
 	// reassembled from the fact-check and carries no EARLIER list.
-	earlierClaims := rcParseEarlierSection(raw)
+	raw, earlierClaims := rcTakeEarlierSection(raw)
 	if rcUsableCoda(raw) {
 		sw := rcAwaitSweep(sweep)
 		if len(sw.Issues) > 0 {
