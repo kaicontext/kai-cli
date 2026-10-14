@@ -195,8 +195,15 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 		rcFoldTags(refs, bullets[t-1].item, bullets[n-1].item)
 		fmt.Fprintf(os.Stderr, "  grouping: %s repeats %s — folded\n", bullets[n-1].loc, bullets[t-1].loc)
 	}
+	renamed := map[string]string{}
 	for _, t := range targets {
-		lines[bullets[t-1].line] = "- " + rcWithAlso(bullets[t-1].item, also[t])
+		item := rcWithAlso(bullets[t-1].item, also[t])
+		renamed[bullets[t-1].item] = item
+		lines[bullets[t-1].line] = "- " + item
+	}
+	dropped := map[string]int{}
+	for _, n := range repeats {
+		dropped[bullets[n-1].item]++
 	}
 	kept := lines[:0:0]
 	for j, l := range lines {
@@ -204,7 +211,43 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 			kept = append(kept, l)
 		}
 	}
-	return head + strings.Join(kept, "\n"), len(into)
+	return rcFoldProse(head, dropped, renamed) + strings.Join(kept, "\n"), len(into)
+}
+
+// rcFoldProse does to the read-through what the fold did to ISSUES: each
+// confirmed finding has a "### <its ISSUES text>" section under "## Findings"
+// (rcAssembleReview), and kai-server shows that prose as the full read-
+// through. A repeat's section goes; the finding it repeats gets its
+// also-list in its heading. Sections are matched on their exact text, in
+// order: a finding comes before its repeats, so when a repeat has the very
+// same text, the first section with it is the one kept. One that matches
+// nothing is left alone.
+func rcFoldProse(head string, dropped map[string]int, renamed map[string]string) string {
+	lines := strings.Split(head, "\n")
+	out := lines[:0:0]
+	skipping := false
+	keptOnce := map[string]bool{}
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "## ") || strings.HasPrefix(t, "### ") || t == rcReviewDataMarker {
+			skipping = false
+		}
+		if title, ok := strings.CutPrefix(t, "### "); ok {
+			title = strings.TrimSpace(title)
+			if r, ok := renamed[title]; ok && !keptOnce[title] {
+				keptOnce[title] = true
+				l = "### " + r
+			} else if dropped[title] > 0 {
+				dropped[title]--
+				skipping = true
+				continue
+			}
+		}
+		if !skipping {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // rcAlsoLocs is the locations a bullet's "(also: …)" list names.
