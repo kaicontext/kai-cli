@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -50,6 +51,29 @@ type shipServerFile struct {
 	Path       string `json:"path"`
 	ContentB64 string `json:"content_b64,omitempty"`
 	Delete     bool   `json:"delete,omitempty"`
+	// Mode is the git file mode the publisher records: "100644",
+	// "100755" (executable) or "120000" (symlink; content is the link
+	// target). Empty keeps the base file's bits — what Windows sends for
+	// regular files, which have no exec bit to report.
+	Mode string `json:"mode,omitempty"`
+}
+
+// shipEntryMode reports how a working-tree entry ships: as a symlink
+// (its target is the content — reading through it would ship a copy),
+// or as a file with its exec bit as the mode.
+func shipEntryMode(fi os.FileInfo) string {
+	switch {
+	case fi.Mode()&os.ModeSymlink != 0:
+		return "120000"
+	case runtime.GOOS == "windows":
+		return ""
+	case fi.Mode().Perm()&0o100 != 0:
+		// Owner execute only, as git decides it: a file executable just
+		// by group/other is 100644 to git.
+		return "100755"
+	default:
+		return "100644"
+	}
 }
 
 type shipServerRequest struct {
@@ -129,37 +153,7 @@ func runShipServer(cwd, branch, sessionID, authored string) error {
 	// and runs again with a moved base if the server cannot fetch it.
 	baseline := shipBaselineCommit(cwd)
 	buildFiles := func(baseSHA string) ([]shipServerFile, error) {
-		total := 0
-		var overlaps []string
-		files := make([]shipServerFile, 0, len(changed))
-		for _, p := range changed {
-			abs := filepath.Join(cwd, filepath.FromSlash(p))
-			content, rerr := shipContentAgainst(cwd, entry, baseSHA, baseline, p, &overlaps)
-			if rerr != nil && os.IsNotExist(rerr) {
-				content, rerr = os.ReadFile(abs)
-			}
-			if os.IsNotExist(rerr) {
-				files = append(files, shipServerFile{Path: p, Delete: true})
-				continue
-			}
-			if rerr != nil {
-				return nil, fmt.Errorf("reading %s: %w", p, rerr)
-			}
-			if len(content) > shipServerMaxFileBytes {
-				return nil, fmt.Errorf("%s is %dKB — over the server-ship per-file cap (%dMB); use `kai ship` locally",
-					p, len(content)>>10, shipServerMaxFileBytes>>20)
-			}
-			total += len(content)
-			files = append(files, shipServerFile{Path: p, ContentB64: base64.StdEncoding.EncodeToString(content)})
-		}
-		if len(overlaps) > 0 {
-			fmt.Fprintf(os.Stderr, "note: %s carr%s edits from your checkout that overlap the agent's change — shipped with them included\n",
-				strings.Join(overlaps, ", "), map[bool]string{true: "y", false: "ies"}[len(overlaps) > 1])
-		}
-		if total > shipServerMaxTotal {
-			return nil, fmt.Errorf("delta is %dMB — over the server-ship cap (%dMB); use `kai ship` locally", total>>20, shipServerMaxTotal>>20)
-		}
-		return files, nil
+		return shipBuildFiles(cwd, entry, baseSHA, baseline, changed)
 	}
 	files, err := buildFiles(base.SHA)
 	if err != nil {
@@ -403,7 +397,11 @@ func shipDeltaNames(cwd string) ([]string, error) {
 		}
 	}
 	if !isSpawn {
-		return gitio.DirtyPaths(cwd)
+		paths, err := gitio.DirtyPaths(cwd)
+		if err != nil {
+			return nil, err
+		}
+		return expandUntrackedDirs(cwd, paths), nil
 	}
 	base := shipBaselineCommit(cwd)
 	out, err := gitOut(cwd, "diff", "--name-only", "--no-renames", base)
@@ -564,6 +562,91 @@ func shipContentAgainst(cwd string, e *spawnpkg.Entry, base, baseline, p string,
 		return full, nil
 	}
 	return rebased, nil
+}
+
+// shipBuildFiles reads each changed path as the server should publish it:
+// a deletion, a symlink (its target, mode 120000), or file content rebased
+// onto baseSHA (see shipContentAgainst) with its exec bit as the mode.
+func shipBuildFiles(cwd string, entry *spawnpkg.Entry, baseSHA, baseline string, changed []string) ([]shipServerFile, error) {
+	total := 0
+	var overlaps []string
+	files := make([]shipServerFile, 0, len(changed))
+	for _, p := range changed {
+		abs := filepath.Join(cwd, filepath.FromSlash(p))
+		// Lstat, not Stat: a dangling symlink is still a symlink to
+		// ship, not a deletion.
+		fi, lerr := os.Lstat(abs)
+		if os.IsNotExist(lerr) {
+			files = append(files, shipServerFile{Path: p, Delete: true})
+			continue
+		}
+		if lerr != nil {
+			return nil, fmt.Errorf("reading %s: %w", p, lerr)
+		}
+		mode := shipEntryMode(fi)
+		var content []byte
+		var rerr error
+		if mode == "120000" {
+			var target string
+			target, rerr = os.Readlink(abs)
+			content = []byte(filepath.ToSlash(target))
+		} else {
+			content, rerr = shipContentAgainst(cwd, entry, baseSHA, baseline, p, &overlaps)
+			if rerr != nil && os.IsNotExist(rerr) {
+				content, rerr = os.ReadFile(abs)
+			}
+		}
+		if rerr != nil {
+			return nil, fmt.Errorf("reading %s: %w", p, rerr)
+		}
+		if len(content) > shipServerMaxFileBytes {
+			return nil, fmt.Errorf("%s is %dKB — over the server-ship per-file cap (%dMB); use `kai ship` locally",
+				p, len(content)>>10, shipServerMaxFileBytes>>20)
+		}
+		total += len(content)
+		files = append(files, shipServerFile{Path: p, ContentB64: base64.StdEncoding.EncodeToString(content), Mode: mode})
+	}
+	if len(overlaps) > 0 {
+		fmt.Fprintf(os.Stderr, "note: %s carr%s edits from your checkout that overlap the agent's change — shipped with them included\n",
+			strings.Join(overlaps, ", "), map[bool]string{true: "y", false: "ies"}[len(overlaps) > 1])
+	}
+	if total > shipServerMaxTotal {
+		return nil, fmt.Errorf("delta is %dMB — over the server-ship cap (%dMB); use `kai ship` locally", total>>20, shipServerMaxTotal>>20)
+	}
+	return files, nil
+}
+
+// expandUntrackedDirs replaces each "dir/" entry — how `git status
+// --porcelain` lists a wholly untracked directory — with the files in it.
+// Shipping the directory entry itself failed with "is a directory".
+func expandUntrackedDirs(cwd string, paths []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range paths {
+		if !strings.HasSuffix(p, "/") {
+			add(p)
+			continue
+		}
+		// -z: unquoted, NUL-separated and untrimmed, so non-ASCII,
+		// special-character and leading-space names come back verbatim.
+		// --literal-pathspecs: a directory named like a glob ("a*/")
+		// must not match its siblings.
+		listed, err := gitOutput(cwd, "--literal-pathspecs", "ls-files", "-z", "--others", "--exclude-standard", "--", p)
+		if err != nil {
+			add(p) // surface the original error downstream
+			continue
+		}
+		for _, f := range strings.Split(string(listed), "\x00") {
+			add(f)
+		}
+	}
+	return out
 }
 
 // shipStatsBase is what a server ship's line counts are measured against:
