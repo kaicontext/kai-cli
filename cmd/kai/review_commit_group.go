@@ -201,9 +201,9 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 		renamed[bullets[t-1].item] = item
 		lines[bullets[t-1].line] = "- " + item
 	}
-	dropped := map[string]bool{}
+	dropped := map[string]int{}
 	for _, n := range repeats {
-		dropped[bullets[n-1].item] = true
+		dropped[bullets[n-1].item]++
 	}
 	kept := lines[:0:0]
 	for j, l := range lines {
@@ -218,12 +218,15 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 // confirmed finding has a "### <its ISSUES text>" section under "## Findings"
 // (rcAssembleReview), and kai-server shows that prose as the full read-
 // through. A repeat's section goes; the finding it repeats gets its
-// also-list in its heading. Sections are matched on their exact text; one
-// that matches nothing is left alone.
-func rcFoldProse(head string, dropped map[string]bool, renamed map[string]string) string {
+// also-list in its heading. Sections are matched on their exact text, in
+// order: a finding comes before its repeats, so when a repeat has the very
+// same text, the first section with it is the one kept. One that matches
+// nothing is left alone.
+func rcFoldProse(head string, dropped map[string]int, renamed map[string]string) string {
 	lines := strings.Split(head, "\n")
 	out := lines[:0:0]
 	skipping := false
+	keptOnce := map[string]bool{}
 	for _, l := range lines {
 		t := strings.TrimSpace(l)
 		if strings.HasPrefix(t, "## ") || strings.HasPrefix(t, "### ") || t == rcReviewDataMarker {
@@ -231,12 +234,13 @@ func rcFoldProse(head string, dropped map[string]bool, renamed map[string]string
 		}
 		if title, ok := strings.CutPrefix(t, "### "); ok {
 			title = strings.TrimSpace(title)
-			if dropped[title] && renamed[title] == "" {
+			if r, ok := renamed[title]; ok && !keptOnce[title] {
+				keptOnce[title] = true
+				l = "### " + r
+			} else if dropped[title] > 0 {
+				dropped[title]--
 				skipping = true
 				continue
-			}
-			if r := renamed[title]; r != "" {
-				l = "### " + r
 			}
 		}
 		if !skipping {

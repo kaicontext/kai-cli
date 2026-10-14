@@ -182,3 +182,16 @@ func TestGroupingFoldsTheReadThrough(t *testing.T) {
 		}
 	}
 }
+
+// A repeat word for word the same as the finding it repeats: one section
+// stays, and only one.
+func TestGroupingFoldsAnIdenticalRepeatsProse(t *testing.T) {
+	a := "a.go:8 — slices by bytes"
+	raw := "## Findings\n\n### " + a + "\nfirst prose\n\n### " + a + "\nsecond prose\n\n## Limitations\n- none\n\n" +
+		rcReviewDataMarker + "\nISSUES:\n- " + a + "\n- " + a + "\n- b.go:3 — another bug\n"
+	got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return "2 = 1", nil })
+	prose := got[:strings.Index(got, rcReviewDataMarker)]
+	if n != 1 || strings.Count(prose, "### "+a) != 1 || !strings.Contains(prose, "first prose") || strings.Contains(prose, "second prose") {
+		t.Errorf("folded %d; prose:\n%s", n, prose)
+	}
+}
