@@ -59,9 +59,6 @@ var (
 	ErrKitStale = errors.New("managed kit binary is a different version than this kai pins")
 )
 
-// kitBinaryName is the on-disk name of the managed binary (~/.kai/bin/kit).
-// install.sh installs the gunzipped asset under this name.
-
 // versionFileName is the sidecar next to the managed binary
 // (~/.kai/bin/kit.version) recording which kit version is installed there.
 // Written at install time = the version we downloaded; read on resolve to
@@ -219,10 +216,11 @@ func (l *Launcher) Run(ctx context.Context, args []string) (int, error) {
 	return 0, nil
 }
 
-// resolveKitPath finds the kit binary. Precedence: the managed
-// ~/.kai/bin/kit first (kai owns it there), then PATH. A managed binary
-// that exists but isn't executable is reported as ErrKitNotExecutable
-// ("needs repair"), never silently skipped. A total miss is the typed
+// resolveKitPath finds the kit binary. Precedence: KAI_KIT_BIN, then the
+// managed BinDir/kitBinaryName (kai owns it there), then PATH. A managed
+// binary that exists but fails isExecutable (owner exec bit on Unix; never
+// on Windows) is reported as ErrKitNotExecutable ("needs repair"), never
+// silently skipped. A total miss is the typed
 // ErrKitNotFound with an empty path, which is the install trigger.
 func (l *Launcher) resolveKitPath() (string, error) {
 	// An explicit override outranks everything. The desktop app ships
@@ -235,7 +233,7 @@ func (l *Launcher) resolveKitPath() (string, error) {
 	// whoever set it meant it.
 	if p := os.Getenv("KAI_KIT_BIN"); p != "" {
 		info, err := os.Stat(p)
-		if err != nil || info.IsDir() || info.Mode().Perm()&0o100 == 0 {
+		if err != nil || info.IsDir() || !isExecutable(info) {
 			return "", fmt.Errorf("KAI_KIT_BIN=%s: not an executable kit binary", p)
 		}
 		return p, nil
@@ -245,12 +243,10 @@ func (l *Launcher) resolveKitPath() (string, error) {
 		if info.IsDir() {
 			return "", fmt.Errorf("%s is a directory, expected the kit binary", managed)
 		}
-		// Check the owner execute bit specifically: kai owns this managed
-		// binary, so it runs it as the owner. A file executable only by
-		// group/other (e.g. mode 0070 from an odd umask) would pass an
-		// any-bit (&0o111) test yet still fail at syscall.Exec with a cryptic
-		// EACCES — route it to the actionable repair message instead.
-		if info.Mode().Perm()&0o100 == 0 {
+		// Route a non-executable managed binary to the actionable repair
+		// message rather than a cryptic EACCES at exec. isExecutable is
+		// per-OS: the owner bit on Unix, always true on Windows.
+		if !isExecutable(info) {
 			return managed, fmt.Errorf("%w: %s (run `chmod +x %s` or reinstall)", ErrKitNotExecutable, managed, managed)
 		}
 		// Pin check (only when this kai pins a version): if the managed copy's
