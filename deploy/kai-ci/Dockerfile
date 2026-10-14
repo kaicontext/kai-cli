@@ -52,6 +52,14 @@ COPY kai-cli/    kai-cli/
 COPY kai-core/   kai-core/
 COPY kai-engine/ kai-engine/
 COPY kai-tui/    kai-tui/
+# kai's version is an ldflag, not a source constant: cmd/kai/main.go's default
+# ("0.34.5") is stale by design and only release builds overwrite it. Without
+# this the image's kai reports that default, and every review log prints
+# "Update available: 0.34.5 → <the version actually running>". Pass the tag
+# WITHOUT its leading v, as ci.yml's release builds do. Empty (a local build.sh
+# run from a branch) keeps the source default. kit needs nothing: its version is
+# a source constant bumped at release.
+ARG KAI_VERSION=
 # Build against local sources via replace directives (deterministic — overrides
 # the pinned kai-engine v0.1.3 / kai-core v0.1.0 with the checked-out code, at
 # any version). CC points at the target-arch cross compiler for CGO.
@@ -65,7 +73,7 @@ RUN set -eux; \
     go mod edit -replace github.com/kaicontext/kai-engine=../kai-engine; \
     go mod edit -replace github.com/kaicontext/kai-core=../kai-core; \
     CC="$CC" CGO_ENABLED=1 GOOS=linux GOARCH="$TARGETARCH" \
-      go build -trimpath -ldflags="-w -s" -o /out/kai ./cmd/kai
+      go build -trimpath -ldflags="-w -s${KAI_VERSION:+ -X main.Version=$KAI_VERSION}" -o /out/kai ./cmd/kai
 
 # kit — the coding harness a Cloud Agent job runs. Same replace treatment as
 # kai-cli above, and it must be explicit: kai-tui carries these replaces in a
