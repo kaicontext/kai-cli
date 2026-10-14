@@ -77,40 +77,61 @@ func rcParseEarlierSection(raw string) map[string]rcEarlierClaim {
 			}
 			continue
 		}
-		if !in {
+		ref, c, ok := rcParseEarlierLine(t)
+		if !ok || (!in && !rcIsEarlierStatusLine(t)) {
 			continue
 		}
-		m := rcEarlierLineRe.FindStringSubmatch(t)
-		if m == nil {
-			continue
-		}
-		ref, rest := m[1], strings.TrimSpace(m[2])
-		low := strings.ToLower(rest)
-		var c rcEarlierClaim
-		switch {
-		case strings.HasPrefix(low, "fixed"):
-			c.status = rcEarlierFixed
-			if w := rcEarlierWhereRe.FindStringSubmatch(rest); w != nil {
-				c.where = w[1]
-				rest = rest[len(w[0]):]
-			} else {
-				rest = rest[len("fixed"):]
-			}
-		case strings.HasPrefix(low, "wrong"):
-			c.status = rcEarlierWithdrawn
-			rest = rest[len("wrong"):]
-		case strings.HasPrefix(low, "open"):
-			c.status = rcEarlierOpen
-			rest = rest[len("open"):]
-		default:
-			continue
-		}
-		c.note = strings.TrimSpace(rcEarlierNoteRe.ReplaceAllString(rest, ""))
 		if _, seen := out[ref]; !seen {
 			out[ref] = c
 		}
 	}
 	return out
+}
+
+// rcIsEarlierStatusLine reports a bullet that is an earlier point's status
+// ("- <12-hex ref>: fixed|open|wrong …") wherever it was written. On
+// kai-cli#182 (2026-10-14) a reviewer put one under ISSUES and it was posted
+// to the PR as a new 🐞 point; one found outside EARLIER is read as a status
+// and taken out of the draft like the list itself.
+func rcIsEarlierStatusLine(t string) bool {
+	m := rcEarlierLineRe.FindStringSubmatch(t)
+	if m == nil {
+		return false
+	}
+	low := strings.ToLower(strings.TrimSpace(m[2]))
+	return strings.HasPrefix(low, "fixed") || strings.HasPrefix(low, "open") || strings.HasPrefix(low, "wrong")
+}
+
+// rcParseEarlierLine reads one "- <ref>: open | fixed at path:line — … |
+// wrong — …" bullet.
+func rcParseEarlierLine(t string) (string, rcEarlierClaim, bool) {
+	m := rcEarlierLineRe.FindStringSubmatch(t)
+	if m == nil {
+		return "", rcEarlierClaim{}, false
+	}
+	ref, rest := m[1], strings.TrimSpace(m[2])
+	low := strings.ToLower(rest)
+	var c rcEarlierClaim
+	switch {
+	case strings.HasPrefix(low, "fixed"):
+		c.status = rcEarlierFixed
+		if w := rcEarlierWhereRe.FindStringSubmatch(rest); w != nil {
+			c.where = w[1]
+			rest = rest[len(w[0]):]
+		} else {
+			rest = rest[len("fixed"):]
+		}
+	case strings.HasPrefix(low, "wrong"):
+		c.status = rcEarlierWithdrawn
+		rest = rest[len("wrong"):]
+	case strings.HasPrefix(low, "open"):
+		c.status = rcEarlierOpen
+		rest = rest[len("open"):]
+	default:
+		return "", rcEarlierClaim{}, false
+	}
+	c.note = strings.TrimSpace(rcEarlierNoteRe.ReplaceAllString(rest, ""))
+	return ref, c, true
 }
 
 // rcTakeEarlierSection reads the EARLIER list and removes it from the draft.
@@ -140,6 +161,9 @@ func rcTakeEarlierSection(raw string) (string, map[string]rcEarlierClaim) {
 		}
 		if in {
 			continue // a bullet, a continuation or a blank inside EARLIER
+		}
+		if strings.HasPrefix(t, "-") && rcIsEarlierStatusLine(t) {
+			continue // a status written under ISSUES or DECISIONS
 		}
 		out = append(out, ln)
 	}

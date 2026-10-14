@@ -98,6 +98,29 @@ EARLIER:
 	}
 }
 
+// kai-cli#182's own review: the reviewer wrote a status under ISSUES and it
+// was posted as a new 🐞. A status line anywhere is a status, never a finding.
+func TestEarlierStatusUnderIssuesIsNotAFinding(t *testing.T) {
+	draft := "x\n" + rcReviewDataMarker + `
+INTENT_MATCH: verified
+MERGE_READY: 4
+SUMMARY: fine
+ISSUES:
+- ed7b1d9c88d9: fixed at cmd/kai/review_commit.go:1104 — the section is stripped first
+- src/a.go:1 — a real defect
+DECISIONS:
+- cccccccccccc: open
+`
+	stripped, claims := rcTakeEarlierSection(draft)
+	if claims["ed7b1d9c88d9"].status != rcEarlierFixed || claims["ed7b1d9c88d9"].where != "cmd/kai/review_commit.go:1104" || claims["cccccccccccc"].status != rcEarlierOpen {
+		t.Fatalf("misplaced statuses not read: %+v", claims)
+	}
+	_, issues, decisions, _, _, _ := rcParseReviewOutput(stripped)
+	if len(issues) != 1 || issues[0] != "src/a.go:1 — a real defect" || len(decisions) != 0 {
+		t.Fatalf("a status survived as a finding: issues=%q decisions=%q", issues, decisions)
+	}
+}
+
 func TestEarlierStatuses(t *testing.T) {
 	prior := &rcPrior{Head: "abc", Points: []rcPriorPoint{
 		{Kind: "defect", Ref: "111111111111"}, // re-raised → open, even though EARLIER says fixed
