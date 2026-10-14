@@ -155,3 +155,30 @@ func TestGroupingCallLeavesRoomToReason(t *testing.T) {
 		t.Errorf("folded %d, want 1", n)
 	}
 }
+
+// The read-through folds the same way: a repeat's "### " section goes, the
+// finding it repeats carries the also-list, and the rest is untouched
+// (kai-server#467 showed all eight write-ups under four findings).
+func TestGroupingFoldsTheReadThrough(t *testing.T) {
+	a := "a.go:8 — slices by bytes, not characters"
+	b := "a.go:11 — max <= 0 panics"
+	c := "a.go:10 — `Truncate` counts and slices bytes"
+	d := "a.go:10 — `s[:max-1]` panics when max <= 0"
+	raw := "## Scope\n- a.go\n\n## Findings\n" +
+		"\n### " + a + "\nbyte prose\n\n**Remedy:** use runes\n" +
+		"\n### " + b + "\npanic prose\n" +
+		"\n### " + c + "\nrepeat of the byte prose\n#include is not a heading\n" +
+		"\n### " + d + "\nrepeat of the panic prose\n" +
+		"\n## Limitations\n- none\n\n" + rcReviewDataMarker + "\nISSUES:\n- " + a + "\n- " + b + "\n- " + c + "\n- " + d + "\n"
+	got, n := rcGroupDuplicateIssuesWith(raw, nil, func(string) (string, error) { return "3 = 1\n4 = 2", nil })
+	prose := got[:strings.Index(got, rcReviewDataMarker)]
+	if n != 2 || strings.Contains(prose, "repeat of") || strings.Contains(prose, "#include") || strings.Count(prose, "### ") != 2 {
+		t.Fatalf("folded %d; prose:\n%s", n, prose)
+	}
+	for _, want := range []string{"### a.go:8 — slices by bytes, not characters (also: a.go:10).", "byte prose", "**Remedy:** use runes",
+		"### a.go:11 — max <= 0 panics (also: a.go:10).", "panic prose", "## Limitations\n- none", "## Scope\n- a.go"} {
+		if !strings.Contains(prose, want) {
+			t.Errorf("prose lost %q:\n%s", want, prose)
+		}
+	}
+}
