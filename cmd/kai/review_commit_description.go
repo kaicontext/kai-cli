@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/provider"
@@ -98,6 +99,11 @@ func rcWriteDescription(ctx context.Context, prov provider.Provider, model, auth
 	if err != nil {
 		return "", err
 	}
+	// A description cut off by the token limit ends mid-thought; none is
+	// better than half of one.
+	if resp.FinishReason == message.FinishReasonMaxTokens {
+		return "", fmt.Errorf("cut off at the token limit")
+	}
 	var out strings.Builder
 	for _, p := range resp.Parts {
 		if t, ok := p.(message.TextContent); ok {
@@ -108,7 +114,8 @@ func rcWriteDescription(ctx context.Context, prov provider.Provider, model, auth
 }
 
 // rcCleanDescription trims what the model wrote to what the bundle carries:
-// no surrounding fence, bounded on a line.
+// no surrounding fence, no live @-mention, bounded on a line (or, with no
+// line to cut at, on a character).
 func rcCleanDescription(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
@@ -117,11 +124,33 @@ func rcCleanDescription(s string) string {
 		}
 		s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "```"))
 	}
+	s = rcDefuseMentions(s)
 	if len(s) > rcDescriptionMaxBytes {
-		s = s[:rcDescriptionMaxBytes]
+		cut := rcDescriptionMaxBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut]
 		if i := strings.LastIndex(s, "\n"); i > 0 {
 			s = s[:i]
 		}
 	}
 	return strings.TrimSpace(s)
+}
+
+// rcDefuseMentions keeps the description from mentioning anyone on GitHub,
+// whatever the diff led the model to write: a zero-width space after every
+// "@" outside a code span (a path or decorator in code is shown as written;
+// GitHub does not notify from code), after every "@" when a backtick is
+// unpaired. kai-server does the same before it writes; this is the bundle's
+// own guarantee.
+func rcDefuseMentions(s string) string {
+	parts := strings.Split(s, "`")
+	if len(parts)%2 == 0 {
+		return strings.ReplaceAll(s, "@", "@\u200b")
+	}
+	for i := 0; i < len(parts); i += 2 {
+		parts[i] = strings.ReplaceAll(parts[i], "@", "@\u200b")
+	}
+	return strings.Join(parts, "`")
 }

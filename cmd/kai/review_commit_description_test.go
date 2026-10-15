@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/provider"
@@ -62,9 +63,38 @@ func TestDescriptionFailureOrLatenessIsLeftOut(t *testing.T) {
 }
 
 func TestCleanDescriptionBounds(t *testing.T) {
-	long := strings.Repeat("- a line of the change\n", 400)
-	d := rcCleanDescription(long)
-	if len(d) > rcDescriptionMaxBytes || strings.HasSuffix(d, "- a line of the") {
-		t.Errorf("bounded description cut mid-line or overlong: %d bytes", len(d))
+	line := "- a line of the change\n"
+	d := rcCleanDescription(strings.Repeat(line, 400))
+	if len(d) > rcDescriptionMaxBytes {
+		t.Fatalf("overlong: %d bytes", len(d))
+	}
+	if !strings.HasSuffix(d, "- a line of the change") {
+		t.Errorf("cut mid-line: ...%q", d[len(d)-30:])
+	}
+	// No newline to back up to: the cut lands on a character, not inside one.
+	one := rcCleanDescription(strings.Repeat("é", rcDescriptionMaxBytes))
+	if !utf8.ValidString(one) || len(one) > rcDescriptionMaxBytes {
+		t.Errorf("a one-line description was cut inside a character (%d bytes)", len(one))
+	}
+}
+
+func TestDescriptionNeverMentions(t *testing.T) {
+	d := rcCleanDescription("Pings @alice and @kai; keeps `@Injectable()` and `pkg/@scope/x`.")
+	if strings.Contains(d, "@alice") || strings.Contains(d, "@kai") || !strings.Contains(d, "`@Injectable()`") {
+		t.Errorf("description = %q", d)
+	}
+	if d := rcCleanDescription("unpaired ` then @alice"); strings.Contains(d, "@alice") {
+		t.Errorf("unpaired backtick left a mention: %q", d)
+	}
+}
+
+func TestDescriptionCutOffByTheTokenLimitIsLeftOut(t *testing.T) {
+	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		r := rcTextResponse("Adds retries to the upload, and then")
+		r.FinishReason = message.FinishReasonMaxTokens
+		return r, nil
+	}}
+	if d := rcStartDescription(context.Background(), p, "m", "x", "y")(time.Second); d != "" {
+		t.Errorf("a truncated description was kept: %q", d)
 	}
 }
