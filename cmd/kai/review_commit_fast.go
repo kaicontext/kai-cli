@@ -48,9 +48,18 @@ func rcFastBudget() time.Duration {
 	return 100 * time.Second
 }
 
-// rcFastMaxTokens caps the prose. Output tokens are what the deadline is
-// actually spent on, and a first pass is meant to be read in thirty seconds.
-const rcFastMaxTokens = 2000
+// rcFastMaxTokens caps the draft call's output, which includes any thinking
+// the model does by default. The prompt keeps the prose short; this is the
+// headroom around it.
+//
+// It was 2000, sized for the prose alone. claude-sonnet-5-5 thinks by default
+// even with no reasoning requested, and on a large diff the thinking took the
+// whole 2000: kaicontext/kai-vcs#1 (2026-10-15, 123 KB diff) failed "review
+// produced no content" with every token spent in ReasoningContent and no text,
+// and the runs that did fit published a draft cut off mid-word. Reproduced
+// 2 of 3 on v0.36.20 and v0.36.22; at 8000, 4 of 4 ended on their own
+// (end_turn) at 2.1–3.9k output tokens in 17–46s, inside the fast budget.
+const rcFastMaxTokens = 8000
 
 // rcFastReviewSystem is a DIFFERENT epistemic contract from rcReviewSystem, not
 // a shortened one. The slow prompt is built on "ground every claim before you
@@ -205,6 +214,13 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 		}
 	}
 	draft := strings.TrimSpace(out.String())
+	// A draft stopped by the token limit is missing its end — at best the
+	// verdict and the REVIEW-DATA coda, at worst everything (the budget went
+	// to thinking). Neither is a review; say so instead of publishing half of
+	// one or failing as "no content".
+	if resp.FinishReason == message.FinishReasonMaxTokens {
+		return "", nil, fmt.Errorf("fast review draft cut off at the token limit (%d output tokens, %d bytes of text)", resp.OutputTokens, len(draft))
+	}
 	fmt.Fprintf(os.Stderr, "  challenge model: requested %s (draft was requested from %s)\n", challengeModel, model)
 	res, err := rcChallengeReview(cctx, prov, challengeModel, draft, []rcSource{rcPromptSource(user.String())}, rcConfiguredSandbox())
 	if err != nil {
