@@ -30,6 +30,9 @@ func TestDescriptionIsAskedForFromTheChangeAlone(t *testing.T) {
 	if !strings.Contains(user, "The CDN drops 1% of PUTs.") || !strings.Contains(user, "diff --git a/upload.go") {
 		t.Errorf("the call lacks the author's words or the diff:\n%s", user)
 	}
+	if got.ReasoningEffort != "" || got.MaxTokens < 2000 {
+		t.Errorf("description call budget: effort %q, %d tokens — reasoning spends it all", got.ReasoningEffort, got.MaxTokens)
+	}
 	for _, rule := range []string{"Do not review it", "Never invent", "Never write an @-mention"} {
 		if !strings.Contains(got.System, rule) {
 			t.Errorf("system prompt lacks %q", rule)

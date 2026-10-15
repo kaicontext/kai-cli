@@ -29,6 +29,10 @@ import (
 // rcDescriptionMaxBytes bounds the description the bundle carries.
 const rcDescriptionMaxBytes = 4000
 
+// rcDescriptionMaxTokens is the call's output budget: room for a 4000-byte
+// description with margin, since a cut-off one is thrown away.
+const rcDescriptionMaxTokens = 2500
+
 const rcDescriptionSystem = `You write the description for a pull request, the way its author would when opening it. You are given the commit messages, whatever description the author already wrote, and the diff.
 
 Write GitHub markdown in exactly this shape:
@@ -89,11 +93,13 @@ func rcWriteDescription(ctx context.Context, prov provider.Provider, model, auth
 	in.WriteString(strings.TrimSpace(authorContext))
 	in.WriteString("\n\nDIFF:\n")
 	in.WriteString(diff)
+	// No reasoning: describing a diff needs none, and with it on the thinking
+	// spent the whole budget — the first live runs (kai-vcs#1, 2026-10-15)
+	// were all "cut off at the token limit" with nothing written.
 	resp, err := prov.Send(ctx, provider.Request{
-		Model:           model,
-		System:          rcDescriptionSystem,
-		MaxTokens:       rcTokensFor(1200, rcStageEffort(rcStageIntent)),
-		ReasoningEffort: rcStageEffort(rcStageIntent),
+		Model:     model,
+		System:    rcDescriptionSystem,
+		MaxTokens: rcDescriptionMaxTokens,
 		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
 	})
 	if err != nil {
