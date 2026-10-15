@@ -72,7 +72,7 @@ func TestCleanDescriptionBounds(t *testing.T) {
 		t.Errorf("cut mid-line: ...%q", d[len(d)-30:])
 	}
 	// No newline to back up to: the cut lands on a character, not inside one.
-	one := rcCleanDescription(strings.Repeat("é", rcDescriptionMaxBytes))
+	one := rcCleanDescription(strings.Repeat("€", rcDescriptionMaxBytes)) // 3 bytes: 4000 is not a boundary
 	if !utf8.ValidString(one) || len(one) > rcDescriptionMaxBytes {
 		t.Errorf("a one-line description was cut inside a character (%d bytes)", len(one))
 	}
