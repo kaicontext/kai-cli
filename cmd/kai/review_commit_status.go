@@ -228,9 +228,29 @@ func rcEarlierStatuses(prior *rcPrior, claims map[string]rcEarlierClaim, final s
 	for _, m := range rcEarlierRefRe.FindAllStringSubmatch(final, -1) {
 		reraised[m[1]] = true
 	}
-	changedSet := map[string]bool{}
-	for _, p := range changed {
-		changedSet[rcCleanRepoPath(p)] = true
+	// The files changed since each point's own commit: the previous review's
+	// (changed, known) for its points, worked out once per older commit for
+	// the points an older review raised (rcPriorPoint.Since).
+	type changedSince struct {
+		set   map[string]bool
+		known bool
+	}
+	asSet := func(files []string, known bool) changedSince {
+		cs := changedSince{set: map[string]bool{}, known: known}
+		for _, p := range files {
+			cs.set[rcCleanRepoPath(p)] = true
+		}
+		return cs
+	}
+	bySince := map[string]changedSince{prior.Head: asSet(changed, known)}
+	changedFor := func(pt rcPriorPoint) changedSince {
+		since := rcPointSince(prior, pt)
+		if cs, ok := bySince[since]; ok {
+			return cs
+		}
+		cs := asSet(rcChangedSince(since))
+		bySince[since] = cs
+		return cs
 	}
 	var out []rcEarlierStatus
 	seen := map[string]bool{}
@@ -242,6 +262,7 @@ func rcEarlierStatuses(prior *rcPrior, claims map[string]rcEarlierClaim, final s
 		seen[ref] = true
 		c := claims[ref]
 		st := rcEarlierStatus{Ref: ref}
+		cs := changedFor(pt)
 		switch {
 		case reraised[ref]:
 			st.Status = rcEarlierOpen
@@ -249,12 +270,12 @@ func rcEarlierStatuses(prior *rcPrior, claims map[string]rcEarlierClaim, final s
 			st.Status, st.Note = rcEarlierWithdrawn, "the fact-check found it no longer holds: "+rcClip(refuted[ref], 300)
 		case c.status == rcEarlierFixed && c.where == "":
 			st.Status, st.Note = rcEarlierUnknown, "said fixed without naming the line that fixes it"
-		case c.status == rcEarlierFixed && !known:
+		case c.status == rcEarlierFixed && !cs.known:
 			// A fix that cannot be checked against the changed files does
 			// not close the author's thread (Kai's review of kai-cli#182).
-			st.Status, st.Note = rcEarlierUnknown, "said fixed at "+c.where+", but the previous review's commit is not in this clone, so the fix could not be checked"
-		case c.status == rcEarlierFixed && !changedSet[rcCleanRepoPath(rcPathOf(c.where))]:
-			st.Status, st.Note = rcEarlierUnknown, "said fixed at "+c.where+", but that file has not changed since the previous review"
+			st.Status, st.Note = rcEarlierUnknown, "said fixed at "+c.where+", but the commit the point was raised at is not in this clone, so the fix could not be checked"
+		case c.status == rcEarlierFixed && !cs.set[rcCleanRepoPath(rcPathOf(c.where))]:
+			st.Status, st.Note = rcEarlierUnknown, "said fixed at "+c.where+", but that file has not changed since the point was raised"
 		case c.status == rcEarlierFixed:
 			st.Status, st.Where, st.Note = rcEarlierFixed, c.where, c.note
 		case c.status == rcEarlierWithdrawn:

@@ -237,3 +237,66 @@ func TestReviewPromptAsksForEarlier(t *testing.T) {
 		}
 	}
 }
+
+// A point an older review raised is checked against the files changed since
+// ITS commit, not since the previous review's: on kaicontext/kai-vcs#1 a fix
+// pushed before the latest review would otherwise read "file not changed".
+func TestEarlierStatusesOlderPointSince(t *testing.T) {
+	calls := map[string]int{}
+	old := rcChangedSinceFn
+	rcChangedSinceFn = func(head string) ([]string, bool) {
+		calls[head]++
+		switch head {
+		case "older":
+			return []string{"tools/faults.py", "src/a.go"}, true
+		default:
+			return nil, false
+		}
+	}
+	defer func() { rcChangedSinceFn = old }()
+
+	prior := &rcPrior{Head: "latest", Points: []rcPriorPoint{
+		{Kind: "defect", Ref: "111111111111"},                   // the previous review's own: since "latest"
+		{Kind: "defect", Ref: "222222222222", Since: "older"},   // fixed before the latest review
+		{Kind: "defect", Ref: "333333333333", Since: "older"},   // "fixed" in a file untouched since then
+		{Kind: "defect", Ref: "444444444444", Since: "missing"}, // its commit is not in the clone
+	}}
+	claims := map[string]rcEarlierClaim{
+		"111111111111": {rcEarlierFixed, "tools/faults.py:3", ""},
+		"222222222222": {rcEarlierFixed, "tools/faults.py:62", "reads GITHUB_SHA first"},
+		"333333333333": {rcEarlierFixed, "docs/x.md:1", ""},
+		"444444444444": {rcEarlierFixed, "src/a.go:1", ""},
+	}
+	got := map[string]string{}
+	for _, s := range rcEarlierStatuses(prior, claims, "", nil, nil, []string{"tools/demo.py"}, true) {
+		got[s.Ref] = s.Status
+	}
+	want := map[string]string{
+		"111111111111": rcEarlierUnknown, // faults.py did not change since "latest"
+		"222222222222": rcEarlierFixed,
+		"333333333333": rcEarlierUnknown,
+		"444444444444": rcEarlierUnknown,
+	}
+	for ref, st := range want {
+		if got[ref] != st {
+			t.Errorf("%s: %s, want %s", ref, got[ref], st)
+		}
+	}
+	if calls["older"] != 1 || calls["latest"] != 0 {
+		t.Errorf("change sets worked out %v; want each older commit once and the previous review's never", calls)
+	}
+}
+
+func TestPriorBlockMarksOlderPoints(t *testing.T) {
+	p := &rcPrior{Head: "2377fb80a463aaaa", Points: []rcPriorPoint{
+		{Kind: "defect", Ref: "111111111111", Text: "new"},
+		{Kind: "defect", Ref: "222222222222", Text: "old", Since: "956a68def53dbbbb"},
+	}}
+	b := rcPriorBlock(p, nil, true)
+	if !strings.Contains(b, "[defect, ref 222222222222, raised at 956a68def53d, still open on the pull request] old") {
+		t.Errorf("older point not marked:\n%s", b)
+	}
+	if !strings.Contains(b, "[defect, ref 111111111111] new") {
+		t.Errorf("previous review's point changed:\n%s", b)
+	}
+}

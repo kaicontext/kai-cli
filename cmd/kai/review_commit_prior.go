@@ -43,10 +43,27 @@ type rcPrior struct {
 
 // rcPriorPoint is one earlier point; Ref is set on defects and is what the
 // reviewer tags the point with when it still holds (review_commit_earlier.go).
+//
+// Since is set on a point an OLDER review raised whose thread is still open
+// on the pull request: the commit it was raised at. The previous review is not
+// always the one that made a point — on kaicontext/kai-vcs#1 (2026-10-15) the
+// latest review listed nothing, nine threads from the two before it were
+// still open, and the re-review accounted for none of them. kai-server now
+// carries those too, and a fix to one of them is checked against the files
+// changed since Since, not since the previous review.
 type rcPriorPoint struct {
-	Kind string `json:"kind"`
-	Text string `json:"text"`
-	Ref  string `json:"ref"`
+	Kind  string `json:"kind"`
+	Text  string `json:"text"`
+	Ref   string `json:"ref"`
+	Since string `json:"since,omitempty"`
+}
+
+// rcPointSince is the commit a point's fix is checked against.
+func rcPointSince(p *rcPrior, pt rcPriorPoint) string {
+	if s := strings.TrimSpace(pt.Since); s != "" {
+		return s
+	}
+	return p.Head
 }
 
 // rcPriorFromEnv reads KAI_PRIOR_REVIEW; nil when it is unset or unreadable.
@@ -62,10 +79,17 @@ func rcPriorFromEnv() *rcPrior {
 	return &p
 }
 
-// rcChangedSince lists the files that differ between the previous review's
-// commit and HEAD, or nil when the clone does not have that commit (a
-// force-push, a shallow clone).
+// rcChangedSince lists the files that differ between a commit (the previous
+// review's, or the one an older point was raised at) and HEAD, or nil when
+// the clone does not have that commit (a force-push, a shallow clone).
 func rcChangedSince(head string) ([]string, bool) {
+	return rcChangedSinceFn(head)
+}
+
+// rcChangedSinceFn is rcChangedSince's implementation; tests replace it.
+var rcChangedSinceFn = rcGitChangedSince
+
+func rcGitChangedSince(head string) ([]string, bool) {
 	if exec.Command("git", "rev-parse", "--verify", "--quiet", head+"^{commit}").Run() != nil {
 		return nil, false
 	}
@@ -100,7 +124,11 @@ func rcPriorBlock(p *rcPrior, changed []string, known bool) string {
 	}
 	for _, pt := range p.Points {
 		if pt.Ref != "" {
-			fmt.Fprintf(&b, "- [%s, ref %s] %s\n", pt.Kind, pt.Ref, strings.TrimSpace(pt.Text))
+			older := ""
+			if since := rcPointSince(p, pt); since != p.Head {
+				older = ", raised at " + rcShort(since) + ", still open on the pull request"
+			}
+			fmt.Fprintf(&b, "- [%s, ref %s%s] %s\n", pt.Kind, pt.Ref, older, strings.TrimSpace(pt.Text))
 			continue
 		}
 		fmt.Fprintf(&b, "- [%s] %s\n", pt.Kind, strings.TrimSpace(pt.Text))
