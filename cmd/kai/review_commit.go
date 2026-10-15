@@ -376,6 +376,13 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, line)
 	}
 
+	// The pull request description a person would write, asked for beside the
+	// review (review_commit_description.go); only a bundle carries it.
+	var collectDescription func(time.Duration) string
+	if reviewCommitFormat == "json" {
+		collectDescription = rcStartDescription(ctx, prov, rcStageModel(rcStageIntent, model), authorContext, diff)
+	}
+
 	// Diff stat up front: it is pure git, and --fast hands the changed paths to
 	// the model so its ISSUES bullets name a file the pipeline can resolve. The
 	// first live fast run wrote both of its real defects as bare line numbers
@@ -597,6 +604,16 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		if fast {
 			depth = "fast"
 		}
+		// The fast pass waits briefly: it is the early answer, and a late
+		// description is written by the grounded pass instead.
+		description := ""
+		if collectDescription != nil && !incomplete {
+			wait := 90 * time.Second
+			if fast {
+				wait = 20 * time.Second
+			}
+			description = collectDescription(wait)
+		}
 		// incomplete rides along because the counts cannot carry it: a run
 		// that stopped before its conclusion emits no risks, no decisions and
 		// an unknown intent, which is arithmetically identical to a review
@@ -622,7 +639,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// the threads of fixed and withdrawn points. Only on a review
 			// that published: an unfinished run settles nothing.
 			Earlier []rcEarlierStatus `json:"earlier,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete)}, "", "  ")
+			// Description is the pull request description a person would
+			// write: what the change does, not what the review thinks of it.
+			// kai-server puts it in the PR's "Kai context" section.
+			Description string `json:"description,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
