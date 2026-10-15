@@ -79,9 +79,9 @@ func rcPriorFromEnv() *rcPrior {
 	return &p
 }
 
-// rcChangedSince lists the files that differ between the previous review's
-// commit and HEAD, or nil when the clone does not have that commit (a
-// force-push, a shallow clone).
+// rcChangedSince lists the files that differ between a commit (the previous
+// review's, or the one an older point was raised at) and HEAD, or nil when
+// the clone does not have that commit (a force-push, a shallow clone).
 func rcChangedSince(head string) ([]string, bool) {
 	return rcChangedSinceFn(head)
 }
