@@ -5685,8 +5685,8 @@ Kai uses a two-tier snapshot model to prevent database bloat:
 
 | Ref | Purpose | GC Root? |
 |-----|---------|----------|
-| ` + "`" + `@snap:working` + "`" + ` | Current working directory state | No (ephemeral) |
-| ` + "`" + `@snap:last` + "`" + ` | Last committed baseline | No (ephemeral) |
+| ` + "`" + `@snap:working` + "`" + ` | Current working directory state | Yes (until replaced) |
+| ` + "`" + `@snap:last` + "`" + ` | Last committed baseline | Yes |
 | ` + "`" + `snap.main` + "`" + `, etc. | Named refs you create | Yes (permanent) |
 
 ### How it works:
@@ -5706,6 +5706,8 @@ kai prune --keep "src/**"  # Preserve files matching pattern
 ` + "```" + `
 
 **What stays alive:**
+- The latest capture (` + "`" + `snap.latest` + "`" + `) and the current working snapshot
+- Every capture in the history log (` + "`" + `@snap:last~N` + "`" + `)
 - Snapshots referenced by workspaces
 - Snapshots referenced by reviews
 - Snapshots with named refs (` + "`" + `snap.main` + "`" + `, etc.)
@@ -6430,9 +6432,12 @@ func runGitImport(db *graph.DB) error {
 			continue
 		}
 
-		// Update refs
+		// Update refs. A snapshot nothing points at isn't history: fail
+		// rather than report an import that left the commit unreachable.
 		autoRefMgr := ref.NewAutoRefManager(db)
-		autoRefMgr.OnSnapshotCreated(snapshotID)
+		if err := autoRefMgr.OnSnapshotCreated(snapshotID); err != nil {
+			return fmt.Errorf("imported %s but could not publish it as snap.latest: %w", util.BytesToHex(snapshotID)[:12], err)
+		}
 
 		if graphRefsErr == nil {
 			graphRefs.Pin("", commitHash, time.Now())
@@ -7197,11 +7202,13 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	// Always update snap.latest (like git commit updates HEAD)
+	// A capture whose snapshot isn't published as snap.latest (and in the
+	// history log) didn't capture anything you can get back to — fail
+	// loudly instead of the debug-only warning this used to be.
 	if err := autoRefMgr.OnSnapshotCreatedWithMeta(snapshotID, snapMeta); err != nil {
-		debugf("warning: failed to update refs: %v", err)
-	} else {
-		debugf("refs updated successfully")
+		return fmt.Errorf("snapshot %s was saved but could not be published as snap.latest, so the capture did not complete: %w", shortID(util.BytesToHex(snapshotID)), err)
 	}
+	debugf("refs updated successfully")
 
 	// Auto-create changeset if there are changes
 	if capSummary != nil && capSummary.hasChanges && previousSnapID != nil {
@@ -7482,10 +7489,9 @@ func createSnapshotFromDir(db *graph.DB, dir string) ([]byte, error) {
 	autoRefMgr := ref.NewAutoRefManager(db)
 	if err := autoRefMgr.OnSnapshotCreated(snapshotID); err != nil {
 		fmt.Println("failed")
-		fmt.Fprintf(os.Stderr, "warning: failed to update refs: %v\n", err)
-	} else {
-		fmt.Println("done")
+		return nil, fmt.Errorf("snapshot %s was saved but could not be published as snap.latest: %w", util.BytesToHex(snapshotID)[:12], err)
 	}
+	fmt.Println("done")
 
 	fmt.Printf("Created snapshot: %s\n", util.BytesToHex(snapshotID))
 	return snapshotID, nil
@@ -7636,10 +7642,9 @@ func runSnapshot(cmd *cobra.Command, args []string) (err error) {
 	autoRefMgr := ref.NewAutoRefManager(db)
 	if err := autoRefMgr.OnSnapshotCreated(snapshotID); err != nil {
 		fmt.Println("failed")
-		fmt.Fprintf(os.Stderr, "warning: failed to update refs: %v\n", err)
-	} else {
-		fmt.Println("done")
+		return fmt.Errorf("snapshot %s was saved but could not be published as snap.latest: %w", util.BytesToHex(snapshotID)[:12], err)
 	}
+	fmt.Println("done")
 
 	fmt.Println()
 	fmt.Printf("Created snapshot: %s\n", util.BytesToHex(snapshotID))
@@ -14195,7 +14200,9 @@ func runWsCreate(cmd *cobra.Command, args []string) error {
 
 		// Update refs
 		autoRefMgr := ref.NewAutoRefManager(db)
-		_ = autoRefMgr.OnSnapshotCreated(baseID)
+		if err := autoRefMgr.OnSnapshotCreated(baseID); err != nil {
+			return fmt.Errorf("base snapshot %s was saved but could not be published as snap.latest: %w", util.BytesToHex(baseID)[:12], err)
+		}
 		fmt.Printf("Created base snapshot: %s\n", util.BytesToHex(baseID)[:12])
 		fmt.Println()
 	} else if wsBase != "" {
