@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -84,7 +85,37 @@ var (
 	rcSweepContextLines = 20
 	rcSweepMaxFileBytes = 64 * 1024
 	rcSweepMaxTokens    = 16000
+
+	// rcSweepSamples is how many independent sweeps to run and union before
+	// the gate. The sweep's defect SELECTION is stochastic: on the benchmark's
+	// own recall corpus a case flips pass/fail between back-to-back runs
+	// because a different real bug surfaces each time. Scoring rewards the
+	// union — a golden counts as found if ANY candidate matches, a duplicate
+	// of a correct finding is folded for free, and the gate (supported-only,
+	// plus rcWithholdUnsettledSweep) still filters the wrong ones — so unioning
+	// N passes lifts recall without lowering the bar a finding must clear.
+	// Default 1 keeps today's behaviour; KAI_REVIEW_SWEEP_SAMPLES opts in.
+	rcSweepSamples    = 1
+	rcSweepMaxSamples = 4
 )
+
+// rcSweepSampleCount is how many sweep passes to run: KAI_REVIEW_SWEEP_SAMPLES
+// when set and valid, else rcSweepSamples, clamped to [1, rcSweepMaxSamples].
+func rcSweepSampleCount() int {
+	n := rcSweepSamples
+	if v := strings.TrimSpace(os.Getenv("KAI_REVIEW_SWEEP_SAMPLES")); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			n = parsed
+		}
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > rcSweepMaxSamples {
+		n = rcSweepMaxSamples
+	}
+	return n
+}
 
 // rcSweepSkip reports files whose diff is not code anyone reviews line by
 // line: lockfiles, vendored and generated output, minified bundles, binaries.
@@ -196,11 +227,14 @@ func rcLooksLikeTest(path string) bool { return rcTestPath.MatchString(path) }
 // rcRunSweep reads every chunk with the review model and returns the defects
 // it proposes, each grounded to a changed path. Chunks run in parallel; a
 // chunk that errors or times out is counted and skipped.
-func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent string, order []string, patches map[string]string) rcSweepResult {
+func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent string, order []string, patches map[string]string, parallel int) rcSweepResult {
 	chunks := rcSweepChunks(order, patches)
 	res := rcSweepResult{Chunks: len(chunks)}
 	if len(chunks) == 0 {
 		return res
+	}
+	if parallel < 1 {
+		parallel = 1
 	}
 	ctx, cancel := context.WithTimeout(ctx, rcSweepDeadline)
 	defer cancel()
@@ -214,7 +248,7 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 		err    error
 	}
 	outs := make([]out, len(chunks))
-	sem := make(chan struct{}, rcSweepParallel)
+	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 	for i, files := range chunks {
 		wg.Add(1)
@@ -515,15 +549,71 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 		return ch
 	}
 	model = rcSweepModel(model)
+	samples := rcSweepSampleCount()
+	// Keep aggregate in-flight sweep calls near the single-pass budget, so N
+	// samples do not multiply provider load or wall-clock: each pass gets a
+	// share of rcSweepParallel (at least 1).
+	perSample := rcSweepParallel / samples
+	if perSample < 1 {
+		perSample = 1
+	}
 	go func() {
 		order, patches := rcSweepPatches(base, ref)
 		started := time.Now()
-		res := rcRunSweep(ctx, prov, model, intent, order, patches)
-		fmt.Fprintf(os.Stderr, "  sweep: %d chunk(s) read in %s, %d failed, %d defect(s) proposed\n",
-			res.Chunks, time.Since(started).Round(time.Second), res.Failed, len(res.Issues))
+		if samples <= 1 {
+			res := rcRunSweep(ctx, prov, model, intent, order, patches, rcSweepParallel)
+			fmt.Fprintf(os.Stderr, "  sweep: %d chunk(s) read in %s, %d failed, %d defect(s) proposed\n",
+				res.Chunks, time.Since(started).Round(time.Second), res.Failed, len(res.Issues))
+			ch <- res
+			return
+		}
+		results := make([]rcSweepResult, samples)
+		var wg sync.WaitGroup
+		for i := 0; i < samples; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				results[i] = rcRunSweep(ctx, prov, model, intent, order, patches, perSample)
+			}(i)
+		}
+		wg.Wait()
+		res := rcUnionSweepResults(results)
+		var raw int
+		for _, r := range results {
+			raw += len(r.Issues)
+		}
+		fmt.Fprintf(os.Stderr, "  sweep: %d sample(s), %d chunk(s) read in %s, %d failed, %d defect(s) proposed from %d across samples\n",
+			samples, res.Chunks, time.Since(started).Round(time.Second), res.Failed, len(res.Issues), raw)
 		ch <- res
 	}()
 	return ch
+}
+
+// rcUnionSweepResults merges several independent sweep passes into one. A
+// defect two passes both found is kept once (rcSameDefectThere, by location
+// and wording — the same test the draft merge uses), so a correct finding the
+// samples agree on is not multiplied; a defect only one pass found is kept, so
+// the union is the recall the passes reach together. Chunks are reported for
+// one pass (the passes read the same diff); Failed and Sources accumulate.
+func rcUnionSweepResults(results []rcSweepResult) rcSweepResult {
+	var union rcSweepResult
+	at := map[string][]string{} // location → issues already kept there
+	for _, r := range results {
+		if r.Chunks > union.Chunks {
+			union.Chunks = r.Chunks
+		}
+		union.Failed += r.Failed
+		union.Sources = append(union.Sources, r.Sources...)
+		for _, is := range r.Issues {
+			loc := rcSweepLocation(is)
+			if rcSameDefectThere(is, at[loc]) {
+				continue
+			}
+			at[loc] = append(at[loc], is)
+			union.Issues = append(union.Issues, is)
+		}
+	}
+	return union
 }
 
 // rcSweepModel is the sweep's model: the review profile's, else

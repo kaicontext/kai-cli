@@ -24,6 +24,68 @@ ISSUES:
 	}
 }
 
+func TestUnionSweepResultsKeepsDistinctDefectsAndFoldsAgreedOnes(t *testing.T) {
+	results := []rcSweepResult{
+		{
+			Issues:  []string{"a.go:10 — the session user is dereferenced without a nil check after expiry (severity: high)"},
+			Sources: []rcSource{{}},
+			Chunks:  3,
+			Failed:  1,
+		},
+		{
+			// Same defect reworded (folded), a different defect on the same
+			// line (kept), and a defect only this pass found (kept).
+			Issues: []string{
+				"a.go:10 — dereferences the session user after expiry without a nil check (severity: high)",
+				"a.go:10 — the log message misspells receivedAt as recievedAt (severity: low)",
+				"b.go:3 — off-by-one in the loop bound (severity: medium)",
+			},
+			Sources: []rcSource{{}},
+			Chunks:  3,
+			Failed:  0,
+		},
+	}
+	u := rcUnionSweepResults(results)
+	if len(u.Issues) != 3 {
+		t.Fatalf("union issues = %q", u.Issues)
+	}
+	if !strings.Contains(u.Issues[0], "session user is dereferenced") ||
+		!strings.Contains(u.Issues[1], "recievedAt") ||
+		!strings.HasPrefix(u.Issues[2], "b.go:3") {
+		t.Fatalf("union issues = %q", u.Issues)
+	}
+	if u.Chunks != 3 || u.Failed != 1 || len(u.Sources) != 2 {
+		t.Fatalf("union meta: chunks=%d failed=%d sources=%d", u.Chunks, u.Failed, len(u.Sources))
+	}
+	// A single pass unions to itself unchanged.
+	if one := rcUnionSweepResults(results[:1]); len(one.Issues) != 1 {
+		t.Fatalf("single-pass union = %q", one.Issues)
+	}
+}
+
+func TestSweepSampleCountClampsToRange(t *testing.T) {
+	t.Setenv("KAI_REVIEW_SWEEP_SAMPLES", "")
+	if got := rcSweepSampleCount(); got != rcSweepSamples {
+		t.Errorf("unset = %d, want default %d", got, rcSweepSamples)
+	}
+	t.Setenv("KAI_REVIEW_SWEEP_SAMPLES", "3")
+	if got := rcSweepSampleCount(); got != 3 {
+		t.Errorf("3 = %d", got)
+	}
+	t.Setenv("KAI_REVIEW_SWEEP_SAMPLES", "99")
+	if got := rcSweepSampleCount(); got != rcSweepMaxSamples {
+		t.Errorf("99 = %d, want clamp to %d", got, rcSweepMaxSamples)
+	}
+	t.Setenv("KAI_REVIEW_SWEEP_SAMPLES", "0")
+	if got := rcSweepSampleCount(); got != 1 {
+		t.Errorf("0 = %d, want 1", got)
+	}
+	t.Setenv("KAI_REVIEW_SWEEP_SAMPLES", "notanumber")
+	if got := rcSweepSampleCount(); got != rcSweepSamples {
+		t.Errorf("garbage = %d, want default %d", got, rcSweepSamples)
+	}
+}
+
 func TestSweepChunksSkipGeneratedFilesAndPutTestsLast(t *testing.T) {
 	order := []string{"pkg/a_test.go", "go.sum", "pkg/a.go", "web/app.min.js", "pkg/b.go"}
 	patches := map[string]string{}

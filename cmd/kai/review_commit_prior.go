@@ -108,8 +108,12 @@ func rcGitChangedSince(head string) ([]string, bool) {
 
 // rcPriorBlock renders the previous review for the reviewer's prompt.
 // changed is what differs since its commit; known is false when that could not
-// be worked out.
-func rcPriorBlock(p *rcPrior, changed []string, known bool) string {
+// be worked out (a force-push, a shallow clone). fallback is the files this
+// review itself covers (the base...ref set): when the prior commit is gone, it
+// still gives the reviewer a focus list — the churn this subsystem exists to
+// stop (review_prior.go) is worst when the re-review is told nothing and starts
+// cold.
+func rcPriorBlock(p *rcPrior, changed []string, known bool, fallback []string) string {
 	if p == nil {
 		return ""
 	}
@@ -140,6 +144,15 @@ func rcPriorBlock(p *rcPrior, changed []string, known bool) string {
 		}
 	}
 	switch {
+	case !known && len(fallback) > 0:
+		const show = 40
+		list := fallback
+		more := ""
+		if len(list) > show {
+			list, more = list[:show], fmt.Sprintf(" … and %d more", len(fallback)-show)
+		}
+		fmt.Fprintf(&b, "Files changed since then: could not diff against that commit (a force-push or shallow clone); these are the files this review covers (%d): %s%s\n",
+			len(fallback), strings.Join(list, ", "), more)
 	case !known:
 		b.WriteString("Files changed since then: unknown (that commit is not in this clone).\n")
 	case len(changed) == 0:
