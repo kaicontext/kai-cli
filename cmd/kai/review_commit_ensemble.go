@@ -114,7 +114,7 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 		} else if res != nil {
 			raw := rcRestoreCodaMarker(strings.TrimSpace(res.FinalText))
 			if rcNeedsConclusion(raw) {
-				if c := rcConcludeFromTranscript(concludeCtx, prov, model, res.Transcript); c != "" {
+				if c, _ := rcConcludeFromTranscript(concludeCtx, prov, model, res.Transcript); c != "" {
 					raw = rcRestoreCodaMarker(c)
 				}
 			}
