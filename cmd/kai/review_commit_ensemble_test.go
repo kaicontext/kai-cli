@@ -199,3 +199,36 @@ func TestASelectionSkipIsNotCountedAsRefuted(t *testing.T) {
 		t.Errorf("counts = %d supported, %d refuted, %d unresolved; want 1, 1, 0", s, r, u)
 	}
 }
+
+// A finding that quotes a heading mid-line does not stop the real section
+// after it from being removed (Kai's review of #188).
+func TestDefectsOnlyProseSkipsAQuotedHeading(t *testing.T) {
+	prose := "## Findings\n- the doc says see ## Limitations below\n\n## Limitations\n- read 3 files\n"
+	got := rcDefectsOnlyProse(prose)
+	if strings.Contains(got, "read 3 files") || !strings.Contains(got, "see ## Limitations below") {
+		t.Errorf("got %q", got)
+	}
+}
+
+// A set-but-empty stage variable falls back to the default; "off" turns it off.
+func TestAnEmptyEnsembleVariableKeepsTheDefault(t *testing.T) {
+	t.Setenv("KAI_RANK_MODEL", "")
+	if rcEnsembleModel(rcStageRank) == "" {
+		t.Error("empty KAI_RANK_MODEL turned the rank stage off")
+	}
+	t.Setenv("KAI_RANK_MODEL", "off")
+	if m := rcEnsembleModel(rcStageRank); m != "" {
+		t.Errorf("off: got %q", m)
+	}
+}
+
+// With no declaration, a named issue stays unlocated rather than landing on
+// an import or call site.
+func TestANamedIssueWithNoDeclarationStaysUnlocated(t *testing.T) {
+	files := map[string][]string{"A.java": {"import x.shipIsMergeSubject;", "class A {", "  boolean shipIsMergeSubject(String s) { return false; }", "}"}}
+	read := func(_, p string) ([]string, bool) { l, ok := files[p]; return l, ok }
+	in := "A.java:shipIsMergeSubject — x"
+	if got := rcLocateNamedIssue("h", in, []string{"A.java"}, read); got != in {
+		t.Errorf("got %q, want it unchanged", got)
+	}
+}

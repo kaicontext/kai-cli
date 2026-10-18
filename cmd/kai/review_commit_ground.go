@@ -528,7 +528,6 @@ func rcLocateNamedIssue(hash, item string, tree []string, readFile func(hash, pa
 	if i := strings.LastIndex(name, "."); i >= 0 && i+1 < len(name) {
 		name = name[i+1:]
 	}
-	word := regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_]|$)`)
 	// A declaration: the keyword directly introduces the name (a Go method's
 	// receiver may sit between them), on a line that is not a comment. A doc
 	// comment ("// foo returns the type of X") or a call site ("var ok =
@@ -542,14 +541,10 @@ func rcLocateNamedIssue(hash, item string, tree []string, readFile func(hash, pa
 			break
 		}
 	}
-	if line == 0 {
-		for i, l := range lines {
-			if word.MatchString(l) {
-				line = i + 1
-				break
-			}
-		}
-	}
+	// No declaration found (a Java or C# method has no keyword before its
+	// name): the issue stays unlocated, as before, rather than anchoring to
+	// an import or call site that merely mentions the name (Kai's review of
+	// #188).
 	if line == 0 {
 		return item
 	}

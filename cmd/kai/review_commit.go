@@ -269,7 +269,7 @@ func init() {
 	// --fast now refuses unless KAI_REVIEW_QUICK_PASS=1 (the CI quick pass is
 	// retired, see runReviewCommit); the flag stays so the CI workflow that
 	// still passes it fails fast and tolerated instead of on an unknown flag.
-	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default; the flag is explicit-only)")
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default without flags; an explicit --fast refuses unless KAI_REVIEW_QUICK_PASS=1)")
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitDeep, "deep", false, "the grounded review: agent harness + graph, minutes not seconds — requires `kai capture`")
 	rootCmd.AddCommand(reviewCommitCmd)
 }
@@ -996,6 +996,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// this line in the job log. Report it the way a failed fact-check is
 		// reported instead, so the bundle says which kind of failure it was.
 		fmt.Fprintf(os.Stderr, "  review run failed: %v\n", err)
+		// A run that failed outright (the provider failing every retry) is
+		// reported as a failure, as before the ensemble; the second finder's
+		// partial coverage is not published in its place, so stop it rather
+		// than let it bill to its deadline (Kai's review of #188).
+		rcStopSecondFinder(second)
 		return "", rcRunFailure(model, res, err, time.Since(started), primary.Path), nil
 	}
 	fmt.Fprintln(os.Stderr)

@@ -50,8 +50,10 @@ var rcEnsembleDefaults = map[string]struct{ modelEnv, model, effortEnv, effort s
 func rcEnsembleModel(stage string) string {
 	d := rcEnsembleDefaults[stage]
 	m := d.model
-	if v, ok := os.LookupEnv(d.modelEnv); ok {
-		m = strings.TrimSpace(v)
+	// Set but empty falls back to the default, like the other stage
+	// variables; "off" or "none" turns the stage off.
+	if v := strings.TrimSpace(os.Getenv(d.modelEnv)); v != "" {
+		m = v
 	}
 	m = rcStageModel(stage, m)
 	if m == rcEffortOff || m == "none" {
@@ -144,6 +146,13 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 		ch <- out
 	}()
 	return sf
+}
+
+// rcStopSecondFinder ends a second finder whose review will not be used.
+func rcStopSecondFinder(sf *rcSecondFinder) {
+	if sf != nil {
+		sf.cancel()
+	}
 }
 
 // rcAwaitSecondFinder waits for the second finder, at most
@@ -408,10 +417,18 @@ func rcApplyRank(res *rcChallengeResult, publish []int, skip map[int]string, lim
 // sentence reads as a claim about the code, so only defects belong there.
 func rcDefectsOnlyProse(prose string) string {
 	for _, heading := range []string{"## Could not verify", "## Limitations"} {
-		for {
-			i := strings.Index(prose, heading)
-			if i < 0 || (i > 0 && prose[i-1] != '\n') {
+		for from := 0; ; {
+			// Only a heading at a line start is a section; a finding that
+			// quotes the heading mid-line is skipped, not a stop (Kai's
+			// review of #188).
+			j := strings.Index(prose[from:], heading)
+			if j < 0 {
 				break
+			}
+			i := from + j
+			if i > 0 && prose[i-1] != '\n' {
+				from = i + len(heading)
+				continue
 			}
 			end := strings.Index(prose[i+len(heading):], "\n## ")
 			if end < 0 {
