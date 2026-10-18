@@ -487,3 +487,67 @@ func rcNewHostsBlock(hosts []rcAddedURLHost) string {
 	b.WriteString("A host being new to the repository is not a defect. Report one only with a concrete incorrect URL or a code path that fails because of it (see NEW DEFAULTS POINT SOMEWHERE).\n\n")
 	return b.String()
 }
+
+// rcNamedLocationRe matches an issue that names a symbol where its line
+// belongs: "path/file.go:funcName — …" (a reviewer's habit, not the format).
+var rcNamedLocationRe = regexp.MustCompile(`^(\s*` + "`?" + `)([A-Za-z0-9_./\-]+\.[A-Za-z0-9]+):([A-Za-z_][A-Za-z0-9_.]*)` + "`?")
+
+// rcLocateNamedIssue rewrites "path:symbol" at the start of an issue to
+// "path:line", the line where the symbol is defined in the reviewed commit
+// (else where it first appears). An issue that already names a line, or whose
+// symbol cannot be found, is returned unchanged and grounds as before. Without
+// this a real defect written against a function name is held: published as
+// text, but anchored nowhere and not counted.
+func rcLocateNamedIssue(hash, item string, tree []string, readFile func(hash, path string) ([]string, bool)) string {
+	if _, _, ok := rcIssueLocation(item); ok {
+		return item
+	}
+	m := rcNamedLocationRe.FindStringSubmatchIndex(item)
+	if m == nil {
+		return item
+	}
+	written, symbol := item[m[4]:m[5]], item[m[6]:m[7]]
+	// A sentence-ending dot is punctuation, not part of the name; it stays
+	// in the text after the location.
+	symEnd := m[7]
+	for strings.HasSuffix(symbol, ".") {
+		symbol, symEnd = symbol[:len(symbol)-1], symEnd-1
+	}
+	if symbol == "" {
+		return item
+	}
+	path, _ := rcResolvePath(written, tree)
+	if path == "" {
+		return item
+	}
+	lines, ok := readFile(hash, path)
+	if !ok {
+		return item
+	}
+	name := symbol
+	if i := strings.LastIndex(name, "."); i >= 0 && i+1 < len(name) {
+		name = name[i+1:]
+	}
+	// A declaration: the keyword directly introduces the name (a Go method's
+	// receiver may sit between them), on a line that is not a comment. A doc
+	// comment ("// foo returns the type of X") or a call site ("var ok =
+	// foo(x)") names both and would anchor the issue to the wrong line
+	// (Kai's reviews of kai-cli#188).
+	def := regexp.MustCompile(`\b(func|def|class|function|fn|interface|type|struct|enum|const|let|var|val|module|object|trait)\s+(\([^)]*\)\s*)?\*?` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_]|$)`)
+	line := 0
+	for i, l := range lines {
+		if !rcCommentLineRe.MatchString(l) && def.MatchString(l) {
+			line = i + 1
+			break
+		}
+	}
+	// No declaration found (a Java or C# method has no keyword before its
+	// name): the issue stays unlocated, as before, rather than anchoring to
+	// an import or call site that merely mentions the name (Kai's review of
+	// #188).
+	if line == 0 {
+		return item
+	}
+	// Keep a closing backtick the match consumed.
+	return item[:m[0]] + item[m[2]:m[3]] + fmt.Sprintf("%s:%d", written, line) + item[symEnd:m[1]] + item[m[1]:]
+}

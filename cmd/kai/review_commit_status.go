@@ -212,7 +212,9 @@ func rcEarlierStatuses(prior *rcPrior, claims map[string]rcEarlierClaim, final s
 	refuted := map[string]string{}
 	if res != nil {
 		for _, a := range res.Allegations {
-			if a.Status != rcStatusRefuted {
+			// A confirmed defect the selection step left unpublished is not a
+			// withdrawal: the code still has it (Kai's review of kai-cli#188).
+			if a.Status != rcStatusRefuted || strings.HasPrefix(a.Reason, rcSelectionSkipPrefix) {
 				continue
 			}
 			key, _, ok := rcEarlierBulletKey("issues", "- "+a.Issue)

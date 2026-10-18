@@ -265,11 +265,11 @@ func init() {
 	reviewCommitCmd.Flags().StringVar(&reviewCommitFormat, "format", "text", "output format: text|json")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBase, "base", "", "review the aggregate diff of <base>...<commit> (PR range) instead of a single commit")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBranch, "branch", "", "branch name to record on the finding (default: GITHUB_HEAD_REF / GITHUB_REF_NAME / the checked-out branch)")
-	// --fast is the default, so the flag is only ever redundant. It stays
-	// because CI pods, scripts, and the built-in review workflow all spell it
-	// out, and a flag that silently becomes an error breaks them on the next
-	// image bump for no gain.
-	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default; the flag is explicit-only)")
+	// --fast is the default, so the flag is only ever redundant. An explicit
+	// --fast now refuses unless KAI_REVIEW_QUICK_PASS=1 (the CI quick pass is
+	// retired, see runReviewCommit); the flag stays so the CI workflow that
+	// still passes it fails fast and tolerated instead of on an unknown flag.
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default without flags; an explicit --fast refuses unless KAI_REVIEW_QUICK_PASS=1)")
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitDeep, "deep", false, "the grounded review: agent harness + graph, minutes not seconds — requires `kai capture`")
 	rootCmd.AddCommand(reviewCommitCmd)
 }
@@ -290,6 +290,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--fast and --deep are opposites; pass one or neither (the default is --fast)")
 	}
 	fast := !reviewCommitDeep
+	// The quick pass is retired from CI: its comment was deleted as soon as
+	// the grounded review posted, so it cost a model call and a minute of
+	// every review for nothing a reader kept. The CI workflow still asks for
+	// it by name (--fast) and tolerates a failure, so refusing here skips it
+	// in a second. A local run without flags still gets the fast default.
+	if reviewCommitFast && os.Getenv("KAI_REVIEW_QUICK_PASS") != "1" {
+		return fmt.Errorf("the quick pass is retired; the grounded review (--deep) is the review (KAI_REVIEW_QUICK_PASS=1 runs it anyway)")
+	}
 
 	// The graph is REQUIRED for the grounded review and OPTIONAL for --fast.
 	// That is the whole latency win: a fast pass that needed a captured graph
@@ -368,6 +376,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		rcStageSweep:          rcSweepModel(model),
 		rcStageFactcheck:      rcChallengeModel(model),
 		rcStageConclusion:     rcStageModel(rcStageConclusion, model),
+		rcStageFinder2:        rcEnsembleModel(rcStageFinder2),
+		rcStageSweep2:         rcEnsembleModel(rcStageSweep2),
+		rcStageRank:           rcEnsembleModel(rcStageRank),
 	}
 	if err := rcCheckProfileEfforts(stageModels); err != nil {
 		return err
@@ -453,6 +464,8 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	if fast {
 		readiness = rcCapFastReadiness(readiness)
 		risks = rcFilterFastIssues(risks)
+	} else if strings.TrimSpace(prose) != "" {
+		prose = rcDefectsOnlyProse(prose)
 	}
 
 	// An empty review is a FAILURE, not a finding. Shipping a bundle with no
@@ -547,6 +560,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	claims := make([]finding.Claim, 0, len(flags))
 	tree := rcTreeFiles(hash)
 	for _, r := range risks {
+		r = rcLocateNamedIssue(hash, r, tree, rcFileLines)
 		claims = append(claims, rcGroundIssue(hash, r, tree, rcFileLines))
 	}
 	for _, d := range decisions {
@@ -969,6 +983,10 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// tightens. Zero-value Speed resolves KAI_SPEED → thorough (a no-op).
 	agent.ApplyEffort(&opts, 0)
 
+	// A second finder on another model family reviews beside the first
+	// (review_commit_ensemble.go); its issues join the draft before the check.
+	second := rcStartSecondFinder(ctx, publicationCtx, opts, prov)
+
 	started := time.Now()
 	res, err := agent.Run(ctx, opts)
 	if err != nil {
@@ -978,6 +996,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// this line in the job log. Report it the way a failed fact-check is
 		// reported instead, so the bundle says which kind of failure it was.
 		fmt.Fprintf(os.Stderr, "  review run failed: %v\n", err)
+		// A run that failed outright (the provider failing every retry) is
+		// reported as a failure, as before the ensemble; the second finder's
+		// partial coverage is not published in its place, so stop it rather
+		// than let it bill to its deadline (Kai's review of #188).
+		rcStopSecondFinder(second)
 		return "", rcRunFailure(model, res, err, time.Since(started), primary.Path), nil
 	}
 	fmt.Fprintln(os.Stderr)
@@ -1116,6 +1139,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		fmt.Fprintf(os.Stderr, "  coda had no ISSUES section — %d located bullet(s) taken from the prose\n", n)
 		raw = recovered
 	}
+	// The second finder's issues join the first's before the sweep and the
+	// check (review_commit_ensemble.go), and before the earlier-point tags and
+	// section are taken, so its bullets and a stand-in review of its own go
+	// through the same handling as the main finder's.
+	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second))
 	// Which ISSUES are earlier points is set aside while the bullets are
 	// merged, folded and challenged by their wording (review_commit_earlier.go).
 	raw, earlier := rcTakeEarlierTags(raw)
@@ -1167,6 +1195,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			inc.ChallengeCategory, inc.ChallengeModel = rcFailureCategory(err), gateModel
 			return "", inc, nil
 		}
+		// The check settled what is true; the selection step chooses what is
+		// worth publishing (review_commit_ensemble.go).
+		rcRankSupported(publicationCtx, prov, intent, diff, len(changed), res)
 		raw = res.Review
 		inc.Challenge = res
 		// One root cause, one finding: a short call groups the confirmed
@@ -1700,10 +1731,16 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 // failure returns "" and the caller keeps whatever the run produced. The
 // second result is rcFailureCategory's label for why it returned "".
 func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
+	return rcConcludeWithModel(ctx, prov, rcStageModel(rcStageConclusion, model), transcript)
+}
+
+// rcConcludeWithModel is rcConcludeFromTranscript on exactly the model given,
+// for a finder whose transcript must be concluded by the model that wrote it
+// (the second finder, review_commit_ensemble.go).
+func rcConcludeWithModel(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
 	if len(transcript) == 0 {
 		return "", "no_transcript"
 	}
-	model = rcStageModel(rcStageConclusion, model)
 	// Preserve the actual evidence. Prefix trimming can remove the changed
 	// function while retaining the model's allegation about it. Desktop #418's
 	// incorrect shell review went through this fallback.

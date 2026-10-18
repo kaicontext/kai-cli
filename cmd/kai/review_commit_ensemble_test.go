@@ -1,0 +1,234 @@
+package main
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestSelectionPublishesTheChosenDefectsInOrder(t *testing.T) {
+	res := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Issue: "a.go:1 — typo in a test name", Status: rcStatusSupported},
+		{ID: 2, Issue: "a.go:9 — nil map write panics", Status: rcStatusSupported},
+		{ID: 3, Issue: "a.go:4 — wrong unit", Status: rcStatusRefuted},
+		{ID: 4, Issue: "b.go:2 — race on counter", Status: rcStatusSupported},
+	}}
+	kept, dropped := rcApplyRank(res, []int{4, 2}, map[int]string{1: "test naming"}, 3)
+	if kept != 2 || dropped != 1 {
+		t.Fatalf("kept, dropped = %d, %d; want 2, 1", kept, dropped)
+	}
+	var got []int
+	for _, a := range res.Allegations {
+		if a.Status == rcStatusSupported {
+			got = append(got, a.ID)
+		}
+	}
+	if !reflect.DeepEqual(got, []int{4, 2}) {
+		t.Errorf("published %v, want [4 2] in the chosen order", got)
+	}
+	for _, a := range res.Allegations {
+		if a.ID == 1 && (a.Status != rcStatusRefuted || !strings.Contains(a.Reason, "test naming")) {
+			t.Errorf("a skipped defect must be refuted with the selection's reason, got %q %q", a.Status, a.Reason)
+		}
+	}
+}
+
+func TestSelectionCapsAndNeverPublishesNothing(t *testing.T) {
+	mk := func() *rcChallengeResult {
+		var r rcChallengeResult
+		for i := 1; i <= 5; i++ {
+			r.Allegations = append(r.Allegations, rcAllegationResult{ID: i, Issue: "x.go:1 — d", Status: rcStatusSupported})
+		}
+		return &r
+	}
+	if kept, _ := rcApplyRank(mk(), []int{5, 4, 3, 2, 1}, nil, 3); kept != 3 {
+		t.Errorf("kept %d past a cap of 3", kept)
+	}
+	res := mk()
+	if kept, _ := rcApplyRank(res, nil, map[int]string{1: "", 2: ""}, 3); kept != 1 || res.Allegations[0].ID != 1 {
+		t.Errorf("an empty choice must still publish the first confirmed defect; kept %d, first %d", kept, res.Allegations[0].ID)
+	}
+}
+
+func TestSelectionAnswerParses(t *testing.T) {
+	pub, skip, err := rcParseRank("Here you go:\n```json\n{\"publish\":[3,1],\"skip\":[{\"id\":2,\"why\":\"cosmetic\"}]}\n```")
+	if err != nil || !reflect.DeepEqual(pub, []int{3, 1}) || skip[2] != "cosmetic" {
+		t.Fatalf("parse = %v %v %v", pub, skip, err)
+	}
+	if _, _, err := rcParseRank("no json here"); err == nil {
+		t.Error("an answer without JSON must be an error, so the review keeps every confirmed defect")
+	}
+}
+
+func TestRankCapGrowsWithTheChange(t *testing.T) {
+	prev := 0
+	for _, n := range []int{1, 3, 4, 10, 11, 25, 26, 200} {
+		c := rcRankCap(n)
+		if c < prev || c < 3 || c > 6 {
+			t.Errorf("rcRankCap(%d) = %d", n, c)
+		}
+		prev = c
+	}
+}
+
+func TestPublishedProseKeepsOnlyDefects(t *testing.T) {
+	prose := "## Scope\n- a.go\n\n## Findings\n\n### a.go:1 — bug\nx\n\n## Could not verify\n- maybe — why\n\n## Limitations\n- did not read b\n\n## Decisions (need your call)\n- ship it\n"
+	got := rcDefectsOnlyProse(prose)
+	for _, gone := range []string{"Could not verify", "maybe", "Limitations", "did not read b"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("published prose still has %q:\n%s", gone, got)
+		}
+	}
+	for _, kept := range []string{"## Scope", "### a.go:1 — bug", "## Decisions (need your call)", "ship it"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("published prose lost %q:\n%s", kept, got)
+		}
+	}
+}
+
+func TestTwoSweepsMergeWithoutRepeats(t *testing.T) {
+	a := rcSweepResult{Issues: []string{"a.go:1 — x", "a.go:2 — y"}, Sources: []rcSource{{}}, Chunks: 1}
+	b := rcSweepResult{Issues: []string{"a.go:2 — y", "a.go:3 — z"}, Chunks: 1}
+	got := rcMergeSweeps(a, b)
+	if !reflect.DeepEqual(got.Issues, []string{"a.go:1 — x", "a.go:2 — y", "a.go:3 — z"}) || len(got.Sources) != 1 {
+		t.Errorf("merged = %v (sources %d)", got.Issues, len(got.Sources))
+	}
+}
+
+func TestEnsembleStagesCanBeTurnedOff(t *testing.T) {
+	t.Setenv("KAI_FINDER2_MODEL", "off")
+	t.Setenv("KAI_RANK_MODEL", "none")
+	if m := rcEnsembleModel(rcStageFinder2); m != "" {
+		t.Errorf("finder2 = %q with KAI_FINDER2_MODEL=off", m)
+	}
+	if m := rcEnsembleModel(rcStageRank); m != "" {
+		t.Errorf("rank = %q with KAI_RANK_MODEL=none", m)
+	}
+	if m := rcEnsembleModel(rcStageSweep2); m == "" {
+		t.Error("sweep2 has a default model")
+	}
+}
+
+func TestAnIssueNamedByFunctionGetsItsLine(t *testing.T) {
+	files := map[string][]string{"cmd/kai/ship.go": {"package main", "", "// shipIsMergeSubject is used below", "func shipIsMergeSubject(s string) bool {", "\treturn false", "}"}}
+	read := func(_, p string) ([]string, bool) { l, ok := files[p]; return l, ok }
+	tree := []string{"cmd/kai/ship.go"}
+	got := rcLocateNamedIssue("h", "cmd/kai/ship.go:shipIsMergeSubject — matches too much", tree, read)
+	if got != "cmd/kai/ship.go:4 — matches too much" {
+		t.Errorf("got %q, want the definition line", got)
+	}
+	if got := rcLocateNamedIssue("h", "`cmd/kai/ship.go:main.shipIsMergeSubject` — x", tree, read); got != "`cmd/kai/ship.go:4` — x" {
+		t.Errorf("qualified name: got %q", got)
+	}
+	for _, keep := range []string{"cmd/kai/ship.go:12 — has a line", "cmd/kai/ship.go:nowhere — unknown symbol", "missing.go:foo — no such file"} {
+		if got := rcLocateNamedIssue("h", keep, tree, read); got != keep {
+			t.Errorf("%q changed to %q", keep, got)
+		}
+	}
+}
+
+func TestASlowSecondFinderIsLeftBehind(t *testing.T) {
+	old := rcSecondFinderGrace
+	rcSecondFinderGrace = 10 * time.Millisecond
+	defer func() { rcSecondFinderGrace = old }()
+	cancelled := false
+	sf := &rcSecondFinder{ch: make(chan rcFinderResult, 1), cancel: func() { cancelled = true }, model: "slow"}
+	if r := rcAwaitSecondFinder(sf); r.Raw != "" || len(r.Issues) != 0 || !cancelled {
+		t.Errorf("a finder past its grace must be cancelled and contribute nothing; got %+v cancelled=%v", r, cancelled)
+	}
+	sf = &rcSecondFinder{ch: make(chan rcFinderResult, 1), cancel: func() {}, model: "fast"}
+	sf.ch <- rcFinderResult{Model: "fast", Issues: []string{"a.go:1 — x"}, Raw: "r"}
+	if r := rcAwaitSecondFinder(sf); len(r.Issues) != 1 {
+		t.Errorf("a finished finder's issues were lost: %+v", r)
+	}
+}
+
+// A confirmed earlier point the selection step leaves out is still in the
+// code: its thread must not be closed as withdrawn (Kai's review of #188).
+func TestASelectionSkipDoesNotWithdrawAnEarlierPoint(t *testing.T) {
+	issue := "src/d.go:4 — reads past the end"
+	res := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Issue: "src/a.go:1 — first", Status: rcStatusSupported},
+		{ID: 2, Issue: issue, Status: rcStatusSupported},
+	}}
+	rcApplyRank(res, []int{1}, nil, 1)
+	if res.Allegations[1].Status != rcStatusRefuted || !strings.HasPrefix(res.Allegations[1].Reason, rcSelectionSkipPrefix) {
+		t.Fatalf("setup: allegation 2 = %+v, want a selection skip", res.Allegations[1])
+	}
+	tags := map[string]string{}
+	rcRememberTags(tags, "issues", "- "+issue, "(earlier: 999999999999)")
+	prior := &rcPrior{Head: "abc", Points: []rcPriorPoint{{Kind: "defect", Ref: "999999999999"}}}
+	for _, s := range rcEarlierStatuses(prior, nil, "", res, tags, nil, true) {
+		if s.Ref == "999999999999" && s.Status == rcEarlierWithdrawn {
+			t.Errorf("a confirmed point the selection step skipped was withdrawn: %+v", s)
+		}
+	}
+}
+
+// A doc comment that names the function and a keyword is not its definition.
+func TestANamedIssueSkipsDocComments(t *testing.T) {
+	files := map[string][]string{"a.go": {"package main", "// shipIsMergeSubject returns the type of a subject", "var x = 1", "func shipIsMergeSubject(s string) bool {", "\treturn false", "}"}}
+	read := func(_, p string) ([]string, bool) { l, ok := files[p]; return l, ok }
+	if got := rcLocateNamedIssue("h", "a.go:shipIsMergeSubject — x", []string{"a.go"}, read); got != "a.go:4 — x" {
+		t.Errorf("got %q, want the func line, not the doc comment", got)
+	}
+}
+
+// A call site that assigns the result is not the declaration, and a
+// sentence-ending dot is not part of the name (Kai's review of #188).
+func TestANamedIssueSkipsCallSitesAndTrailingDots(t *testing.T) {
+	files := map[string][]string{"a.go": {"package main", "var ok = shipIsMergeSubject(\"x\")", "func (r *T) shipIsMergeSubject(s string) bool {", "\treturn false", "}"}}
+	read := func(_, p string) ([]string, bool) { l, ok := files[p]; return l, ok }
+	if got := rcLocateNamedIssue("h", "a.go:shipIsMergeSubject — x", []string{"a.go"}, read); got != "a.go:3 — x" {
+		t.Errorf("call site: got %q, want the method line", got)
+	}
+	if got := rcLocateNamedIssue("h", "a.go:shipIsMergeSubject. It matches too much", []string{"a.go"}, read); got != "a.go:3. It matches too much" {
+		t.Errorf("trailing dot: got %q", got)
+	}
+}
+
+// The summary does not count a selection skip as refuted.
+func TestASelectionSkipIsNotCountedAsRefuted(t *testing.T) {
+	s, r, u := rcCountAllegations([]rcAllegationResult{
+		{Status: rcStatusSupported, Issue: "a.go:1 — x"},
+		{Status: rcStatusRefuted, Reason: rcSelectionSkipPrefix + "outside the 3 most important"},
+		{Status: rcStatusRefuted, Reason: "the caller validates it"},
+	})
+	if s != 1 || r != 1 || u != 0 {
+		t.Errorf("counts = %d supported, %d refuted, %d unresolved; want 1, 1, 0", s, r, u)
+	}
+}
+
+// A finding that quotes a heading mid-line does not stop the real section
+// after it from being removed (Kai's review of #188).
+func TestDefectsOnlyProseSkipsAQuotedHeading(t *testing.T) {
+	prose := "## Findings\n- the doc says see ## Limitations below\n\n## Limitations\n- read 3 files\n"
+	got := rcDefectsOnlyProse(prose)
+	if strings.Contains(got, "read 3 files") || !strings.Contains(got, "see ## Limitations below") {
+		t.Errorf("got %q", got)
+	}
+}
+
+// A set-but-empty stage variable falls back to the default; "off" turns it off.
+func TestAnEmptyEnsembleVariableKeepsTheDefault(t *testing.T) {
+	t.Setenv("KAI_RANK_MODEL", "")
+	if rcEnsembleModel(rcStageRank) == "" {
+		t.Error("empty KAI_RANK_MODEL turned the rank stage off")
+	}
+	t.Setenv("KAI_RANK_MODEL", "off")
+	if m := rcEnsembleModel(rcStageRank); m != "" {
+		t.Errorf("off: got %q", m)
+	}
+}
+
+// With no declaration, a named issue stays unlocated rather than landing on
+// an import or call site.
+func TestANamedIssueWithNoDeclarationStaysUnlocated(t *testing.T) {
+	files := map[string][]string{"A.java": {"import x.shipIsMergeSubject;", "class A {", "  boolean shipIsMergeSubject(String s) { return false; }", "}"}}
+	read := func(_, p string) ([]string, bool) { l, ok := files[p]; return l, ok }
+	in := "A.java:shipIsMergeSubject — x"
+	if got := rcLocateNamedIssue("h", in, []string{"A.java"}, read); got != in {
+		t.Errorf("got %q, want it unchanged", got)
+	}
+}

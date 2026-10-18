@@ -1388,6 +1388,11 @@ func rcCountAllegations(results []rcAllegationResult) (supported, refuted, unres
 			}
 			supported++
 		case rcStatusRefuted:
+			// A confirmed defect the selection step left unpublished was not
+			// refuted; the summary must not say so (Kai's review of #188).
+			if strings.HasPrefix(r.Reason, rcSelectionSkipPrefix) {
+				continue
+			}
 			refuted++
 		default:
 			unresolved++
