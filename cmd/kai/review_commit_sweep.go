@@ -594,6 +594,9 @@ func rcMergeSweeps(a, b rcSweepResult) rcSweepResult {
 	if len(out.Sources) == 0 {
 		out.Sources = b.Sources
 	}
+	// Both sweeps read the same chunks, so a chunk is unread only if both
+	// failed it. Per-chunk failures are not tracked, so the smaller count is
+	// the estimate: a chunk one sweep lost the other may still have read.
 	if a.Failed > 0 && b.Failed < a.Failed {
 		out.Failed = b.Failed
 	}

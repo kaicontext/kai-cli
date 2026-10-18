@@ -265,10 +265,10 @@ func init() {
 	reviewCommitCmd.Flags().StringVar(&reviewCommitFormat, "format", "text", "output format: text|json")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBase, "base", "", "review the aggregate diff of <base>...<commit> (PR range) instead of a single commit")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBranch, "branch", "", "branch name to record on the finding (default: GITHUB_HEAD_REF / GITHUB_REF_NAME / the checked-out branch)")
-	// --fast is the default, so the flag is only ever redundant. It stays
-	// because CI pods, scripts, and the built-in review workflow all spell it
-	// out, and a flag that silently becomes an error breaks them on the next
-	// image bump for no gain.
+	// --fast is the default, so the flag is only ever redundant. An explicit
+	// --fast now refuses unless KAI_REVIEW_QUICK_PASS=1 (the CI quick pass is
+	// retired, see runReviewCommit); the flag stays so the CI workflow that
+	// still passes it fails fast and tolerated instead of on an unknown flag.
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default; the flag is explicit-only)")
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitDeep, "deep", false, "the grounded review: agent harness + graph, minutes not seconds — requires `kai capture`")
 	rootCmd.AddCommand(reviewCommitCmd)
@@ -1134,6 +1134,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		fmt.Fprintf(os.Stderr, "  coda had no ISSUES section — %d located bullet(s) taken from the prose\n", n)
 		raw = recovered
 	}
+	// The second finder's issues join the first's before the sweep and the
+	// check (review_commit_ensemble.go), and before the earlier-point tags and
+	// section are taken, so its bullets and a stand-in review of its own go
+	// through the same handling as the main finder's.
+	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second))
 	// Which ISSUES are earlier points is set aside while the bullets are
 	// merged, folded and challenged by their wording (review_commit_earlier.go).
 	raw, earlier := rcTakeEarlierTags(raw)
@@ -1141,9 +1146,6 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// (review_commit_status.go): read now, because the published review is
 	// reassembled from the fact-check and carries no EARLIER list.
 	raw, earlierClaims := rcTakeEarlierSection(raw)
-	// The second finder's issues join the first's before the sweep and the
-	// check (review_commit_ensemble.go).
-	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second))
 	if rcUsableCoda(raw) {
 		sw := rcAwaitSweep(sweep)
 		if len(sw.Issues) > 0 {
@@ -1724,10 +1726,16 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 // failure returns "" and the caller keeps whatever the run produced. The
 // second result is rcFailureCategory's label for why it returned "".
 func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
+	return rcConcludeWithModel(ctx, prov, rcStageModel(rcStageConclusion, model), transcript)
+}
+
+// rcConcludeWithModel is rcConcludeFromTranscript on exactly the model given,
+// for a finder whose transcript must be concluded by the model that wrote it
+// (the second finder, review_commit_ensemble.go).
+func rcConcludeWithModel(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
 	if len(transcript) == 0 {
 		return "", "no_transcript"
 	}
-	model = rcStageModel(rcStageConclusion, model)
 	// Preserve the actual evidence. Prefix trimming can remove the changed
 	// function while retaining the model's allegation about it. Desktop #418's
 	// incorrect shell review went through this fallback.

@@ -214,9 +214,8 @@ func TestReviewCommitFlagDefaults(t *testing.T) {
 	if fastFlag.DefValue != "false" || deepFlag.DefValue != "false" {
 		t.Errorf("flag defaults = fast:%s deep:%s, want both false", fastFlag.DefValue, deepFlag.DefValue)
 	}
-	// --fast survives as the explicit spelling of the default: CI pods and
-	// the built-in review workflow pass it, and removing it would break them
-	// on the next image bump for no gain.
+	// --fast survives as a flag, but an explicit --fast refuses unless
+	// KAI_REVIEW_QUICK_PASS=1: the CI quick pass is retired.
 	if !strings.Contains(reviewCommitCmd.Long, "--deep is the grounded review") {
 		t.Error("help must say what --deep buys; it is no longer the default")
 	}

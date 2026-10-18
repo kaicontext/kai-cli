@@ -520,10 +520,14 @@ func rcLocateNamedIssue(hash, item string, tree []string, readFile func(hash, pa
 		name = name[i+1:]
 	}
 	word := regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_]|$)`)
-	def := regexp.MustCompile(`\b(func|def|class|function|fn|interface|type|struct|enum|const|let|var|val|module|object|trait)\b`)
+	// A declaration: the keyword comes before the name on a line that is not
+	// a comment. A doc comment ("// foo returns the type of X") names both
+	// and would anchor the issue to a comment line, where rcMarkCommentNits
+	// then downgrades it (Kai's review of kai-cli#188).
+	def := regexp.MustCompile(`\b(func|def|class|function|fn|interface|type|struct|enum|const|let|var|val|module|object|trait)\b.*?(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_]|$)`)
 	line := 0
 	for i, l := range lines {
-		if word.MatchString(l) && def.MatchString(l) {
+		if !rcCommentLineRe.MatchString(l) && def.MatchString(l) {
 			line = i + 1
 			break
 		}

@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/message"
@@ -130,7 +131,7 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 		} else if res != nil {
 			raw := rcRestoreCodaMarker(strings.TrimSpace(res.FinalText))
 			if rcNeedsConclusion(raw) {
-				if c, _ := rcConcludeFromTranscript(concludeCtx, prov, model, res.Transcript); c != "" {
+				if c, _ := rcConcludeWithModel(concludeCtx, prov, model, res.Transcript); c != "" {
 					raw = rcRestoreCodaMarker(c)
 				}
 			}
@@ -274,7 +275,11 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	}
 	d := diff
 	if len(d) > rcRankMaxDiffBytes {
-		d = d[:rcRankMaxDiffBytes] + "\n... (diff truncated)"
+		cut := rcRankMaxDiffBytes
+		for cut > 0 && !utf8.RuneStart(d[cut]) {
+			cut--
+		}
+		d = d[:cut] + "\n... (diff truncated)"
 	}
 	b.WriteString("\nDIFF:\n")
 	b.WriteString(d)
@@ -337,6 +342,11 @@ func rcParseRank(text string) (publish []int, skip map[int]string, err error) {
 // rcApplyRank publishes the chosen allegations, in the chosen order and at
 // most limit of them, and refutes the other supported ones with the reason.
 // Unsupported allegations keep their place after the published ones.
+// rcSelectionSkipPrefix starts the reason of a confirmed defect the selection
+// step left out. The defect is still true, so nothing that reads refutations
+// as "no longer holds" may count it (rcEarlierStatuses).
+const rcSelectionSkipPrefix = "Not published by the selection step: "
+
 func rcApplyRank(res *rcChallengeResult, publish []int, skip map[int]string, limit int) (kept, dropped int) {
 	byID := map[int]int{}
 	for i, a := range res.Allegations {
@@ -383,7 +393,7 @@ func rcApplyRank(res *rcChallengeResult, publish []int, skip map[int]string, lim
 				why = fmt.Sprintf("outside the %d most important defects of this change", limit)
 			}
 			a.Status = rcStatusRefuted
-			a.Reason = "Not published by the selection step: " + why
+			a.Reason = rcSelectionSkipPrefix + why
 			dropped++
 		}
 		out = append(out, a)

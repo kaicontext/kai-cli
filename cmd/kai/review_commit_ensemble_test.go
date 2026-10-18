@@ -143,3 +143,34 @@ func TestASlowSecondFinderIsLeftBehind(t *testing.T) {
 		t.Errorf("a finished finder's issues were lost: %+v", r)
 	}
 }
+
+// A confirmed earlier point the selection step leaves out is still in the
+// code: its thread must not be closed as withdrawn (Kai's review of #188).
+func TestASelectionSkipDoesNotWithdrawAnEarlierPoint(t *testing.T) {
+	issue := "src/d.go:4 — reads past the end"
+	res := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Issue: "src/a.go:1 — first", Status: rcStatusSupported},
+		{ID: 2, Issue: issue, Status: rcStatusSupported},
+	}}
+	rcApplyRank(res, []int{1}, nil, 1)
+	if res.Allegations[1].Status != rcStatusRefuted || !strings.HasPrefix(res.Allegations[1].Reason, rcSelectionSkipPrefix) {
+		t.Fatalf("setup: allegation 2 = %+v, want a selection skip", res.Allegations[1])
+	}
+	tags := map[string]string{}
+	rcRememberTags(tags, "issues", "- "+issue, "(earlier: 999999999999)")
+	prior := &rcPrior{Head: "abc", Points: []rcPriorPoint{{Kind: "defect", Ref: "999999999999"}}}
+	for _, s := range rcEarlierStatuses(prior, nil, "", res, tags, nil, true) {
+		if s.Ref == "999999999999" && s.Status == rcEarlierWithdrawn {
+			t.Errorf("a confirmed point the selection step skipped was withdrawn: %+v", s)
+		}
+	}
+}
+
+// A doc comment that names the function and a keyword is not its definition.
+func TestANamedIssueSkipsDocComments(t *testing.T) {
+	files := map[string][]string{"a.go": {"package main", "// shipIsMergeSubject returns the type of a subject", "var x = 1", "func shipIsMergeSubject(s string) bool {", "\treturn false", "}"}}
+	read := func(_, p string) ([]string, bool) { l, ok := files[p]; return l, ok }
+	if got := rcLocateNamedIssue("h", "a.go:shipIsMergeSubject — x", []string{"a.go"}, read); got != "a.go:4 — x" {
+		t.Errorf("got %q, want the func line, not the doc comment", got)
+	}
+}
