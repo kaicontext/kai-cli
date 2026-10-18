@@ -507,6 +507,15 @@ func rcLocateNamedIssue(hash, item string, tree []string, readFile func(hash, pa
 		return item
 	}
 	written, symbol := item[m[4]:m[5]], item[m[6]:m[7]]
+	// A sentence-ending dot is punctuation, not part of the name; it stays
+	// in the text after the location.
+	symEnd := m[7]
+	for strings.HasSuffix(symbol, ".") {
+		symbol, symEnd = symbol[:len(symbol)-1], symEnd-1
+	}
+	if symbol == "" {
+		return item
+	}
 	path, _ := rcResolvePath(written, tree)
 	if path == "" {
 		return item
@@ -520,11 +529,12 @@ func rcLocateNamedIssue(hash, item string, tree []string, readFile func(hash, pa
 		name = name[i+1:]
 	}
 	word := regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_]|$)`)
-	// A declaration: the keyword comes before the name on a line that is not
-	// a comment. A doc comment ("// foo returns the type of X") names both
-	// and would anchor the issue to a comment line, where rcMarkCommentNits
-	// then downgrades it (Kai's review of kai-cli#188).
-	def := regexp.MustCompile(`\b(func|def|class|function|fn|interface|type|struct|enum|const|let|var|val|module|object|trait)\b.*?(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_]|$)`)
+	// A declaration: the keyword directly introduces the name (a Go method's
+	// receiver may sit between them), on a line that is not a comment. A doc
+	// comment ("// foo returns the type of X") or a call site ("var ok =
+	// foo(x)") names both and would anchor the issue to the wrong line
+	// (Kai's reviews of kai-cli#188).
+	def := regexp.MustCompile(`\b(func|def|class|function|fn|interface|type|struct|enum|const|let|var|val|module|object|trait)\s+(\([^)]*\)\s*)?\*?` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_]|$)`)
 	line := 0
 	for i, l := range lines {
 		if !rcCommentLineRe.MatchString(l) && def.MatchString(l) {
@@ -544,5 +554,5 @@ func rcLocateNamedIssue(hash, item string, tree []string, readFile func(hash, pa
 		return item
 	}
 	// Keep a closing backtick the match consumed.
-	return item[:m[0]] + item[m[2]:m[3]] + fmt.Sprintf("%s:%d", written, line) + item[m[7]:m[1]] + item[m[1]:]
+	return item[:m[0]] + item[m[2]:m[3]] + fmt.Sprintf("%s:%d", written, line) + item[symEnd:m[1]] + item[m[1]:]
 }

@@ -339,14 +339,14 @@ func rcParseRank(text string) (publish []int, skip map[int]string, err error) {
 	return ans.Publish, skip, nil
 }
 
+// rcSelectionSkipPrefix starts the reason of a confirmed defect the selection
+// step left out. The defect is still true, so nothing that reads refutations
+// as "no longer holds" may count it (rcEarlierStatuses, rcCountAllegations).
+const rcSelectionSkipPrefix = "Not published by the selection step: "
+
 // rcApplyRank publishes the chosen allegations, in the chosen order and at
 // most limit of them, and refutes the other supported ones with the reason.
 // Unsupported allegations keep their place after the published ones.
-// rcSelectionSkipPrefix starts the reason of a confirmed defect the selection
-// step left out. The defect is still true, so nothing that reads refutations
-// as "no longer holds" may count it (rcEarlierStatuses).
-const rcSelectionSkipPrefix = "Not published by the selection step: "
-
 func rcApplyRank(res *rcChallengeResult, publish []int, skip map[int]string, limit int) (kept, dropped int) {
 	byID := map[int]int{}
 	for i, a := range res.Allegations {

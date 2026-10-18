@@ -174,3 +174,28 @@ func TestANamedIssueSkipsDocComments(t *testing.T) {
 		t.Errorf("got %q, want the func line, not the doc comment", got)
 	}
 }
+
+// A call site that assigns the result is not the declaration, and a
+// sentence-ending dot is not part of the name (Kai's review of #188).
+func TestANamedIssueSkipsCallSitesAndTrailingDots(t *testing.T) {
+	files := map[string][]string{"a.go": {"package main", "var ok = shipIsMergeSubject(\"x\")", "func (r *T) shipIsMergeSubject(s string) bool {", "\treturn false", "}"}}
+	read := func(_, p string) ([]string, bool) { l, ok := files[p]; return l, ok }
+	if got := rcLocateNamedIssue("h", "a.go:shipIsMergeSubject — x", []string{"a.go"}, read); got != "a.go:3 — x" {
+		t.Errorf("call site: got %q, want the method line", got)
+	}
+	if got := rcLocateNamedIssue("h", "a.go:shipIsMergeSubject. It matches too much", []string{"a.go"}, read); got != "a.go:3. It matches too much" {
+		t.Errorf("trailing dot: got %q", got)
+	}
+}
+
+// The summary does not count a selection skip as refuted.
+func TestASelectionSkipIsNotCountedAsRefuted(t *testing.T) {
+	s, r, u := rcCountAllegations([]rcAllegationResult{
+		{Status: rcStatusSupported, Issue: "a.go:1 — x"},
+		{Status: rcStatusRefuted, Reason: rcSelectionSkipPrefix + "outside the 3 most important"},
+		{Status: rcStatusRefuted, Reason: "the caller validates it"},
+	})
+	if s != 1 || r != 1 || u != 0 {
+		t.Errorf("counts = %d supported, %d refuted, %d unresolved; want 1, 1, 0", s, r, u)
+	}
+}
