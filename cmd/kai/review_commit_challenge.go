@@ -206,6 +206,10 @@ type rcAllegationResult struct {
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
 	unchecked bool
+	// recovered: this allegation was unresolved and promoted into the selection
+	// pool under KAI_REVIEW_GATE_RECOVER. It must never reach the "never publish
+	// nothing" fallback, which exists for fact-check-confirmed defects only.
+	recovered bool
 }
 
 // rcDecisionResult is the final result for one of the draft's decisions.

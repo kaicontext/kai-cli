@@ -51,6 +51,84 @@ func TestSelectionCapsAndNeverPublishesNothing(t *testing.T) {
 	}
 }
 
+func TestGateRecoverEnvGate(t *testing.T) {
+	t.Setenv("KAI_REVIEW_GATE_RECOVER", "")
+	if rcGateRecover() {
+		t.Error("recovery must be off by default")
+	}
+	t.Setenv("KAI_REVIEW_GATE_RECOVER", "1")
+	if !rcGateRecover() {
+		t.Error("recovery must be on when KAI_REVIEW_GATE_RECOVER=1")
+	}
+	t.Setenv("KAI_REVIEW_GATE_RECOVER", "0")
+	if rcGateRecover() {
+		t.Error("only \"1\" enables recovery")
+	}
+}
+
+func TestRecoveredFindingDropsSeverityMarker(t *testing.T) {
+	if got := rcRecoveredFinding("a.go:12 — compares the token with == (severity: high)"); got != "a.go:12 — compares the token with ==" {
+		t.Errorf("recovered finding = %q", got)
+	}
+	// No marker: used as-is.
+	if got := rcRecoveredFinding("b.go:3 — off-by-one"); got != "b.go:3 — off-by-one" {
+		t.Errorf("recovered finding = %q", got)
+	}
+}
+
+// A recovered (unresolved→supported) allegation the selection publishes keeps
+// supported status; one it skips is recorded as not published.
+func TestRecoveredAllegationsRunThroughTheSelection(t *testing.T) {
+	res := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Issue: "a.go:1 — confirmed bug", Status: rcStatusSupported, Finding: "a.go:1 — confirmed bug"},
+		{ID: 2, Issue: "a.go:9 — recovered bug", Status: rcStatusSupported, Finding: "a.go:9 — recovered bug", recovered: true},
+		{ID: 3, Issue: "a.go:4 — recovered, skipped", Status: rcStatusSupported, Finding: "a.go:4 — recovered, skipped", recovered: true},
+	}}
+	kept, dropped := rcApplyRank(res, []int{1, 2}, map[int]string{3: "unconfirmed, not compelling"}, 6)
+	if kept != 2 || dropped != 1 {
+		t.Fatalf("kept, dropped = %d, %d; want 2, 1", kept, dropped)
+	}
+	for _, a := range res.Allegations {
+		if a.ID == 3 && a.Status != rcStatusRefuted {
+			t.Errorf("a skipped recovered finding must not be published, got %q", a.Status)
+		}
+	}
+}
+
+// The "never publish nothing" fallback is for CONFIRMED defects only. A
+// recovered-only pool the selection skipped entirely must publish nothing —
+// a recovered finding is never force-published (PR #191 finding).
+func TestFallbackNeverForcePublishesARecoveredFinding(t *testing.T) {
+	// All recovered, selection returns empty publish: nothing is published.
+	res := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Issue: "a.go:1 — recovered", Status: rcStatusSupported, Finding: "a.go:1 — recovered", recovered: true},
+		{ID: 2, Issue: "a.go:2 — recovered", Status: rcStatusSupported, Finding: "a.go:2 — recovered", recovered: true},
+	}}
+	if kept, _ := rcApplyRank(res, nil, nil, 6); kept != 0 {
+		t.Errorf("an all-recovered pool with no selection must publish nothing, kept %d", kept)
+	}
+	for _, a := range res.Allegations {
+		if a.Status == rcStatusSupported {
+			t.Errorf("recovered finding %d was force-published", a.ID)
+		}
+	}
+	// Mixed pool, empty publish: the fallback keeps the confirmed one, not a recovered one.
+	res2 := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Issue: "a.go:1 — recovered", Status: rcStatusSupported, Finding: "f", recovered: true},
+		{ID: 2, Issue: "a.go:2 — confirmed", Status: rcStatusSupported, Finding: "f"},
+	}}
+	rcApplyRank(res2, nil, nil, 6)
+	var pub []int
+	for _, a := range res2.Allegations {
+		if a.Status == rcStatusSupported {
+			pub = append(pub, a.ID)
+		}
+	}
+	if !reflect.DeepEqual(pub, []int{2}) {
+		t.Errorf("fallback must keep only the confirmed defect, published %v", pub)
+	}
+}
+
 func TestSelectionAnswerParses(t *testing.T) {
 	pub, skip, err := rcParseRank("Here you go:\n```json\n{\"publish\":[3,1],\"skip\":[{\"id\":2,\"why\":\"cosmetic\"}]}\n```")
 	if err != nil || !reflect.DeepEqual(pub, []int{3, 1}) || skip[2] != "cosmetic" {
