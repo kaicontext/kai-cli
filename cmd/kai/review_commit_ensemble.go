@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -324,6 +325,10 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 		fmt.Fprintf(os.Stderr, "  selection (%s) answered unusably (%v) — publishing every confirmed defect\n", model, perr)
 		return
 	}
+	// The answer itself, by allegation id, so a published defect can be traced
+	// to the main list, the minor list or the overflow past the cap: the
+	// bundle keeps only the outcome, which cannot tell them apart.
+	fmt.Fprintf(os.Stderr, "  selection answer: cap=%d publish=%v minor=%v skip=%v\n", limit, ans.Publish, ans.Minor, rcSortedKeys(ans.Skip))
 	kept, dropped := rcApplyRank(res, ans, limit)
 	fmt.Fprintf(os.Stderr, "  selection (%s, %s): %d of %d confirmed defect(s) published, %d held back\n",
 		model, time.Since(started).Round(time.Second), kept, len(supported), dropped)
@@ -342,6 +347,16 @@ type rcRankAnswer struct {
 // others. Small and real is still worth a line, but a review that lists every
 // one of them stops being read.
 const rcRankMinorCap = 3
+
+// rcSortedKeys lists a skip map's ids in order, for the log.
+func rcSortedKeys(m map[int]string) []int {
+	ids := make([]int, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
 
 // rcParseRank reads the selection's answer.
 func rcParseRank(text string) (rcRankAnswer, error) {
