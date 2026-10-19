@@ -232,17 +232,22 @@ Publish a defect when a careful maintainer of this repository, shown it, would w
 - races, deadlocks, leaks a resource, or can hang;
 - shows users wrong text, or a test that asserts the wrong value or cannot fail.
 
-Do not publish:
+Put a real defect that is small under "minor" instead of skipping it. Minor defects are published after the others, so a maintainer still sees them. They include:
+- a metric name, tag key, log field or event key that something reads (a dashboard, an alert, a parser) and that differs from what sibling code uses for the same thing. That splits or loses data; it is not naming;
+- a test step that does not do what it says: a wait that is a no-op because the test patched it, setup that never runs, a check that never executes. The test then does not exercise what it claims;
+- an edge case on unusual but allowed input.
+
+Skip:
 - a second defect with the same root cause as one you publish (keep the clearest statement of it);
-- critique of test style, naming, structure or coverage, unless the test asserts the wrong thing or cannot fail;
-- cosmetic points: formatting, comments, naming, log wording, dead code with no effect;
+- critique of test style, structure or coverage, when no step of the test is wrong;
+- cosmetic points with no effect on what the program does: formatting, comments, the name of a local variable or function, log message wording, dead code;
 - hardening advice ("consider validating", "add a timeout") without a concrete input that fails today;
 - anything whose trigger needs a future code change;
 - a product or policy choice the author made on purpose.
 
 When unsure between two, prefer the one with the more concrete failure. Answer with JSON only, no prose before or after:
-{"publish": [ids, most important first], "skip": [{"id": id, "why": "one short phrase"}]}
-Every id appears exactly once, in publish or in skip.`
+{"publish": [ids, most important first], "minor": [ids, most important first], "skip": [{"id": id, "why": "one short phrase"}]}
+Every id appears exactly once, in publish, minor or skip.`
 
 var rcRankJSON = regexp.MustCompile(`(?s)\{.*\}`)
 
@@ -314,38 +319,52 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 			text.WriteString(t.Text)
 		}
 	}
-	publish, skip, perr := rcParseRank(text.String())
+	ans, perr := rcParseRank(text.String())
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "  selection (%s) answered unusably (%v) — publishing every confirmed defect\n", model, perr)
 		return
 	}
-	kept, dropped := rcApplyRank(res, publish, skip, limit)
+	kept, dropped := rcApplyRank(res, ans, limit)
 	fmt.Fprintf(os.Stderr, "  selection (%s, %s): %d of %d confirmed defect(s) published, %d held back\n",
 		model, time.Since(started).Round(time.Second), kept, len(supported), dropped)
 	rcFinalize(res)
 }
 
+// rcRankAnswer is the selection's answer: the defects to publish first, the
+// small ones to publish after them, and why the rest are left out.
+type rcRankAnswer struct {
+	Publish []int
+	Minor   []int
+	Skip    map[int]string
+}
+
+// rcRankMinorCap is how many minor defects a review publishes after the
+// others. Small and real is still worth a line, but a review that lists every
+// one of them stops being read.
+const rcRankMinorCap = 3
+
 // rcParseRank reads the selection's answer.
-func rcParseRank(text string) (publish []int, skip map[int]string, err error) {
+func rcParseRank(text string) (rcRankAnswer, error) {
 	m := rcRankJSON.FindString(text)
 	if m == "" {
-		return nil, nil, fmt.Errorf("no JSON object")
+		return rcRankAnswer{}, fmt.Errorf("no JSON object")
 	}
 	var ans struct {
 		Publish []int `json:"publish"`
+		Minor   []int `json:"minor"`
 		Skip    []struct {
 			ID  int    `json:"id"`
 			Why string `json:"why"`
 		} `json:"skip"`
 	}
 	if err := json.Unmarshal([]byte(m), &ans); err != nil {
-		return nil, nil, err
+		return rcRankAnswer{}, err
 	}
-	skip = map[int]string{}
+	skip := map[int]string{}
 	for _, s := range ans.Skip {
 		skip[s.ID] = strings.TrimSpace(s.Why)
 	}
-	return ans.Publish, skip, nil
+	return rcRankAnswer{Publish: ans.Publish, Minor: ans.Minor, Skip: skip}, nil
 }
 
 // rcSelectionSkipPrefix starts the reason of a confirmed defect the selection
@@ -354,9 +373,10 @@ func rcParseRank(text string) (publish []int, skip map[int]string, err error) {
 const rcSelectionSkipPrefix = "Not published by the selection step: "
 
 // rcApplyRank publishes the chosen allegations, in the chosen order and at
-// most limit of them, and refutes the other supported ones with the reason.
-// Unsupported allegations keep their place after the published ones.
-func rcApplyRank(res *rcChallengeResult, publish []int, skip map[int]string, limit int) (kept, dropped int) {
+// most limit of them, then up to rcRankMinorCap minor ones, and refutes the
+// other supported ones with the reason. Unsupported allegations keep their
+// place after the published ones.
+func rcApplyRank(res *rcChallengeResult, ans rcRankAnswer, limit int) (kept, dropped int) {
 	byID := map[int]int{}
 	for i, a := range res.Allegations {
 		if a.Status == rcStatusSupported {
@@ -365,10 +385,34 @@ func rcApplyRank(res *rcChallengeResult, publish []int, skip map[int]string, lim
 	}
 	var order []int
 	seen := map[int]bool{}
-	for _, id := range publish {
+	for _, id := range ans.Publish {
 		if i, ok := byID[id]; ok && !seen[id] {
 			seen[id] = true
 			order = append(order, i)
+		}
+	}
+	// Past the main cap, a defect the selection chose to publish joins the
+	// minor ones instead of being dropped: on sentry#93824 the cap of 4 cut a
+	// real test defect ("outside the 4 most important") that a reviewer with
+	// room for one more line would have kept.
+	var overflow []int
+	if len(order) > limit {
+		for _, i := range order[limit:] {
+			overflow = append(overflow, res.Allegations[i].ID)
+			seen[res.Allegations[i].ID] = false
+		}
+		order = order[:limit]
+	}
+	// Minor defects come after the main ones, with a cap of their own.
+	minor := 0
+	for _, id := range append(overflow, ans.Minor...) {
+		if minor == rcRankMinorCap {
+			break
+		}
+		if i, ok := byID[id]; ok && !seen[id] {
+			seen[id] = true
+			order = append(order, i)
+			minor++
 		}
 	}
 	if len(order) == 0 {
@@ -380,9 +424,6 @@ func rcApplyRank(res *rcChallengeResult, publish []int, skip map[int]string, lim
 				break
 			}
 		}
-	}
-	if len(order) > limit {
-		order = order[:limit]
 	}
 	chosen := map[int]bool{}
 	for _, i := range order {
@@ -397,7 +438,7 @@ func rcApplyRank(res *rcChallengeResult, publish []int, skip map[int]string, lim
 			continue
 		}
 		if a.Status == rcStatusSupported {
-			why := skip[a.ID]
+			why := ans.Skip[a.ID]
 			if why == "" {
 				why = fmt.Sprintf("outside the %d most important defects of this change", limit)
 			}

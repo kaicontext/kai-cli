@@ -14,7 +14,7 @@ func TestSelectionPublishesTheChosenDefectsInOrder(t *testing.T) {
 		{ID: 3, Issue: "a.go:4 — wrong unit", Status: rcStatusRefuted},
 		{ID: 4, Issue: "b.go:2 — race on counter", Status: rcStatusSupported},
 	}}
-	kept, dropped := rcApplyRank(res, []int{4, 2}, map[int]string{1: "test naming"}, 3)
+	kept, dropped := rcApplyRank(res, rcRankAnswer{Publish: []int{4, 2}, Skip: map[int]string{1: "test naming"}}, 3)
 	if kept != 2 || dropped != 1 {
 		t.Fatalf("kept, dropped = %d, %d; want 2, 1", kept, dropped)
 	}
@@ -42,21 +42,71 @@ func TestSelectionCapsAndNeverPublishesNothing(t *testing.T) {
 		}
 		return &r
 	}
-	if kept, _ := rcApplyRank(mk(), []int{5, 4, 3, 2, 1}, nil, 3); kept != 3 {
-		t.Errorf("kept %d past a cap of 3", kept)
+	// Past the main cap, chosen defects move to the minor list (cap 3): 3 + 2.
+	if kept, _ := rcApplyRank(mk(), rcRankAnswer{Publish: []int{5, 4, 3, 2, 1}}, 3); kept != 5 {
+		t.Errorf("kept %d; want 3 main + 2 overflowed into minor", kept)
+	}
+	var big rcChallengeResult
+	for i := 1; i <= 9; i++ {
+		big.Allegations = append(big.Allegations, rcAllegationResult{ID: i, Issue: "x.go:1 — d", Status: rcStatusSupported})
+	}
+	if kept, _ := rcApplyRank(&big, rcRankAnswer{Publish: []int{1, 2, 3, 4, 5, 6, 7, 8, 9}}, 3); kept != 3+rcRankMinorCap {
+		t.Errorf("kept %d; the overflow must stop at the minor cap", kept)
 	}
 	res := mk()
-	if kept, _ := rcApplyRank(res, nil, map[int]string{1: "", 2: ""}, 3); kept != 1 || res.Allegations[0].ID != 1 {
+	if kept, _ := rcApplyRank(res, rcRankAnswer{Skip: map[int]string{1: "", 2: ""}}, 3); kept != 1 || res.Allegations[0].ID != 1 {
 		t.Errorf("an empty choice must still publish the first confirmed defect; kept %d, first %d", kept, res.Allegations[0].ID)
 	}
 }
 
-func TestSelectionAnswerParses(t *testing.T) {
-	pub, skip, err := rcParseRank("Here you go:\n```json\n{\"publish\":[3,1],\"skip\":[{\"id\":2,\"why\":\"cosmetic\"}]}\n```")
-	if err != nil || !reflect.DeepEqual(pub, []int{3, 1}) || skip[2] != "cosmetic" {
-		t.Fatalf("parse = %v %v %v", pub, skip, err)
+// A small, real defect the selection marks minor is published after the main
+// ones, past the main cap, with a cap of its own; it is not held back.
+func TestSelectionPublishesMinorDefectsAfterTheOthers(t *testing.T) {
+	var res rcChallengeResult
+	for i := 1; i <= 8; i++ {
+		res.Allegations = append(res.Allegations, rcAllegationResult{ID: i, Issue: "x.go:1 — d", Status: rcStatusSupported})
 	}
-	if _, _, err := rcParseRank("no json here"); err == nil {
+	kept, dropped := rcApplyRank(&res, rcRankAnswer{
+		Publish: []int{2, 1},
+		Minor:   []int{1, 5, 6, 7, 8}, // 1 is already published; only three of the rest fit
+		Skip:    map[int]string{3: "cosmetic", 4: "duplicate"},
+	}, 3)
+	if kept != 5 || dropped != 3 {
+		t.Fatalf("kept, dropped = %d, %d; want 5, 3", kept, dropped)
+	}
+	var got []int
+	for _, a := range res.Allegations {
+		if a.Status == rcStatusSupported {
+			got = append(got, a.ID)
+		}
+	}
+	if !reflect.DeepEqual(got, []int{2, 1, 5, 6, 7}) {
+		t.Errorf("published %v, want [2 1 5 6 7]: main first, then minor up to its cap, no repeats", got)
+	}
+}
+
+// When every confirmed defect is minor, the minor ones are the review; the
+// never-publish-nothing fallback must not add a defect the selection skipped.
+func TestAllMinorSelectionPublishesOnlyTheMinorOnes(t *testing.T) {
+	res := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Issue: "a.go:1 — dead code", Status: rcStatusSupported},
+		{ID: 2, Issue: "a.go:2 — metric tag key differs from siblings", Status: rcStatusSupported},
+	}}
+	kept, _ := rcApplyRank(res, rcRankAnswer{Minor: []int{2}, Skip: map[int]string{1: "dead code"}}, 3)
+	if kept != 1 || res.Allegations[0].ID != 2 || res.Allegations[0].Status != rcStatusSupported {
+		t.Fatalf("kept %d, first %+v; want only the minor defect 2 published", kept, res.Allegations[0])
+	}
+	if res.Allegations[1].Status != rcStatusRefuted {
+		t.Errorf("the skipped defect was published: %+v", res.Allegations[1])
+	}
+}
+
+func TestSelectionAnswerParses(t *testing.T) {
+	ans, err := rcParseRank("Here you go:\n```json\n{\"publish\":[3,1],\"minor\":[4],\"skip\":[{\"id\":2,\"why\":\"cosmetic\"}]}\n```")
+	if err != nil || !reflect.DeepEqual(ans.Publish, []int{3, 1}) || !reflect.DeepEqual(ans.Minor, []int{4}) || ans.Skip[2] != "cosmetic" {
+		t.Fatalf("parse = %+v %v", ans, err)
+	}
+	if _, err := rcParseRank("no json here"); err == nil {
 		t.Error("an answer without JSON must be an error, so the review keeps every confirmed defect")
 	}
 }
@@ -152,7 +202,7 @@ func TestASelectionSkipDoesNotWithdrawAnEarlierPoint(t *testing.T) {
 		{ID: 1, Issue: "src/a.go:1 — first", Status: rcStatusSupported},
 		{ID: 2, Issue: issue, Status: rcStatusSupported},
 	}}
-	rcApplyRank(res, []int{1}, nil, 1)
+	rcApplyRank(res, rcRankAnswer{Publish: []int{1}}, 1)
 	if res.Allegations[1].Status != rcStatusRefuted || !strings.HasPrefix(res.Allegations[1].Reason, rcSelectionSkipPrefix) {
 		t.Fatalf("setup: allegation 2 = %+v, want a selection skip", res.Allegations[1])
 	}

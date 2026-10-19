@@ -30,9 +30,18 @@ func rcConfiguredSandbox() *rcShellSandbox {
 }
 
 func rcShellToolInfo() tools.ToolInfo {
+	desc := "Run a small synthetic POSIX /bin/sh reproduction in a fresh, restricted container with no network, repository, credentials or host mounts. /tmp is writable and disposable. Five-second deadline. This does not reproduce an interactive PTY or a Windows shell. Do not install dependencies."
+	// The image is the operator's choice, so only the operator can say what
+	// is in it. Without this the model sees "/bin/sh" and never learns it can
+	// settle a claim about a language's runtime — a class hierarchy, what a
+	// standard-library call returns — by running one line instead of
+	// reasoning from memory, which is where those claims went wrong.
+	if rt := strings.TrimSpace(os.Getenv("KAI_REVIEW_SANDBOX_RUNTIMES")); rt != "" {
+		desc += " Runtimes installed in the image: " + rt + ". For a claim about how one of these languages or its standard library behaves, run a one-line check here instead of answering from memory."
+	}
 	return tools.ToolInfo{
 		Name:        "review_shell",
-		Description: "Run a small synthetic POSIX /bin/sh reproduction in a fresh, restricted container with no network, repository, credentials or host mounts. /tmp is writable and disposable. Five-second deadline. This does not reproduce an interactive PTY or a Windows shell. Do not install dependencies.",
+		Description: desc,
 		Parameters:  map[string]any{"script": map[string]any{"type": "string", "description": "Self-contained POSIX shell experiment (maximum 8192 bytes)."}},
 		Required:    []string{"script"},
 	}
