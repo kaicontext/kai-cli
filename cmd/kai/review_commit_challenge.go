@@ -92,8 +92,28 @@ func rcChallengeSystemPromptWith(shell, repo bool) string {
 	if repo {
 		para += "\n\n" + rcChallengeRepoAvailable
 	}
-	return rcChallengeSystemHead + "\n\n" + para + "\n\n" + rcChallengeSystemTail
+	tail := rcChallengeSystemTail
+	if rcAtomicFindings() {
+		tail += "\n\n" + rcAtomicFindingClause
+	}
+	return rcChallengeSystemHead + "\n\n" + para + "\n\n" + tail
 }
+
+// rcAtomicFindings reports whether findings should be written as a single
+// atomic claim (KAI_REVIEW_ATOMIC_FINDINGS=1). Default off.
+//
+// Why. The scorer splits each published finding into atomic candidates before
+// matching; a finding that bundles a primary defect with its downstream
+// consequences or a second defect fragments into several candidates, and the
+// fragments that match no golden become false positives. On run38 (premium,
+// verbose findings) 153 findings split into 216 candidates (1.4x) and precision
+// fell to 43; the terser GLM findings (run34) split ~1.0x and kept precision
+// ~50. This asks the check to write one claim per finding so it does not
+// fragment — a precision lever that does not drop recall (the golden-matching
+// claim is still published, only the non-matching tail is dropped).
+func rcAtomicFindings() bool { return os.Getenv("KAI_REVIEW_ATOMIC_FINDINGS") == "1" }
+
+const rcAtomicFindingClause = `Write each "finding" as ONE atomic claim: the single primary defect, in one sentence, at one location. Do not append its downstream consequences, a second defect, or the behaviour of other files or callers into the same finding — state only the defect itself. When a change has several distinct defects, each is its own check with its own finding, never combined into one. A finding that bundles several claims is split apart downstream and the extra pieces read as separate, unsupported issues.`
 
 // rcChallengeMaxTokens bounds each challenge answer. 6000 was too small for a
 // deep review: after one shell experiment the full submit_review answer (one
