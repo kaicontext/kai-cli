@@ -62,20 +62,26 @@ func TestPriorBlock(t *testing.T) {
 	p := &rcPrior{Head: "19db9fca4cfd10a1b24a", Readiness: 3, Summary: "One fix before merge."}
 	p.Points = append(p.Points, rcPriorPoint{Kind: "defect", Text: "internal/retry.go:12 — `lastErr` is swallowed"})
 
-	b := rcPriorBlock(p, []string{"internal/retry.go"}, true)
+	b := rcPriorBlock(p, []string{"internal/retry.go"}, true, nil)
 	for _, want := range []string{"YOUR PREVIOUS REVIEW OF THIS PULL REQUEST (of commit 19db9fca4cfd, MERGE_READY 3)", "Summary then: One fix before merge.",
 		"- [defect] internal/retry.go:12 — `lastErr` is swallowed", "Files changed since then (1): internal/retry.go"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("block lacks %q:\n%s", want, b)
 		}
 	}
-	if b := rcPriorBlock(p, nil, true); !strings.Contains(b, "none — the code is the same") {
+	if b := rcPriorBlock(p, nil, true, nil); !strings.Contains(b, "none — the code is the same") {
 		t.Errorf("unchanged code is not said:\n%s", b)
 	}
-	if b := rcPriorBlock(p, nil, false); !strings.Contains(b, "unknown (that commit is not in this clone)") {
+	if b := rcPriorBlock(p, nil, false, nil); !strings.Contains(b, "unknown (that commit is not in this clone)") {
 		t.Errorf("an unknown history is not said:\n%s", b)
 	}
-	if rcPriorBlock(nil, nil, false) != "" {
+	// Force-push / shallow clone: the prior commit is gone, but the review's
+	// own changed files still give the reviewer a focus list.
+	if b := rcPriorBlock(p, nil, false, []string{"internal/retry.go", "internal/retry_test.go"}); !strings.Contains(b, "could not diff against that commit") ||
+		!strings.Contains(b, "these are the files this review covers (2): internal/retry.go, internal/retry_test.go") {
+		t.Errorf("the force-push fallback is not said:\n%s", b)
+	}
+	if rcPriorBlock(nil, nil, false, nil) != "" {
 		t.Error("no prior review rendered a block")
 	}
 	if !strings.Contains(rcReviewSystem, "YOU HAVE REVIEWED THIS BEFORE") || !strings.Contains(rcReviewSystem, "Keep MERGE_READY where it was unless") {
@@ -91,7 +97,7 @@ func TestPriorBlockCarriesTheAnswers(t *testing.T) {
 	if p == nil || len(p.Answered) != 1 {
 		t.Fatalf("prior = %+v", p)
 	}
-	b := rcPriorBlock(p, nil, true)
+	b := rcPriorBlock(p, nil, true, nil)
 	for _, want := range []string{"see ANSWERED POINTS", "- you said: internal/smoketest/excerpt.go:12 — `Excerpt` still panics", "they replied: Intentional — every caller passes a constant."} {
 		if !strings.Contains(b, want) {
 			t.Errorf("block lacks %q:\n%s", want, b)
@@ -101,7 +107,7 @@ func TestPriorBlockCarriesTheAnswers(t *testing.T) {
 		t.Error("the reviewer prompt lacks the answered-points rule")
 	}
 	p.Answered = nil
-	if strings.Contains(rcPriorBlock(p, nil, true), "ANSWERED") {
+	if strings.Contains(rcPriorBlock(p, nil, true, nil), "ANSWERED") {
 		t.Error("an answered heading with nothing answered")
 	}
 }

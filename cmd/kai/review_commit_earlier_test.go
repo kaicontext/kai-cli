@@ -44,7 +44,7 @@ func TestEarlierTagsLeaveAndReturn(t *testing.T) {
 
 func TestPriorBlockShowsRefsAndThePromptAsksForThem(t *testing.T) {
 	p := &rcPrior{Head: "19db9fca4cfd", Points: []rcPriorPoint{{Kind: "defect", Text: "a.go:3 — `x` is nil", Ref: "0123456789ab"}, {Kind: "nit", Text: "a.go:1 — typo"}}}
-	b := rcPriorBlock(p, nil, true)
+	b := rcPriorBlock(p, nil, true, nil)
 	if !strings.Contains(b, "- [defect, ref 0123456789ab] a.go:3 — `x` is nil") || !strings.Contains(b, "- [nit] a.go:1 — typo") {
 		t.Errorf("block:\n%s", b)
 	}

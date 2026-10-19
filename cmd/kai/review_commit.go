@@ -890,7 +890,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	var priorKnown bool
 	if prior != nil {
 		priorChanged, priorKnown = rcChangedSince(prior.Head)
-		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
+		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown, changed))
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
