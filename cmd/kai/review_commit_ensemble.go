@@ -223,9 +223,9 @@ const (
 
 const rcRankSystem = `You choose which confirmed defects a code review publishes.
 
-A fact-check has already confirmed that each defect below is true of the change. Your job is different: decide which ones are worth a maintainer's attention on this pull request, and order them by how much they matter.
+A fact-check has already confirmed that each defect below is true of the change. Your job is different: order them by how much they matter to a maintainer of this repository, fold repeated statements of the same defect, and say which are minor.
 
-Publish a defect when a careful maintainer of this repository, shown it, would want it fixed before or right after merging, because on inputs, callers, configuration or timing that occur it:
+Publish every defect that is not minor and not skipped, most important first. Order first the ones that:
 - produces a wrong result, crashes, or throws where the surrounding code expects success;
 - breaks a contract with callers, a caller that was not updated, or a value of the wrong kind or unit;
 - opens a security hole: missing authorization, injection, a leaked secret, an unsafe default;
@@ -238,13 +238,11 @@ Put a real defect that is small under "minor" instead of skipping it. Minor defe
 - a test step that does not do what it says: a wait that is a no-op because the test patched it, setup that never runs, a check that never executes. The test then does not exercise what it claims;
 - an edge case on unusual but allowed input.
 
-Skip:
-- a second defect with the same root cause as one you publish (keep the clearest statement of it);
-- critique of test style, structure or coverage, when no step of the test is wrong;
-- cosmetic points with no effect on what the program does: formatting, comments, the name of a local variable or function, log message wording, dead code;
-- hardening advice ("consider validating", "add a timeout") without a concrete input that fails today;
-- anything whose trigger needs a future code change;
-- a product or policy choice the author made on purpose.
+Skip only:
+- a second statement of a defect you publish: the same code and the same mechanism, said again (keep the clearest statement). Two defects in the same file or function, or with similar wording, are not duplicates unless fixing one fixes the other;
+- a point with no effect on what the program does: formatting, comment or log-message wording, the name of a local variable.
+
+Do not re-judge what the fact-check settled. It has already decided that each defect is real, reachable today, introduced or touched by this change, and not the author's stated intent. So never skip a defect because its trigger seems unlikely or latent, because no current caller seems to reach it, because it might be pre-existing, because it might be intended, or because its impact is small — order it lower, or put it under "minor". A Critical or High consequence (a crash, a security hole, lost data, a check on the wrong variable) is never minor.
 
 When unsure between two, prefer the one with the more concrete failure. Answer with JSON only, no prose before or after:
 {"publish": [ids, most important first], "minor": [ids, most important first], "skip": [{"id": id, "why": "one short phrase"}]}
