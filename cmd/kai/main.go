@@ -1999,8 +1999,7 @@ func runLiveStatus(cmd *cobra.Command, args []string) error {
 
 	// Scope status to the current workspace (empty = repo-wide), matching how
 	// sync events are scoped on the server.
-	curWs, _ := getCurrentWorkspace()
-	summary, err := client.GetSyncLive(sinceFlag, !noFiles, curWs, limitFlag)
+	summary, err := client.GetSyncLive(sinceFlag, !noFiles, currentLiveSyncScope(), limitFlag)
 	if err != nil {
 		return err
 	}
