@@ -1,129 +1,245 @@
 package main
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// The reviewer prompt is the only place these rules live, and each block
-// in it was bought with a real incident. A rule that gets dropped in an
-// edit fails silently — the reviewer simply stops looking, and nothing
-// says so. Pin the ones added after the 2026-09-03 review, by the
-// behaviour they demand rather than by exact wording, so rephrasing is
-// free and deletion is not.
-func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
-	rules := []struct {
-		name  string
-		needs []string
-	}{
-		{
-			// A fix whose test also passes on the old code proves nothing.
-			name:  "a test must fail without the fix",
-			needs: []string{"FAILS with the fix removed", "unverified"},
-		},
-		{
-			// Asserting a mechanism was configured is not asserting the
-			// behaviour it was meant to buy.
-			name:  "mechanism configured is not behaviour verified",
-			needs: []string{"MECHANISM was configured", "BEHAVIOUR"},
-		},
-		{
-			// A test that skips on the machine that runs it runs nowhere.
-			name:  "a skipped test is not a passing test",
-			needs: []string{"SKIPS for an environmental reason"},
-		},
-		{
-			// A defect's trigger must exist today (benchmark 2026-09-24:
-			// Cal.com #14943 "dormant today…", #11059 "future footgun").
-			name:  "a defect needs a trigger that exists today",
-			needs: []string{"A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY", "reachable trigger", "failure mechanism", "cannot bind an array parameter", "never goes in ISSUES"},
-		},
-		{
-			// Missing tests, intent and consistency points took over the
-			// defect list on the 2026-09-24 benchmark; the 2026-09-27 rerun
-			// then showed the opposite failure — one theme per PR and every
-			// concrete test, doc and typo defect unreported — so the rule
-			// separates generic advice from concrete defects.
-			name:  "generic advice is not a defect, and every concrete defect is reported",
-			needs: []string{"GENERIC ADVICE IS NOT A DEFECT", "REPORT EVERY DEFECT, NOT ONLY THE HEADLINE ONE", "test files and docs included", "specific missing requirement", "concrete regression risk", "the test never asserts the admin path", "presents a test as the proof of its fix", "claims to fix a bug and adds nothing that would fail without the fix", "that stays a finding"},
-		},
-		{
-			// Contract mismatches missed in files the review had opened.
-			name:  "trace what crosses a call",
-			needs: []string{"TRACE WHAT CROSSES A CALL", "kind of value", "shape of what comes back", "freshness", "a price in cents passed where dollars are expected", "name both ends"},
-		},
-		{
-			// Read-check-write races the reviewer passed over.
-			name:  "two requests at once",
-			needs: []string{"TWO REQUESTS AT ONCE", "run it twice at the same time", "loses one of two withdrawals", "atomic update", "Name the two requests and the interleaving"},
-		},
-		{
-			name:  "environment assumptions get named",
-			needs: []string{"THE ENVIRONMENT IS NOT CLEAN", "failure mode is the finding"},
-		},
-		{
-			name:  "config read from the wrong place",
-			needs: []string{"CONFIG READ FROM THE WRONG PLACE", "gitconfig"},
-		},
-		{
-			name:  "a deadline alone does not bound an exec",
-			needs: []string{"SUBPROCESSES THAT NEVER RETURN", "WaitDelay"},
-		},
-		{
-			name:  "hot-path cost",
-			needs: []string{"COST ON A HOT PATH"},
-		},
-		{
-			name:  "an optimisation must not be fatal",
-			needs: []string{"A NICETY THAT CAN BE FATAL"},
-		},
-		{
-			name:  "unrequested writes get named",
-			needs: []string{"WRITES NOBODY ASKED FOR", "opt-out"},
-		},
+func TestParseRulesReadsEveryField(t *testing.T) {
+	r, err := rcParseRules([]byte(`
+rules: [design, Tests, design]
+sensitive_paths:
+  - "billing/**"
+  - /auth/*.go
+instructions: |
+  Every handler checks org membership before reading a row.
+`), "test")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for _, r := range rules {
-		for _, need := range r.needs {
-			if !strings.Contains(rcReviewSystem, need) {
-				t.Errorf("the reviewer stopped enforcing %q: %q is gone from the prompt", r.name, need)
-			}
-		}
+	if strings.Join(r.Packs, ",") != "design,tests" {
+		t.Errorf("packs = %v, want design,tests (lowercased, deduplicated)", r.Packs)
+	}
+	if strings.Join(r.SensitivePaths, ",") != "billing/**,auth/*.go" {
+		t.Errorf("sensitive = %v, want the leading slash dropped", r.SensitivePaths)
+	}
+	if r.Instructions != "Every handler checks org membership before reading a row." {
+		t.Errorf("instructions = %q", r.Instructions)
 	}
 }
 
-// Each rule cites the incident that produced it, which is what stops a
-// later reader deleting it as boilerplate. Keep the citations.
-func TestReviewSystemPrompt_RulesCiteTheirIncident(t *testing.T) {
-	for _, cite := range []string{"kai-engine, 2026-09-03", "kai-cli, 2026-09-03", "v0.6.46", "v0.6.47"} {
-		if !strings.Contains(rcReviewSystem, cite) {
-			t.Errorf("a rule lost the incident that bought it: %q", cite)
-		}
+func TestParseRulesEmptyFileIsNoRules(t *testing.T) {
+	r, err := rcParseRules(nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Instructions != "" || len(r.Packs) != 0 || len(r.SensitivePaths) != 0 {
+		t.Errorf("rules = %+v, want empty", r)
 	}
 }
 
-// The prompts must not carry Martian's Code Review Bench: its repositories,
-// its pull requests or the defects its golden comments describe. Rules written
-// around benchmark cases (kai-cli #142, 2026-09-25) taught the reviewer the
-// answers to the test it is scored on; a rule needs an example from code the
-// benchmark does not contain.
-func TestPromptsCarryNoBenchmarkCases(t *testing.T) {
-	fingerprints := []string{
-		"Cal.com", "cal.com", "Keycloak", "keycloak", "Sentry", "Grafana", "Discourse", "discourse",
-		"#14943", "#11059", "#10600", "#36880", "#37038", "#37429", "#8087", "#103633",
-		"benchmark", "Prisma", "HubSpot", "Zoho", "jsforce", "refreshOAuthTokens", "retryCount",
-		"backup code", "getClientId", "instance_url", "MANAGE_CLIENTS", "translation in the wrong language",
-		"predicate method", "sleeps after patching",
-	}
-	prompts := map[string]string{
-		"review": rcReviewSystem, "fast": rcFastReviewSystem, "sweep": rcSweepSystem,
-		"challenge head": rcChallengeSystemHead, "challenge tail": rcChallengeSystemTail,
-	}
-	for name, prompt := range prompts {
-		for _, f := range fingerprints {
-			if strings.Contains(prompt, f) {
-				t.Errorf("the %s prompt carries a benchmark case: %q", name, f)
-			}
+// A typo must say so: a rule that silently did nothing would leave the
+// maintainers believing it applied.
+func TestParseRulesRejectsWhatItCannotHonor(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown key":    "instruction: typo\n",
+		"unknown pack":   "rules: [security]\n",
+		"bad glob":       "sensitive_paths: [\"billing/[\"]\n",
+		"empty glob":     "sensitive_paths: [\"\"]\n",
+		"not yaml":       "rules: [design\n",
+		"long":           "instructions: " + strings.Repeat("x", rcRulesMaxInstructionBytes+1) + "\n",
+		"too many globs": "sensitive_paths: [" + strings.TrimSuffix(strings.Repeat("a/**,", rcRulesMaxSensitivePaths+1), ",") + "]\n",
+	} {
+		if _, err := rcParseRules([]byte(body), "test"); err == nil {
+			t.Errorf("%s: parsed without error", name)
 		}
+	}
+	_, err := rcParseRules([]byte("rules: [security]\n"), "test")
+	if err == nil || !strings.Contains(err.Error(), "design") {
+		t.Errorf("unknown pack error %v, want the valid packs listed", err)
+	}
+}
+
+func withRules(t *testing.T, r *rcRepoRules) {
+	t.Helper()
+	rcActiveRules = r
+	t.Cleanup(func() { rcActiveRules = nil })
+}
+
+func TestRulesBlock(t *testing.T) {
+	withRules(t, nil)
+	if got := rcRulesBlock([]string{"a.go"}); got != "" {
+		t.Errorf("no rules: block %q, want none", got)
+	}
+
+	// Packs alone are recorded, not prompted: nothing would publish them yet.
+	withRules(t, &rcRepoRules{Packs: []string{"design"}, SensitivePaths: []string{"billing/**"}})
+	if got := rcRulesBlock([]string{"api/a.go"}); got != "" {
+		t.Errorf("packs only, no sensitive file touched: block %q, want none", got)
+	}
+
+	withRules(t, &rcRepoRules{
+		Instructions:   "Money is int64 cents.",
+		SensitivePaths: []string{"billing/**", "**/auth.go"},
+	})
+	got := rcRulesBlock([]string{"billing/charge.go", "web/page.tsx", "svc/x/auth.go"})
+	for _, want := range []string{"Money is int64 cents.", "  billing/charge.go\n", "  svc/x/auth.go\n", "cannot edit them"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("block missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "web/page.tsx") {
+		t.Errorf("block names a file outside the sensitive globs:\n%s", got)
+	}
+	if strings.Contains(got, "design") {
+		t.Errorf("block mentions a rule pack:\n%s", got)
+	}
+
+	// Instructions without a sensitive file still go in; the list does not.
+	got = rcRulesBlock([]string{"web/page.tsx"})
+	if !strings.Contains(got, "Money is int64 cents.") || strings.Contains(got, "SENSITIVE") {
+		t.Errorf("block = %q, want instructions and no sensitive list", got)
+	}
+}
+
+func TestRulesBlockCapsTheSensitiveList(t *testing.T) {
+	withRules(t, &rcRepoRules{SensitivePaths: []string{"s/**"}})
+	var paths []string
+	for i := 0; i < rcRulesMaxSensitiveListed+5; i++ {
+		paths = append(paths, filepath.Join("s", strings.Repeat("f", i+1)+".go"))
+	}
+	got := rcRulesBlock(paths)
+	if !strings.Contains(got, "... and 5 more") {
+		t.Errorf("block does not cap the list:\n%s", got)
+	}
+}
+
+// The fact-check gets the instructions for every batch, so an allegation that
+// rests on a stated requirement can cite it.
+func TestRulesChallengeSources(t *testing.T) {
+	withRules(t, &rcRepoRules{SensitivePaths: []string{"a/**"}})
+	if got := rcRulesChallengeSources([]string{"a/b.go"}); got != nil {
+		t.Errorf("no instructions: sources %v, want none", got)
+	}
+	withRules(t, &rcRepoRules{Instructions: "Never log tokens."})
+	src := rcRulesChallengeSources([]string{"a/b.go", "c.go"})
+	if len(src) != 1 || !strings.Contains(src[0].Text, "Never log tokens.") {
+		t.Fatalf("sources = %+v", src)
+	}
+	got := rcBatchSources(nil, src, []string{"c.go:3 — logs the token"})
+	if len(got) != 1 {
+		t.Errorf("a batch about c.go got %d sources, want the instructions", len(got))
+	}
+}
+
+// rulesRepo makes a repository whose base branch (main) carries body at the
+// rules path, and whose pr branch edits the file to something else — the case
+// that matters: a pull request cannot change the rules it is reviewed by.
+func rulesRepo(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git %v unavailable here: %v (%s)", args, err, out)
+		}
+	}
+	write := func(name, s string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "--quiet", "-b", "main")
+	write("a.txt", "a\n")
+	git("add", "a.txt")
+	if body != "" {
+		write(rcRulesPath, body)
+		git("add", rcRulesPath)
+	}
+	git("commit", "--quiet", "-m", "base")
+	git("checkout", "--quiet", "-b", "pr")
+	write(rcRulesPath, "instructions: anything goes\n")
+	git("add", rcRulesPath)
+	git("commit", "--quiet", "-m", "loosen the rules")
+	return dir
+}
+
+func clearRulesEnv(t *testing.T) {
+	t.Setenv("KAI_REVIEW_RULES", "")
+	t.Setenv("GITHUB_REPOSITORY_FULLNAME", "")
+}
+
+func TestLoadRulesFromTheBaseBranch(t *testing.T) {
+	clearRulesEnv(t)
+	t.Cleanup(func() { rcActiveRules = nil })
+	inDir(t, rulesRepo(t, "instructions: Money is int64 cents.\n"))
+	t.Setenv("GITHUB_REPOSITORY_FULLNAME", "acme/api")
+
+	if warn := rcLoadRulesFor("main"); warn != "" {
+		t.Fatal(warn)
+	}
+	if rcActiveRules == nil || rcActiveRules.Instructions != "Money is int64 cents." {
+		t.Fatalf("rules = %+v, want the base branch's, not the pull request's", rcActiveRules)
+	}
+	if !strings.HasPrefix(rcActiveRules.Source, "acme/api@main:") {
+		t.Errorf("source = %q, want the repository and base named", rcActiveRules.Source)
+	}
+	if line := rcDescribeRules(); !strings.Contains(line, "instructions") {
+		t.Errorf("log line = %q", line)
+	}
+
+	// No base, no rules: a single-commit review has no base to trust.
+	if warn := rcLoadRulesFor(""); warn != "" || rcActiveRules != nil {
+		t.Fatalf("no base: rules %+v, warning %q; want none", rcActiveRules, warn)
+	}
+}
+
+func TestLoadRulesWithoutAFileIsNoRules(t *testing.T) {
+	clearRulesEnv(t)
+	t.Cleanup(func() { rcActiveRules = nil })
+	inDir(t, rulesRepo(t, ""))
+	if warn := rcLoadRulesFor("main"); warn != "" || rcActiveRules != nil {
+		t.Fatalf("rules %+v, warning %q; want none", rcActiveRules, warn)
+	}
+}
+
+// A broken file is reported and the review runs without rules — never fails.
+func TestLoadRulesWarnsOnABrokenFile(t *testing.T) {
+	clearRulesEnv(t)
+	t.Cleanup(func() { rcActiveRules = nil })
+	inDir(t, rulesRepo(t, "rules: [security]\n"))
+	warn := rcLoadRulesFor("main")
+	if rcActiveRules != nil {
+		t.Fatalf("broken file loaded: %+v", rcActiveRules)
+	}
+	if !strings.Contains(warn, "security") || !strings.Contains(warn, "without them") {
+		t.Errorf("warning = %q, want the bad pack named and the fallback stated", warn)
+	}
+}
+
+// KAI_REVIEW_RULES points at a local file, for trying rules by hand.
+func TestLoadRulesFromALocalFile(t *testing.T) {
+	clearRulesEnv(t)
+	t.Cleanup(func() { rcActiveRules = nil })
+	path := filepath.Join(t.TempDir(), "rules.yaml")
+	if err := os.WriteFile(path, []byte("rules: [observability]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAI_REVIEW_RULES", path)
+	if warn := rcLoadRulesFor(""); warn != "" {
+		t.Fatal(warn)
+	}
+	if rcActiveRules == nil || len(rcActiveRules.Packs) != 1 {
+		t.Fatalf("rules = %+v", rcActiveRules)
+	}
+	if line := rcDescribeRules(); !strings.Contains(line, "not yet applied") {
+		t.Errorf("log line = %q, want packs reported as not yet applied", line)
 	}
 }

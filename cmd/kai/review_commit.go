@@ -362,6 +362,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	if err := rcLoadProfileFor(reviewCommitBase); err != nil {
 		return err
 	}
+	// The repository's own review rules, from the same base branch
+	// (review_commit_rules.go). A broken file is reported, never fatal.
+	if warn := rcLoadRulesFor(reviewCommitBase); warn != "" {
+		fmt.Fprintf(os.Stderr, "  warning: %s\n", warn)
+	}
+	if line := rcDescribeRules(); line != "" {
+		fmt.Fprintln(os.Stderr, line)
+	}
 
 	prov, model, provKind := rcReviewProvider()
 	if prov == nil {
@@ -905,6 +913,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	}
 	user.WriteString(hosts)
 	user.WriteString(rcReviewHints(diff))
+	user.WriteString(rcRulesBlock(changed))
 	user.WriteString("INTENT:\n")
 	user.WriteString(strings.TrimSpace(intent))
 	user.WriteString("\n\nDIFF:\n")
@@ -1183,6 +1192,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			fmt.Fprintf(os.Stderr, "  challenge model: %s (review model %s)\n", gateModel, model)
 		}
 		extra := append(append([]rcSource(nil), sw.Sources...), rcNpmChallengeSources(npmSrc)...)
+		extra = append(extra, rcRulesChallengeSources(changed)...)
 		res, err := rcChallengeReviewWith(publicationCtx, prov, gateModel, raw, rcChallengeSources(transcript), extra, rcConfiguredSandbox())
 		if err == nil {
 			if n := rcWithholdUnsettledSweep(res, sw.Issues); n > 0 {
