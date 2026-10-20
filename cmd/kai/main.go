@@ -5021,12 +5021,15 @@ func orgSlugs(orgs []remote.OrgInfo) string {
 // initMode suppresses chatty output from sub-commands called during kai init
 var initMode bool
 
-// captureTrunkOnly makes runCapture advance snap.latest even when a
-// workspace is checked out. Set by the bridge: a git commit is trunk
-// history, and staging it into the checked-out workspace instead both
-// absorbed the commit into that workspace (its head became the commit's
-// tree, dropping the workspace's own work) and left snap.latest behind,
-// so git.<sha> pointed at the PREVIOUS snapshot.
+// captureTrunkOnly is set by the bridge, whose captures record a git commit
+// and must match it exactly:
+//   - snap.latest advances even when a workspace is checked out. A git
+//     commit is trunk history; staging it into the checked-out workspace
+//     absorbed the commit into that workspace and left git.<sha> pointing
+//     at the PREVIOUS snapshot.
+//   - live-synced peer contributions are NOT reverted out (as with --all).
+//     The commit contains what is on disk; reverting a ledgered peer edit
+//     recorded the commit with an older version of the file.
 var captureTrunkOnly bool
 
 // ANSI color helpers for init output. Respect NO_COLOR and non-TTY stderr.
@@ -6840,7 +6843,7 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	// live-synced peer contributions out of the snapshot (per-file, line-level
 	// where we both touched a file). `--all` includes everything.
 	capSource := filesource.FileSource(source)
-	if !captureAll {
+	if !captureAll && !captureTrunkOnly {
 		if filtered, n := applyPeerExclusion(capSource, db, kaiDir, capturePath); n > 0 {
 			capSource = filtered
 			if !initMode {
