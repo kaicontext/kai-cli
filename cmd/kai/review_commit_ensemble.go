@@ -44,11 +44,11 @@ var rcEnsembleDefaults = map[string]struct{ modelEnv, model, effortEnv, effort s
 	rcStageSweep2: {"KAI_SWEEP2_MODEL", "z-ai/glm-5.2", "KAI_SWEEP2_EFFORT", ""},
 	// One call per review, so the strongest judgement available.
 	rcStageRank: {"KAI_RANK_MODEL", "anthropic/claude-opus-5.5", "KAI_RANK_EFFORT", "medium"},
-	// Specialist finders (review_commit_specialists.go): off unless a profile
-	// or environment names a model.
-	rcStageSpecLogic:     {"KAI_SPEC_LOGIC_MODEL", "off", "KAI_SPEC_LOGIC_EFFORT", ""},
-	rcStageSpecSecurity:  {"KAI_SPEC_SECURITY_MODEL", "off", "KAI_SPEC_SECURITY_EFFORT", ""},
-	rcStageSpecContracts: {"KAI_SPEC_CONTRACTS_MODEL", "off", "KAI_SPEC_CONTRACTS_EFFORT", ""},
+	// Specialist finders (review_commit_specialists.go). CANDIDATE BUILD ONLY:
+	// on by default on GLM-5.2 for the kai org's review image (kai-cli#205).
+	rcStageSpecLogic:     {"KAI_SPEC_LOGIC_MODEL", "z-ai/glm-5.2", "KAI_SPEC_LOGIC_EFFORT", ""},
+	rcStageSpecSecurity:  {"KAI_SPEC_SECURITY_MODEL", "z-ai/glm-5.2", "KAI_SPEC_SECURITY_EFFORT", ""},
+	rcStageSpecContracts: {"KAI_SPEC_CONTRACTS_MODEL", "z-ai/glm-5.2", "KAI_SPEC_CONTRACTS_EFFORT", ""},
 }
 
 // rcEnsembleModel is an ensemble stage's model: the profile's, else its
