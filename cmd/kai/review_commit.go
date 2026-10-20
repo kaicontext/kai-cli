@@ -380,6 +380,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		rcStageSweep2:         rcEnsembleModel(rcStageSweep2),
 		rcStageRank:           rcEnsembleModel(rcStageRank),
 	}
+	for _, stage := range rcSpecialistStages {
+		stageModels[stage] = rcEnsembleModel(stage)
+	}
 	if err := rcCheckProfileEfforts(stageModels); err != nil {
 		return err
 	}
