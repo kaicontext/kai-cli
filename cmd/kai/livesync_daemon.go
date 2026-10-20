@@ -153,6 +153,16 @@ func stopAutoSync(kaiDir string) {
 	_ = os.Remove(autoSyncWsPath(kaiDir))
 }
 
+// resetLiveSyncSession ends live sync for the workspace being left: stops the
+// auto-sync daemon and forgets its peer ledger (live-synced.json). Called
+// whenever the checked-out workspace changes, BEFORE files are rewritten, so
+// the old daemon can't push the new workspace's files into the old room and
+// the old room's peer entries can't make later captures revert files.
+func resetLiveSyncSession(kaiDir string) {
+	stopAutoSync(kaiDir)
+	clearPeerLedger(kaiDir)
+}
+
 // startAutoSync spawns a detached `kai live run` for wsName, best-effort.
 // Skips silently when auto-sync is opted out, no remote/auth is configured,
 // or a daemon is already running for the same workspace. Never returns an

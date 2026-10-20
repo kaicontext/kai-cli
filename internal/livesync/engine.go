@@ -108,10 +108,10 @@ type Engine struct {
 	billingMu sync.RWMutex
 	billing   string
 
-	// live-synced ledger (path -> base/peer digests), persisted to
-	// .kai/live-synced.json so `kai capture` can subtract peer changes.
+	// Serializes this engine's read-modify-write of the live-synced ledger
+	// (.kai/live-synced.json), which `kai capture` reads to subtract peer
+	// changes.
 	ledgerMu sync.Mutex
-	ledger   map[string]SyncedEntry
 
 	// CRDT op-transport mode (opt-in via KAI_CRDT_SYNC=1). When set, the engine
 	// syncs RGA ops instead of whole-file content: convergence happens at each
