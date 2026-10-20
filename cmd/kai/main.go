@@ -1147,39 +1147,50 @@ Examples:
 }
 
 var wsLogCmd = &cobra.Command{
-	Use:   "log",
-	Short: "Show workspace changelog",
+	Use:   "log [workspace]",
+	Short: "Show workspace changelog (default: the checked-out workspace)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runWsLog,
 }
 
 var wsShelveCmd = &cobra.Command{
-	Use:   "shelve",
-	Short: "Shelve a workspace (freeze staging)",
+	Use:   "shelve [workspace]",
+	Short: "Shelve a workspace (freeze staging; default: the checked-out workspace)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runWsShelve,
 }
 
 var wsUnshelveCmd = &cobra.Command{
-	Use:   "unshelve",
-	Short: "Unshelve a workspace (resume staging)",
+	Use:   "unshelve [workspace]",
+	Short: "Unshelve a workspace (resume staging; default: the checked-out workspace)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runWsUnshelve,
 }
 
 var wsCloseCmd = &cobra.Command{
-	Use:   "close",
+	Use:   "close <workspace>",
 	Short: "Close a workspace (permanent)",
-	RunE:  runWsClose,
+	Long: `Close a workspace permanently. If it is the checked-out workspace, Kai
+stops treating it as current (and stops its live sync); files on disk are
+left as they are — run 'kai checkout snap.latest' to restore trunk's files.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runWsClose,
 }
 
 var wsDeleteCmd = &cobra.Command{
-	Use:   "delete",
+	Use:   "delete <workspace>",
+	Args:  cobra.MaximumNArgs(1),
 	Short: "Delete a workspace (metadata and refs; run `kai prune` to reclaim storage)",
 	Long: `Delete a workspace permanently, removing the workspace node, edges, and refs.
 
 Content (snapshots, changesets, files) is NOT deleted - that's the GC's job.
 Run 'kai prune' after deleting workspaces to reclaim storage.
 
+If it is the checked-out workspace, Kai stops treating it as current (and
+stops its live sync); files on disk are left as they are.
+
 Examples:
-  kai ws delete --ws feature/experiment --dry-run  # Preview what would be deleted
+  kai ws delete feature/experiment --dry-run       # Preview what would be deleted
   kai ws delete --ws feature/experiment            # Actually delete
   kai ws delete --ws old-branch --keep-refs        # Keep refs (rare)`,
 	RunE: runWsDelete,
@@ -1187,14 +1198,18 @@ Examples:
 
 var wsCheckoutCmd = &cobra.Command{
 	Use:   "checkout [workspace]",
-	Short: "Checkout workspace and set as current",
+	Short: "Checkout workspace and set as current (no name: leave it, back to trunk)",
 	Long: `Checkout a workspace's head snapshot and set it as the current workspace.
 
 This writes files from the workspace's current state to a directory and
 sets .kai/workspace so subsequent commands use this workspace by default.
 
+With no name, leaves the current workspace: restores trunk (snap.latest)
+into the directory, clears the current workspace and stops its live sync.
+
 Examples:
   kai ws checkout feat/demo              # Checkout and set as current
+  kai ws checkout                        # Leave the workspace, back to trunk
   kai ws checkout feat/demo --dir ./src  # Checkout to specific directory
   kai ws checkout feat/demo --clean      # Remove files not in snapshot`,
 	Args: cobra.MaximumNArgs(1),
@@ -4176,22 +4191,17 @@ func init() {
 	wsStageCmd.Flags().StringVarP(&wsStageMessage, "message", "m", "", "Message describing the staged changes")
 	wsStageCmd.Flags().StringVar(&wsSignKey, "sign-ssh-key", "", "Path to SSH private key for signing changesets")
 
-	wsLogCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
-	wsLogCmd.MarkFlagRequired("ws")
+	wsLogCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (default: the checked-out workspace)")
 
-	wsShelveCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
-	wsShelveCmd.MarkFlagRequired("ws")
+	wsShelveCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (default: the checked-out workspace)")
 
-	wsUnshelveCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
-	wsUnshelveCmd.MarkFlagRequired("ws")
+	wsUnshelveCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (default: the checked-out workspace)")
 
-	wsCloseCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
-	wsCloseCmd.MarkFlagRequired("ws")
+	wsCloseCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (or pass as positional arg)")
 
-	wsDeleteCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
+	wsDeleteCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (or pass as positional arg)")
 	wsDeleteCmd.Flags().BoolVar(&wsDeleteKeepRefs, "keep-refs", false, "Preserve workspace refs (rare)")
 	wsDeleteCmd.Flags().BoolVar(&wsDeleteDryRun, "dry-run", false, "Show what would be deleted without actually deleting")
-	wsDeleteCmd.MarkFlagRequired("ws")
 
 	wsCheckoutCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name (or pass as positional arg)")
 	wsCheckoutCmd.Flags().StringVar(&wsDir, "dir", ".", "Target directory to write files to")
@@ -6886,6 +6896,14 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 		fmt.Fprintf(os.Stderr, " done\n")
 	}
 	debugf("snapshot created: %s", util.BytesToHex(snapshotID))
+
+	// A whole-tree capture that kept live-synced peer content (--all, or a
+	// bridge capture of a git commit) has recorded it as the user's own:
+	// drop the ledger, or later default captures keep reverting those files
+	// to their pre-peer versions.
+	if (captureAll || captureTrunkOnly) && capturePath == "." {
+		clearPeerLedger(kaiDir)
+	}
 
 	// Persist stat cache so next capture can skip unchanged files
 	if err := statCache.Save(cacheDir); err != nil {
@@ -14380,6 +14398,10 @@ func runWsStage(cmd *cobra.Command, args []string) error {
 }
 
 func runWsLog(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, true)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14433,6 +14455,10 @@ func runWsLog(cmd *cobra.Command, args []string) error {
 }
 
 func runWsShelve(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, true)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14449,6 +14475,10 @@ func runWsShelve(cmd *cobra.Command, args []string) error {
 }
 
 func runWsUnshelve(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, true)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14465,6 +14495,10 @@ func runWsUnshelve(cmd *cobra.Command, args []string) error {
 }
 
 func runWsClose(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, false)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14472,15 +14506,61 @@ func runWsClose(cmd *cobra.Command, args []string) error {
 	defer db.Close()
 
 	mgr := workspace.NewManager(db)
+	ws, err := mgr.Get(wsName)
+	if err != nil {
+		return fmt.Errorf("closing workspace: %w", err)
+	}
 	if err := mgr.Close(wsName); err != nil {
 		return fmt.Errorf("closing workspace: %w", err)
 	}
 
 	fmt.Printf("Workspace %q closed.\n", wsName)
+	if ws != nil {
+		releaseIfCurrent(ws.Name)
+	}
 	return nil
 }
 
+// resolveWsArg resolves the workspace a `kai ws` subcommand acts on: the
+// positional argument, then --ws, then (when allowCurrent) the checked-out
+// workspace. Destructive subcommands pass allowCurrent=false.
+func resolveWsArg(args []string, allowCurrent bool) (string, error) {
+	if len(args) > 0 && args[0] != "" {
+		return args[0], nil
+	}
+	if wsName != "" {
+		return wsName, nil
+	}
+	if allowCurrent {
+		if cur, _ := getCurrentWorkspace(); cur != "" {
+			return cur, nil
+		}
+		return "", fmt.Errorf("no workspace given and none is checked out (pass a name, or --ws)")
+	}
+	return "", fmt.Errorf("workspace name required (pass it as an argument, or --ws)")
+}
+
+// releaseIfCurrent stops treating name as the checked-out workspace after it
+// was closed or deleted. Leaving the marker made workspace-aware commands
+// (the pre-commit hook's capture) keep trying to stage into it. Files on
+// disk are left alone.
+func releaseIfCurrent(name string) {
+	if cur, _ := getCurrentWorkspace(); cur == "" || cur != name {
+		return
+	}
+	resetLiveSyncSession(kaiDir)
+	if err := setCurrentWorkspace(""); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to clear the current workspace: %v\n", err)
+		return
+	}
+	fmt.Printf("It was the checked-out workspace: now on trunk. Files on disk were left as they are — run `kai checkout snap.latest` to restore trunk's files.\n")
+}
+
 func runWsDelete(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, false)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14508,11 +14588,18 @@ func runWsDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	// Actually delete
+	ws, err := mgr.Get(wsName)
+	if err != nil {
+		return fmt.Errorf("deleting workspace: %w", err)
+	}
 	if err := mgr.Delete(wsName, wsDeleteKeepRefs); err != nil {
 		return fmt.Errorf("deleting workspace: %w", err)
 	}
 
 	fmt.Printf("Workspace %q deleted.\n", wsName)
+	if ws != nil {
+		releaseIfCurrent(ws.Name)
+	}
 	fmt.Println("Run `kai prune` to reclaim storage.")
 	return nil
 }
@@ -14555,7 +14642,7 @@ func runWsCheckout(cmd *cobra.Command, args []string) error {
 			if serr := setCurrentWorkspace(""); serr != nil {
 				return fmt.Errorf("clearing workspace: %w", serr)
 			}
-			stopAutoSync(kaiDir)
+			resetLiveSyncSession(kaiDir)
 			fmt.Printf("Left workspace %q — no trunk snapshot to restore.\n", currentWs)
 			return nil
 		}
@@ -14563,6 +14650,9 @@ func runWsCheckout(cmd *cobra.Command, args []string) error {
 		// Materialize trunk first; only clear the workspace pointer once the
 		// files are safely written. If the restore fails, the user is left in
 		// the workspace (consistent state) rather than half-exited.
+		// Stop syncing the workspace before rewriting its files, or the
+		// daemon pushes the trunk restore into the workspace's room.
+		resetLiveSyncSession(kaiDir)
 		creator := snapshot.NewCreator(db, nil)
 		result, err := creator.Checkout(trunkID, targetDir, wsCheckoutClean)
 		if err != nil {
@@ -14572,7 +14662,6 @@ func runWsCheckout(cmd *cobra.Command, args []string) error {
 		if err := setCurrentWorkspace(""); err != nil {
 			return fmt.Errorf("clearing workspace: %w", err)
 		}
-		stopAutoSync(kaiDir)
 
 		fmt.Printf("Left workspace %q — now working on snap.latest (%s)\n", currentWs, util.BytesToHex(trunkID)[:12])
 		fmt.Printf("  Restored: %d file(s)\n", result.FilesWritten)
@@ -14607,6 +14696,12 @@ func runWsCheckout(cmd *cobra.Command, args []string) error {
 	// Create target directory if it doesn't exist
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("creating target directory: %w", err)
+	}
+
+	// Switching workspaces: end the previous one's live sync before its files
+	// are overwritten (see resetLiveSyncSession).
+	if cur, _ := getCurrentWorkspace(); cur != ws.Name {
+		resetLiveSyncSession(kaiDir)
 	}
 
 	// Checkout the head snapshot
