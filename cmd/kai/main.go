@@ -3699,12 +3699,14 @@ func runBridgeMilestone(cmd *cobra.Command, args []string) error {
 	// KAI_BRIDGE_INPROGRESS below to prevent loops).
 	{
 		initMode = true
+		captureTrunkOnly = true
 		if err := runCapture(cmd, nil); err != nil {
 			debugf("bridge milestone: capture failed: %v", err)
 			// non-fatal — the milestone still goes through, just without a
 			// fresh Kai-Snapshot trailer
 		}
 		initMode = false
+		captureTrunkOnly = false
 	}
 
 	// Read snap.latest for the trailer. Missing snap.latest is fine — the
@@ -3842,7 +3844,8 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 	// runCapture is idempotent (content-addressed) — if nothing changed since
 	// the last capture, snap.latest is unchanged and the ref just points there.
 	initMode = true
-	defer func() { initMode = false }()
+	captureTrunkOnly = true
+	defer func() { initMode = false; captureTrunkOnly = false }()
 	if err := runCapture(cmd, nil); err != nil {
 		debugf("bridge import: capture failed: %v", err)
 		return nil
@@ -5017,6 +5020,14 @@ func orgSlugs(orgs []remote.OrgInfo) string {
 
 // initMode suppresses chatty output from sub-commands called during kai init
 var initMode bool
+
+// captureTrunkOnly makes runCapture advance snap.latest even when a
+// workspace is checked out. Set by the bridge: a git commit is trunk
+// history, and staging it into the checked-out workspace instead both
+// absorbed the commit into that workspace (its head became the commit's
+// tree, dropping the workspace's own work) and left snap.latest behind,
+// so git.<sha> pointed at the PREVIOUS snapshot.
+var captureTrunkOnly bool
 
 // ANSI color helpers for init output. Respect NO_COLOR and non-TTY stderr.
 var stderrColor bool
@@ -6894,7 +6905,10 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	// tracks trunk. Compute the baseline ref once; it's reused for the
 	// analysis-skip check, authorship forward-porting, and the staging
 	// branch below.
-	currentCaptureWs, _ := getCurrentWorkspace()
+	var currentCaptureWs string
+	if !captureTrunkOnly {
+		currentCaptureWs, _ = getCurrentWorkspace()
+	}
 	baselineRefName := "snap.latest"
 	if currentCaptureWs != "" {
 		baselineRefName = "ws." + currentCaptureWs + ".head"
