@@ -558,8 +558,8 @@ func TestReviewChallengeSkippedCheckIsUnresolvedNotFatal(t *testing.T) {
 
 // Publication follows confidence weighed by impact: a high-impact defect the
 // check refuted on "no current caller" grounds but still rates 6/10 is
-// published; a low-impact one the check supported at 6/10 is withheld; a
-// claim with no evidence is promoted only when the stakes are high.
+// published; a supported one is never withheld for a low score; a claim with
+// no evidence is promoted only when the stakes are high.
 func TestScoredStatusPublishesByConfidenceAndImpact(t *testing.T) {
 	cases := []struct {
 		status, impact string
@@ -574,7 +574,7 @@ func TestScoredStatusPublishesByConfidenceAndImpact(t *testing.T) {
 		{rcStatusRefuted, "low", 7, true, rcStatusRefuted},
 		{rcStatusRefuted, "medium", 7, false, rcStatusRefuted}, // no evidence, not high stakes
 		{rcStatusRefuted, "medium", 7, true, rcStatusSupported},
-		{rcStatusSupported, "low", 6, true, rcStatusRefuted},
+		{rcStatusSupported, "low", 6, true, rcStatusSupported}, // never withheld for a low score
 		{rcStatusSupported, "low", 8, true, rcStatusSupported},
 		{rcStatusSupported, "", 7, true, rcStatusSupported},    // unknown impact counts as medium
 		{rcStatusRefuted, "bogus", 9, true, rcStatusSupported}, // likewise

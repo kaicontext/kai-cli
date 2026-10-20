@@ -67,7 +67,7 @@ Finish by calling submit_review with this shape (plain JSON is accepted if tool 
  "checks":[{"issue":"exact original ISSUES bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"concrete reasoning, including the counterexample considered","finding":"for a SUPPORTED verdict only: the published description of the defect","remedy":"the proposed fix for THIS allegation, if any","evidence":[{"source":1,"line_start":3,"line_end":5}],"confidence":0,"impact":"critical|high|medium|low"}],
  "decisions":[{"decision":"exact original DECISIONS bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"why this is, or is not, a genuine choice the change already makes","evidence":[{"source":1,"line_start":3,"line_end":5}]}]}
 
-SCORE EVERY CHECK, separately from its verdict. "confidence" (0-10) is how likely the allegation is a real defect that this change introduces or touches, on inputs, callers or configuration that can realistically occur. "impact" is how bad it is if real: critical (security hole, data loss, crash of a core path), high (wrong result or broken contract on common input), medium (wrong result on a less common input, a test that cannot catch what it claims), low (an edge case, a misleading message). Calibrate honestly: 9-10 when the sources show it; 6-8 when the code says so but a fact you could not verify is involved; 3-5 when it depends on how the code is used elsewhere; 0-2 only when a source shows the claim is false. Reasons you would refute on — "no current caller passes that input", "a caller probably guards it", "it looks intended" without the author's words, "the same pattern existed before" in code this change touches — LOWER confidence; they do not make it 0. The system publishes by confidence and impact together: a high-impact defect is worth a maintainer's attention at moderate confidence, a low-impact one only at high confidence.
+SCORE EVERY CHECK, separately from its verdict. "confidence" (0-10) is how likely the allegation is a real defect that this change introduces or touches, on inputs, callers or configuration that can realistically occur. "impact" is how bad it is if real: critical (security hole, data loss, crash of a core path), high (wrong result or broken contract on common input), medium (wrong result on a less common input, a test that cannot catch what it claims), low (an edge case, a misleading message). Calibrate honestly: 9-10 when the sources show it; 6-8 when the code says so but a fact you could not verify is involved; 3-5 when it depends on how the code is used elsewhere; 0-2 only when a source shows the claim is false. Reasons you would refute on — "no current caller passes that input", "a caller probably guards it", "it looks intended" without the author's words, "the same pattern existed before" in code this change touches — LOWER confidence; they do not make it 0. The system also publishes a defect you refuted or could not verify when its confidence clears the bar for its impact: a high-impact defect is worth a maintainer's attention at moderate confidence, a low-impact one only at high confidence.
 
 Do NOT write a revised review. There is no review, assessment or summary field, and none is wanted: the system assembles the published review, its summary, its counts and its ISSUES list from your per-item verdicts, so they cannot disagree with them. Scope and limitations describe COVERAGE only — what you did and did not examine. They are not a place to state, hint at, or paraphrase any allegation's outcome or fix.
 
@@ -1442,8 +1442,8 @@ func rcImpactOr(impact string) string {
 }
 
 // rcScoredStatus decides publication from the check's confidence and impact.
-// A refuted or unverified defect that clears its impact's bar is published;
-// a supported one below it is withheld. A defect with no resolvable evidence
+// A refuted or unverified defect that clears its impact's bar is published.
+// A defect with no resolvable evidence
 // is promoted only when its impact is critical or high: a low-stakes claim
 // must show its lines.
 func rcScoredStatus(status string, confidence int, impact string, hasEvidence bool) (string, string) {
@@ -1455,8 +1455,9 @@ func rcScoredStatus(status string, confidence int, impact string, hasEvidence bo
 		}
 		return status, ""
 	}
-	if status == rcStatusSupported {
-		return rcStatusRefuted, fmt.Sprintf("[withheld: confidence %d/10 is below the bar of %d for %s impact]", confidence, bar, impact)
-	}
+	// A supported defect is never withheld for a low score: on the benchmark,
+	// dropping Kai's low-severity findings cost 3-6 F1 points, because they
+	// match real bugs about as often as its high-severity ones
+	// (kai-bench/sim, 2026-10-19). The score only rescues.
 	return status, ""
 }
