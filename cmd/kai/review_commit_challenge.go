@@ -64,8 +64,10 @@ Finish by calling submit_review with this shape (plain JSON is accepted if tool 
  "limitations":["what was NOT covered, and any caveat on the coverage"],
  "intent_match":"verified|partial|diverges",
  "merge_ready":1-5,
- "checks":[{"issue":"exact original ISSUES bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"concrete reasoning, including the counterexample considered","finding":"for a SUPPORTED verdict only: the published description of the defect","remedy":"the proposed fix for THIS allegation, if any","evidence":[{"source":1,"line_start":3,"line_end":5}]}],
+ "checks":[{"issue":"exact original ISSUES bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"concrete reasoning, including the counterexample considered","finding":"for a SUPPORTED verdict only: the published description of the defect","remedy":"the proposed fix for THIS allegation, if any","evidence":[{"source":1,"line_start":3,"line_end":5}],"confidence":0,"impact":"critical|high|medium|low"}],
  "decisions":[{"decision":"exact original DECISIONS bullet, without its list marker","verdict":"supported|refuted|unverified","reason":"why this is, or is not, a genuine choice the change already makes","evidence":[{"source":1,"line_start":3,"line_end":5}]}]}
+
+SCORE EVERY CHECK, separately from its verdict. "confidence" (0-10) is how likely the allegation is a real defect that this change introduces or touches, on inputs, callers or configuration that can realistically occur. "impact" is how bad it is if real: critical (security hole, data loss, crash of a core path), high (wrong result or broken contract on common input), medium (wrong result on a less common input, a test that cannot catch what it claims), low (an edge case, a misleading message). Calibrate honestly: 9-10 when the sources show it; 6-8 when the code says so but a fact you could not verify is involved; 3-5 when it depends on how the code is used elsewhere; 0-2 only when a source shows the claim is false. Reasons you would refute on — "no current caller passes that input", "a caller probably guards it", "it looks intended" without the author's words, "the same pattern existed before" in code this change touches — LOWER confidence; they do not make it 0. The system publishes by confidence and impact together: a high-impact defect is worth a maintainer's attention at moderate confidence, a low-impact one only at high confidence.
 
 Do NOT write a revised review. There is no review, assessment or summary field, and none is wanted: the system assembles the published review, its summary, its counts and its ISSUES list from your per-item verdicts, so they cannot disagree with them. Scope and limitations describe COVERAGE only — what you did and did not examine. They are not a place to state, hint at, or paraphrase any allegation's outcome or fix.
 
@@ -149,6 +151,11 @@ type rcIssueCheck struct {
 	Finding  string            `json:"finding"`
 	Remedy   string            `json:"remedy"`
 	Evidence []rcCheckEvidence `json:"evidence"`
+	// Confidence (0-10) that the allegation is a real defect this change
+	// introduces or touches, and the Impact if it is. Optional: an answer
+	// without them is published by its verdict alone, as before.
+	Confidence *int   `json:"confidence,omitempty"`
+	Impact     string `json:"impact,omitempty"`
 }
 
 // rcDecisionCheck assesses one of the DRAFT's decisions. The challenger cannot
@@ -272,6 +279,8 @@ func rcSubmitReviewToolInfo() tools.ToolInfo {
 	evidenceList := map[string]any{"type": "array", "items": evidence}
 	check := map[string]any{"type": "object", "properties": map[string]any{
 		"issue": str(), "verdict": verdict, "reason": str(), "finding": str(), "remedy": str(), "evidence": evidenceList,
+		"confidence": map[string]any{"type": "integer", "minimum": 0, "maximum": 10},
+		"impact":     map[string]any{"type": "string", "enum": []string{"critical", "high", "medium", "low"}},
 	}, "required": []string{"issue", "verdict", "reason", "evidence"}}
 	decision := map[string]any{"type": "object", "properties": map[string]any{
 		"decision": str(), "verdict": verdict, "reason": str(), "evidence": evidenceList,
@@ -1127,6 +1136,14 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 			// published one; it stays refuted, with the citation noted.
 			r.Reason = fmt.Sprintf("%s (citation %d could not be resolved: %s)", reason, bad[0].Citation, bad[0].Reason)
 		}
+		if check.Confidence != nil {
+			hasEvidence := len(check.Evidence) > 0 && len(bad) == 0
+			if st, why := rcScoredStatus(r.Status, *check.Confidence, check.Impact, hasEvidence); st != r.Status {
+				fmt.Fprintf(os.Stderr, "  challenge score: %s → %s at confidence %d/10, impact %s — %s\n", r.Status, st, *check.Confidence, rcImpactOr(check.Impact), rcOneLine(check.Issue, 90))
+				r.Reason = why + " " + r.Reason
+				r.Status = st
+			}
+		}
 		if r.Status == rcStatusSupported && findingText == "" {
 			// The check confirmed the allegation, with evidence, but wrote no
 			// separate description. The allegation is the reviewer's own
@@ -1407,4 +1424,39 @@ func rcIssueKey(issue string) string {
 	s = strings.NewReplacer("`", "", "\u201c", "\"", "\u201d", "\"", "\u2018", "'", "\u2019", "'", "**", "", "\u2014", "-", "\u2013", "-").Replace(s)
 	s = strings.Join(strings.Fields(s), " ")
 	return strings.TrimRight(s, " .;:")
+}
+
+// rcPublishBar is the confidence a defect of each impact needs to be
+// published: a high-impact defect is worth a maintainer's attention at
+// moderate confidence, a low-impact one only when the check is sure. Without
+// it the check could only keep or kill, and on the Martian benchmark it
+// killed 19 of the 36 serious bugs a leading tool found and Kai missed —
+// bugs Kai had already stated (kai-bench/trace, 2026-10-20).
+var rcPublishBar = map[string]int{"critical": 4, "high": 5, "medium": 7, "low": 8}
+
+func rcImpactOr(impact string) string {
+	if _, ok := rcPublishBar[impact]; ok {
+		return impact
+	}
+	return "medium"
+}
+
+// rcScoredStatus decides publication from the check's confidence and impact.
+// A refuted or unverified defect that clears its impact's bar is published;
+// a supported one below it is withheld. A defect with no resolvable evidence
+// is promoted only when its impact is critical or high: a low-stakes claim
+// must show its lines.
+func rcScoredStatus(status string, confidence int, impact string, hasEvidence bool) (string, string) {
+	impact = rcImpactOr(impact)
+	bar := rcPublishBar[impact]
+	if confidence >= bar {
+		if status != rcStatusSupported && (hasEvidence || impact == "critical" || impact == "high") {
+			return rcStatusSupported, fmt.Sprintf("[published at confidence %d/10, %s impact; the check's verdict was %s]", confidence, impact, status)
+		}
+		return status, ""
+	}
+	if status == rcStatusSupported {
+		return rcStatusRefuted, fmt.Sprintf("[withheld: confidence %d/10 is below the bar of %d for %s impact]", confidence, bar, impact)
+	}
+	return status, ""
 }

@@ -555,3 +555,38 @@ func TestReviewChallengeSkippedCheckIsUnresolvedNotFatal(t *testing.T) {
 		t.Fatalf("allegations = %+v (unassessed %v)", res.Allegations, res.unassessed)
 	}
 }
+
+// Publication follows confidence weighed by impact: a high-impact defect the
+// check refuted on "no current caller" grounds but still rates 6/10 is
+// published; a low-impact one the check supported at 6/10 is withheld; a
+// claim with no evidence is promoted only when the stakes are high.
+func TestScoredStatusPublishesByConfidenceAndImpact(t *testing.T) {
+	cases := []struct {
+		status, impact string
+		conf           int
+		evidence       bool
+		want           string
+	}{
+		{rcStatusRefuted, "high", 6, true, rcStatusSupported},
+		{rcStatusRefuted, "critical", 4, false, rcStatusSupported},
+		{rcStatusUnresolved, "high", 5, false, rcStatusSupported},
+		{rcStatusRefuted, "high", 4, true, rcStatusRefuted},
+		{rcStatusRefuted, "low", 7, true, rcStatusRefuted},
+		{rcStatusRefuted, "medium", 7, false, rcStatusRefuted}, // no evidence, not high stakes
+		{rcStatusRefuted, "medium", 7, true, rcStatusSupported},
+		{rcStatusSupported, "low", 6, true, rcStatusRefuted},
+		{rcStatusSupported, "low", 8, true, rcStatusSupported},
+		{rcStatusSupported, "", 7, true, rcStatusSupported},    // unknown impact counts as medium
+		{rcStatusRefuted, "bogus", 9, true, rcStatusSupported}, // likewise
+		{rcStatusRefuted, "critical", 1, true, rcStatusRefuted},
+	}
+	for _, c := range cases {
+		got, why := rcScoredStatus(c.status, c.conf, c.impact, c.evidence)
+		if got != c.want {
+			t.Errorf("rcScoredStatus(%s, %d, %q, evidence=%v) = %s (%q); want %s", c.status, c.conf, c.impact, c.evidence, got, why, c.want)
+		}
+		if got != c.status && why == "" {
+			t.Errorf("a changed status must say why: %+v", c)
+		}
+	}
+}
