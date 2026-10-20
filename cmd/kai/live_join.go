@@ -61,6 +61,12 @@ func runLiveJoin(cmd *cobra.Command, args []string) error {
 			err = runIn(cwd, "ws", "checkout", name)
 		} else if cerr := runIn(cwd, "ws", "create", name); cerr == nil {
 			fmt.Printf("workspace %s did not exist anywhere — created it; you are the room's first member\n", name)
+			// Live sync is scoped by workspace ID, and later members get this
+			// ID only by fetching the workspace — publish it now, or a member
+			// who joins before anyone pushes creates a separate workspace.
+			if perr := runIn(cwd, "push", "--ws", name); perr != nil {
+				fmt.Printf("warning: could not publish workspace %s (%v) — others can join after `kai push --ws %s`\n", name, perr, name)
+			}
 			err = runIn(cwd, "ws", "checkout", name)
 		}
 		if err != nil {

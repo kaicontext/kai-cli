@@ -231,7 +231,15 @@ type crdtDocFile struct {
 	Doc  json.RawMessage `json:"doc"`
 }
 
-func (e *Engine) crdtDir() string { return filepath.Join(e.kaiDir, "crdt") }
+// crdtDir holds the persisted Docs for this engine's scope. Repo-wide ("")
+// keeps the original location; each workspace scope gets its own directory so
+// one workspace's Docs never seed another's.
+func (e *Engine) crdtDir() string {
+	if e.workspace == "" {
+		return filepath.Join(e.kaiDir, "crdt")
+	}
+	return filepath.Join(e.kaiDir, "crdt", "ws-"+hex.EncodeToString(blake3Sum([]byte(e.workspace)))[:16])
+}
 
 func (e *Engine) crdtDocPath(relPath string) string {
 	name := hex.EncodeToString(blake3Sum([]byte(relPath))) + ".json"

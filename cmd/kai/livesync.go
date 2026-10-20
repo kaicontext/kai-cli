@@ -177,7 +177,7 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 		Client:           client,
 		Agent:            "kai-cli",
 		SessionID:        sessionID,
-		Workspace:        ws,
+		Workspace:        liveSyncScope(db, ws),
 		CheckpointWriter: authorship.NewCheckpointWriter(kaiDir, sessionID),
 		CRDTMode:         crdtMode,
 	})
@@ -361,8 +361,7 @@ func setupLiveSync(kaiDir string) (*liveSyncWiring, error) {
 
 	agent := fmt.Sprintf("kai-code:%d", os.Getpid())
 	// Scope to the current workspace (empty = repo-wide, backward compatible).
-	cw, _ := getCurrentWorkspace()
-	resp, err := client.SubscribeSync(agent, client.Actor, cw, state.Files)
+	resp, err := client.SubscribeSync(agent, client.Actor, currentLiveSyncScope(), state.Files)
 	if err != nil {
 		return nil, fmt.Errorf("live sync: subscribe failed: %w", err)
 	}
