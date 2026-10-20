@@ -6410,12 +6410,9 @@ func runGitImport(db *graph.DB) error {
 	}
 	commits := strings.Split(strings.TrimSpace(string(listOut)), "\n")
 
-	// Save current branch to restore later
+	// The branch HEAD is on, for attributing the tip in graph_refs below.
 	currentBranch, _ := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
 	currentRef := strings.TrimSpace(string(currentBranch))
-	defer func() {
-		exec.Command("git", "checkout", currentRef).Run()
-	}()
 
 	creator := snapshot.NewCreator(db, nil)
 	refMgr := ref.NewRefManager(db)
@@ -6440,19 +6437,19 @@ func runGitImport(db *graph.DB) error {
 			fmt.Fprintf(os.Stderr, "\r  [%d/%d] %s %.7s", i+1, len(commits), msg, commitHash)
 		}
 
-		// Checkout this commit
-		if err := exec.Command("git", "checkout", "--quiet", commitHash).Run(); err != nil {
-			continue
-		}
-
-		// Create snapshot (no analysis — too slow for bulk import)
-		source, serr := dirio.OpenDirectory(".")
+		// Snapshot the commit's tree straight from git objects (no analysis —
+		// too slow for bulk import). This used to `git checkout` each commit
+		// and snapshot the directory: it rewrote the user's working tree during
+		// init, put untracked and uncommitted files into every historical
+		// snapshot, silently skipped commits whose checkout conflicted, and
+		// fired the installed git hooks once per commit.
+		gs, serr := gitio.OpenSource(".", commitHash)
 		if serr != nil {
-			continue
+			return fmt.Errorf("reading commit %.12s: %w", commitHash, serr)
 		}
-		snapshotID, err := creator.CreateSnapshot(source)
+		snapshotID, err := creator.CreateSnapshot(dirLangSource{gs})
 		if err != nil {
-			continue
+			return fmt.Errorf("snapshotting commit %.12s: %w", commitHash, err)
 		}
 
 		// Update refs. A snapshot nothing points at isn't history: fail
@@ -6467,11 +6464,23 @@ func runGitImport(db *graph.DB) error {
 			lastImported = commitHash
 		}
 
+		// Map the commit to its snapshot exactly as the bridge does for new
+		// commits (git.<sha12>, and git.HEAD for the tip). Import wrote no
+		// mapping at all, so after `kai init` no commit — not even HEAD —
+		// resolved to a snapshot until the next commit's hook ran.
+		meta := map[string]string{"source": "init_import", "git_commit": commitHash}
+		if err := refMgr.SetWithMeta("git."+shortPrefix(commitHash), snapshotID, ref.KindSnapshot, "", meta); err != nil {
+			return fmt.Errorf("mapping commit %.12s: %w", commitHash, err)
+		}
+		if i == len(commits)-1 {
+			if err := refMgr.SetWithMeta("git.HEAD", snapshotID, ref.KindSnapshot, "", meta); err != nil {
+				return fmt.Errorf("mapping git.HEAD: %w", err)
+			}
+		}
+
 		// Store commit message for push
 		os.MkdirAll(kaiDir, 0755)
 		os.WriteFile(filepath.Join(kaiDir, "message"), []byte(msg), 0644)
-
-		_ = refMgr
 	}
 
 	if graphRefsErr == nil && lastImported != "" {
@@ -6497,6 +6506,33 @@ func runGitImport(db *graph.DB) error {
 	}
 
 	return nil
+}
+
+// dirLangSource labels a git tree's files with the directory capture's
+// language classification, so a commit imported from git objects shares File
+// nodes (and their symbols) with captures of the same files from disk —
+// gitio and dirio disagree on a few extensions, e.g. .proto.
+type dirLangSource struct{ *gitio.GitSource }
+
+func (s dirLangSource) GetFiles() ([]*filesource.FileInfo, error) {
+	files, err := s.GitSource.GetFiles()
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range files {
+		if f.Mode != filesource.ModeSymlink {
+			f.Lang = dirio.DetectLang(f.Path)
+		}
+	}
+	return files, nil
+}
+
+func (s dirLangSource) GetFile(path string) (*filesource.FileInfo, error) {
+	f, err := s.GitSource.GetFile(path)
+	if err == nil && f != nil && f.Mode != filesource.ModeSymlink {
+		f.Lang = dirio.DetectLang(f.Path)
+	}
+	return f, err
 }
 
 // detectCIPlatform checks the git remote URL to determine GitHub vs GitLab.
