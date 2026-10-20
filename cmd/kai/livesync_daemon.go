@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -88,6 +90,44 @@ func acquireLiveRunLock(kaiDir string) (*os.File, bool) {
 	return f, true
 }
 
+// errNoOrigin: the repo has no configured `origin` remote (e.g. `kai init
+// --no-remote`), so there is nothing to live-sync with.
+var errNoOrigin = errors.New("no `origin` remote configured (`kai remote set origin <url>`)")
+
+// configuredOrigin returns a client for the repo's configured `origin`
+// remote. remote.NewClientForRemote("origin") never fails when origin is
+// missing — it falls back to the default server with placeholder org
+// "default" and repo "main" — so a --no-remote repo with a logged-in user
+// started a daemon that retried forever against "HTTP 404 org not found".
+func configuredOrigin() (*remote.Client, error) {
+	remotes, err := remote.ListRemotes()
+	if err != nil {
+		return nil, err
+	}
+	if e, ok := remotes["origin"]; !ok || e == nil || e.URL == "" {
+		return nil, errNoOrigin
+	}
+	return remote.NewClientForRemote("origin")
+}
+
+var syncHTTPStatus = regexp.MustCompile(`\bHTTP (\d{3})\b`)
+
+// permanentSyncError reports whether a subscribe error is a 4xx the server
+// will keep returning (unknown org/repo, bad auth, forbidden) — retrying
+// cannot fix it. 408 and 429 are transient. The engine reports these as
+// "sync subscribe failed: HTTP <code>: <body>".
+func permanentSyncError(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := syncHTTPStatus.FindStringSubmatch(err.Error())
+	if m == nil {
+		return false
+	}
+	code, _ := strconv.Atoi(m[1])
+	return code >= 400 && code < 500 && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests
+}
+
 // autoSyncRunningPid returns the pid of a live auto-sync daemon, or 0.
 func autoSyncRunningPid(kaiDir string) int {
 	data, err := os.ReadFile(autoSyncPidPath(kaiDir))
@@ -143,9 +183,9 @@ func startAutoSync(kaiDir, wsName string) {
 		stopAutoSync(kaiDir) // switching workspaces — restart for the new one
 	}
 
-	// Need a remote + auth to sync at all. If absent, stay silent — local
-	// work is unaffected.
-	client, err := remote.NewClientForRemote("origin")
+	// Need a configured remote + auth to sync at all. If absent, stay
+	// silent — local work is unaffected.
+	client, err := configuredOrigin()
 	if err != nil || client.AuthToken == "" {
 		return
 	}

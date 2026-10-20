@@ -15,10 +15,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kaicontext/kai-engine/authorship"
-	"kai/internal/livesync"
 	"github.com/kaicontext/kai-engine/ref"
-	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/watcher"
+	"kai/internal/livesync"
 )
 
 // liveRunCmd runs a foreground bidirectional peer-sync session for the
@@ -150,9 +149,9 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 	// daemon — even a manually-started one — not a stale pidfile entry.
 	_ = os.WriteFile(autoSyncPidPath(kaiDir), []byte(strconv.Itoa(os.Getpid())), 0644)
 
-	client, err := remote.NewClientForRemote("origin")
+	client, err := configuredOrigin()
 	if err != nil {
-		return fmt.Errorf("live sync: no `origin` remote configured (`kai remote set origin <url>`): %w", err)
+		return fmt.Errorf("live sync: %w", err)
 	}
 	if client.AuthToken == "" {
 		return fmt.Errorf("live sync: not logged in (`kai auth login`)")
@@ -177,7 +176,7 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 		Client:           client,
 		Agent:            "kai-cli",
 		SessionID:        sessionID,
-		Workspace:        ws,
+		Workspace:        liveSyncScope(db, ws),
 		CheckpointWriter: authorship.NewCheckpointWriter(kaiDir, sessionID),
 		CRDTMode:         crdtMode,
 	})
@@ -265,7 +264,10 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 
 		if probeOnline(client.BaseURL) {
 			synced, err := eng.Start(nil)
-			if err != nil {
+			if err != nil && permanentSyncError(err) {
+				w.Stop()
+				return fmt.Errorf("live sync: server refused the subscription for %s (%s) — not retrying", client.BaseURL, strings.TrimSpace(err.Error()))
+			} else if err != nil {
 				fmt.Printf("Live sync: connect failed (%v) — retrying...\n", err)
 			} else {
 				eng.SaveState(nil)
@@ -351,9 +353,9 @@ func setupLiveSync(kaiDir string) (*liveSyncWiring, error) {
 		return nil, nil
 	}
 
-	client, err := remote.NewClientForRemote("origin")
+	client, err := configuredOrigin()
 	if err != nil {
-		return nil, fmt.Errorf("live sync: no `origin` remote configured (`kai remote set origin <url>`): %w", err)
+		return nil, fmt.Errorf("live sync: %w", err)
 	}
 	if client.AuthToken == "" {
 		return nil, fmt.Errorf("live sync: not logged in (`kai auth login`)")
@@ -361,8 +363,7 @@ func setupLiveSync(kaiDir string) (*liveSyncWiring, error) {
 
 	agent := fmt.Sprintf("kai-code:%d", os.Getpid())
 	// Scope to the current workspace (empty = repo-wide, backward compatible).
-	cw, _ := getCurrentWorkspace()
-	resp, err := client.SubscribeSync(agent, client.Actor, cw, state.Files)
+	resp, err := client.SubscribeSync(agent, client.Actor, currentLiveSyncScope(), state.Files)
 	if err != nil {
 		return nil, fmt.Errorf("live sync: subscribe failed: %w", err)
 	}
