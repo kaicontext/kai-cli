@@ -996,6 +996,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// A second finder on another model family reviews beside the first
 	// (review_commit_ensemble.go); its issues join the draft before the check.
 	second := rcStartSecondFinder(ctx, publicationCtx, opts, prov)
+	// Specialist finders review beside both, each with one focus
+	// (review_commit_specialists.go); off unless a stage names a model.
+	specialists := rcStartSpecialists(ctx, publicationCtx, opts, prov)
 
 	started := time.Now()
 	res, err := agent.Run(ctx, opts)
@@ -1011,6 +1014,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// partial coverage is not published in its place, so stop it rather
 		// than let it bill to its deadline (Kai's review of #188).
 		rcStopSecondFinder(second)
+		rcStopSpecialists(specialists)
 		return "", rcRunFailure(model, res, err, time.Since(started), primary.Path), nil
 	}
 	fmt.Fprintln(os.Stderr)
@@ -1154,6 +1158,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// section are taken, so its bullets and a stand-in review of its own go
 	// through the same handling as the main finder's.
 	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second))
+	raw = rcWithSpecialists(raw, rcAwaitSpecialists(specialists))
 	// Which ISSUES are earlier points is set aside while the bullets are
 	// merged, folded and challenged by their wording (review_commit_earlier.go).
 	raw, earlier := rcTakeEarlierTags(raw)
