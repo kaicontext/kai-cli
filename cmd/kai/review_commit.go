@@ -363,7 +363,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// The repository's own review rules, from the same base branch
-	// (review_commit_rules.go). A broken file is reported, never fatal.
+	// (review_commit_reporules.go). A broken file is reported, never fatal.
 	if warn := rcLoadRulesFor(reviewCommitBase); warn != "" {
 		fmt.Fprintf(os.Stderr, "  warning: %s\n", warn)
 	}
