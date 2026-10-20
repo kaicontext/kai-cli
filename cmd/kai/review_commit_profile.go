@@ -55,6 +55,7 @@ var rcProfileStages = []string{
 	rcStageQuickDraft, rcStageQuickFactcheck,
 	rcStageIntent, rcStageMain, rcStageSweep, rcStageFactcheck, rcStageConclusion,
 	rcStageFinder2, rcStageSweep2, rcStageRank,
+	rcStageSpecLogic, rcStageSpecSecurity, rcStageSpecContracts,
 }
 
 // rcProfilePath is where the harness commits the profile, on the base branch.
@@ -276,7 +277,7 @@ func rcStageEffort(stage string) string {
 	switch stage {
 	case rcStageQuickDraft, rcStageQuickFactcheck:
 		return ""
-	case rcStageFinder2, rcStageSweep2, rcStageRank:
+	case rcStageFinder2, rcStageSweep2, rcStageRank, rcStageSpecLogic, rcStageSpecSecurity, rcStageSpecContracts:
 		return rcEnsembleEffort(stage)
 	}
 	return rcReasoningEffort()
