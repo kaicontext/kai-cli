@@ -234,6 +234,7 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, effort, 
 				b.WriteString(rcOneLine(intent, 600))
 				b.WriteString("\n\n")
 			}
+			b.WriteString(rcRulesBlock(files))
 			b.WriteString("FILES IN THIS PART (every ISSUES bullet must begin with one of these paths, verbatim, then :line):\n")
 			for _, f := range files {
 				fmt.Fprintf(&b, "  %s\n", f)
