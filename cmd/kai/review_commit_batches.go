@@ -33,6 +33,20 @@ var (
 // rcChallengeBatchSize and assembles one review from the results. A draft that
 // fits in one batch takes exactly the old path.
 func rcChallengeBatches(ctx context.Context, prov provider.Provider, model, draft string, sources, extra []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
+	prose, _, _, _, _, _ := rcParseReviewOutput(draft)
+	res, err := rcChallengeBatchesRaw(ctx, prov, model, draft, sources, extra, sandbox)
+	if err != nil || res == nil {
+		return res, err
+	}
+	if rcReconcileSiblings(ctx, prov, model, prose, res, sources, extra, sandbox) > 0 {
+		rcFinalize(res)
+	}
+	return res, nil
+}
+
+// rcChallengeBatchesRaw checks the allegations, in batches when there are
+// many, without reconciling verdicts across batches.
+func rcChallengeBatchesRaw(ctx context.Context, prov provider.Provider, model, draft string, sources, extra []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	prose, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
 	if len(issues) <= rcChallengeBatchSize {
 		res, err := rcChallengeDraft(ctx, prov, model, draft, rcBatchSources(sources, extra, issues), sandbox)

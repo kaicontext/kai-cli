@@ -109,7 +109,7 @@ MERGE_READY answers what should happen to this branch NEXT. It is not a grade fo
   3 — small fixes first. Real defects, but local and quick; the change itself is sound.
   2 — needs work. Defects in the core of what the change does.
   1 — do not merge. It does not do what it claims, or it breaks something that works today.
-YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Start from it, the way a person re-reviewing a branch does. Re-check every earlier point against this commit: one that still holds stays in ISSUES (at its current line) and ends with its ref exactly as given, "(earlier: <ref>)", so it is not posted to the author a second time (a DECISION from that review that still stands ends with its ref the same way) — never put a ref on a point that is new; one the code now fixes is dropped, and the prose says it was fixed; one you now find was wrong is dropped, and the prose says so. Then review what changed since — the files listed there first. Keep MERGE_READY where it was unless this commit changes code an earlier point or the score rests on, or you found a defect you can show the earlier review missed; when the score moves, say in one sentence of prose what moved it. Rereading the same code and scoring it differently is not a review finding — it is noise the author has to read.
+YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Start from it, the way a person re-reviewing a branch does. Re-check every earlier point against this commit: one that still holds stays in ISSUES (at its current line) and ends with its ref exactly as given, "(earlier: <ref>)", so it is not posted to the author a second time (a DECISION from that review that still stands ends with its ref the same way) — never put a ref on a point that is new; one the code now fixes is dropped, and the prose says it was fixed; one you now find was wrong is dropped, and the prose says so. Account for EVERY earlier ref under EARLIER in the coda, one line each: "- <ref>: open" for a point that still holds (it is also in ISSUES or DECISIONS with its tag), "- <ref>: fixed at path:line — what fixed it" naming the line in THIS commit that fixes it, or "- <ref>: wrong — why the earlier point did not hold". Mark a point fixed only when you opened that line in this commit and it removes the defect; if you could not check, say "- <ref>: open". The author's thread is resolved on "fixed", so a wrong "fixed" hides a live bug. Then review what changed since — the files listed there first. Keep MERGE_READY where it was unless this commit changes code an earlier point or the score rests on, or you found a defect you can show the earlier review missed; when the score moves, say in one sentence of prose what moved it. Rereading the same code and scoring it differently is not a review finding — it is noise the author has to read.
 
 ANSWERED POINTS: a point of yours that someone replied to is theirs now. Do not raise it again — not in ISSUES, not in DECISIONS, not as a request in the prose — unless this commit changed the code it is about, or you can show from the code that the reply is wrong; then keep it and say in one sentence why the reply does not hold. An answered point never lowers MERGE_READY: score as if it had not been raised. When no open point is left, the score says so.
 
@@ -122,7 +122,9 @@ ISSUES:
 - path:line — <one sentence per root cause> (also: path:line, …only when the same cause recurs) (severity: high|medium|low)
 - nit: path:line — <a defect that cannot change behaviour>
 DECISIONS:
-- [money|limit|sends|deletes|access|contract] <what the author is deciding, who it affects, and the consequence — no path:line; it is not a defect>`
+- [money|limit|sends|deletes|access|contract] <what the author is deciding, who it affects, and the consequence — no path:line; it is not a defect>
+EARLIER: (only when YOUR PREVIOUS REVIEW is present — one line per earlier ref)
+- <ref>: open | fixed at path:line — <what fixed it> | wrong — <why>`
 
 const rcMaxAuthorContextBytes = 8 * 1024
 
@@ -263,11 +265,11 @@ func init() {
 	reviewCommitCmd.Flags().StringVar(&reviewCommitFormat, "format", "text", "output format: text|json")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBase, "base", "", "review the aggregate diff of <base>...<commit> (PR range) instead of a single commit")
 	reviewCommitCmd.Flags().StringVar(&reviewCommitBranch, "branch", "", "branch name to record on the finding (default: GITHUB_HEAD_REF / GITHUB_REF_NAME / the checked-out branch)")
-	// --fast is the default, so the flag is only ever redundant. It stays
-	// because CI pods, scripts, and the built-in review workflow all spell it
-	// out, and a flag that silently becomes an error breaks them on the next
-	// image bump for no gain.
-	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default; the flag is explicit-only)")
+	// --fast is the default, so the flag is only ever redundant. An explicit
+	// --fast now refuses unless KAI_REVIEW_QUICK_PASS=1 (the CI quick pass is
+	// retired, see runReviewCommit); the flag stays so the CI workflow that
+	// still passes it fails fast and tolerated instead of on an unknown flag.
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default without flags; an explicit --fast refuses unless KAI_REVIEW_QUICK_PASS=1)")
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitDeep, "deep", false, "the grounded review: agent harness + graph, minutes not seconds — requires `kai capture`")
 	rootCmd.AddCommand(reviewCommitCmd)
 }
@@ -288,6 +290,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--fast and --deep are opposites; pass one or neither (the default is --fast)")
 	}
 	fast := !reviewCommitDeep
+	// The quick pass is retired from CI: its comment was deleted as soon as
+	// the grounded review posted, so it cost a model call and a minute of
+	// every review for nothing a reader kept. The CI workflow still asks for
+	// it by name (--fast) and tolerates a failure, so refusing here skips it
+	// in a second. A local run without flags still gets the fast default.
+	if reviewCommitFast && os.Getenv("KAI_REVIEW_QUICK_PASS") != "1" {
+		return fmt.Errorf("the quick pass is retired; the grounded review (--deep) is the review (KAI_REVIEW_QUICK_PASS=1 runs it anyway)")
+	}
 
 	// The graph is REQUIRED for the grounded review and OPTIONAL for --fast.
 	// That is the whole latency win: a fast pass that needed a captured graph
@@ -366,12 +376,22 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		rcStageSweep:          rcSweepModel(model),
 		rcStageFactcheck:      rcChallengeModel(model),
 		rcStageConclusion:     rcStageModel(rcStageConclusion, model),
+		rcStageFinder2:        rcEnsembleModel(rcStageFinder2),
+		rcStageSweep2:         rcEnsembleModel(rcStageSweep2),
+		rcStageRank:           rcEnsembleModel(rcStageRank),
 	}
 	if err := rcCheckProfileEfforts(stageModels); err != nil {
 		return err
 	}
 	if line := rcDescribeProfile(stageModels); line != "" {
 		fmt.Fprintln(os.Stderr, line)
+	}
+
+	// The pull request description a person would write, asked for beside the
+	// review (review_commit_description.go); only a bundle carries it.
+	var collectDescription func(time.Duration) string
+	if reviewCommitFormat == "json" {
+		collectDescription = rcStartDescription(ctx, prov, rcStageModel(rcStageIntent, model), authorContext, diff)
 	}
 
 	// Diff stat up front: it is pure git, and --fast hands the changed paths to
@@ -444,6 +464,8 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	if fast {
 		readiness = rcCapFastReadiness(readiness)
 		risks = rcFilterFastIssues(risks)
+	} else if strings.TrimSpace(prose) != "" {
+		prose = rcDefectsOnlyProse(prose)
 	}
 
 	// An empty review is a FAILURE, not a finding. Shipping a bundle with no
@@ -538,6 +560,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	claims := make([]finding.Claim, 0, len(flags))
 	tree := rcTreeFiles(hash)
 	for _, r := range risks {
+		r = rcLocateNamedIssue(hash, r, tree, rcFileLines)
 		claims = append(claims, rcGroundIssue(hash, r, tree, rcFileLines))
 	}
 	for _, d := range decisions {
@@ -595,6 +618,16 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		if fast {
 			depth = "fast"
 		}
+		// The fast pass waits briefly: it is the early answer, and a late
+		// description is written by the grounded pass instead.
+		description := ""
+		if collectDescription != nil && !incomplete {
+			wait := 90 * time.Second
+			if fast {
+				wait = 20 * time.Second
+			}
+			description = collectDescription(wait)
+		}
 		// incomplete rides along because the counts cannot carry it: a run
 		// that stopped before its conclusion emits no risks, no decisions and
 		// an unknown intent, which is arithmetically identical to a review
@@ -615,7 +648,16 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// IncompleteReason says, in fixed labels, why an incomplete
 			// review stopped, so the server need not infer it from Review.
 			IncompleteReason *rcIncompleteReason `json:"incompleteReason,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason}, "", "  ")
+			// Earlier is one status per point of the previous review —
+			// open, fixed, withdrawn or unknown — for kai-server to close
+			// the threads of fixed and withdrawn points. Only on a review
+			// that published: an unfinished run settles nothing.
+			Earlier []rcEarlierStatus `json:"earlier,omitempty"`
+			// Description is the pull request description a person would
+			// write: what the change does, not what the review thinks of it.
+			// kai-server puts it in the PR's "Kai context" section.
+			Description string `json:"description,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -843,10 +885,13 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			len(src), len(unresolved), time.Since(phase).Round(time.Millisecond))
 	}
 	// What Kai said last time about this pull request (review_commit_prior.go).
-	if prior := rcPriorFromEnv(); prior != nil {
-		changed, known := rcChangedSince(prior.Head)
-		user.WriteString(rcPriorBlock(prior, changed, known))
-		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(changed))
+	prior := rcPriorFromEnv()
+	var priorChanged []string
+	var priorKnown bool
+	if prior != nil {
+		priorChanged, priorKnown = rcChangedSince(prior.Head)
+		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
+		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
 	// packages the change newly imports (review_commit_npmdeps.go). They go to
@@ -938,6 +983,10 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// tightens. Zero-value Speed resolves KAI_SPEED → thorough (a no-op).
 	agent.ApplyEffort(&opts, 0)
 
+	// A second finder on another model family reviews beside the first
+	// (review_commit_ensemble.go); its issues join the draft before the check.
+	second := rcStartSecondFinder(ctx, publicationCtx, opts, prov)
+
 	started := time.Now()
 	res, err := agent.Run(ctx, opts)
 	if err != nil {
@@ -947,6 +996,11 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// this line in the job log. Report it the way a failed fact-check is
 		// reported instead, so the bundle says which kind of failure it was.
 		fmt.Fprintf(os.Stderr, "  review run failed: %v\n", err)
+		// A run that failed outright (the provider failing every retry) is
+		// reported as a failure, as before the ensemble; the second finder's
+		// partial coverage is not published in its place, so stop it rather
+		// than let it bill to its deadline (Kai's review of #188).
+		rcStopSecondFinder(second)
 		return "", rcRunFailure(model, res, err, time.Since(started), primary.Path), nil
 	}
 	fmt.Fprintln(os.Stderr)
@@ -1085,9 +1139,18 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		fmt.Fprintf(os.Stderr, "  coda had no ISSUES section — %d located bullet(s) taken from the prose\n", n)
 		raw = recovered
 	}
+	// The second finder's issues join the first's before the sweep and the
+	// check (review_commit_ensemble.go), and before the earlier-point tags and
+	// section are taken, so its bullets and a stand-in review of its own go
+	// through the same handling as the main finder's.
+	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second))
 	// Which ISSUES are earlier points is set aside while the bullets are
 	// merged, folded and challenged by their wording (review_commit_earlier.go).
 	raw, earlier := rcTakeEarlierTags(raw)
+	// The reviewer's account of the previous review's points
+	// (review_commit_status.go): read now, because the published review is
+	// reassembled from the fact-check and carries no EARLIER list.
+	raw, earlierClaims := rcTakeEarlierSection(raw)
 	if rcUsableCoda(raw) {
 		sw := rcAwaitSweep(sweep)
 		if len(sw.Issues) > 0 {
@@ -1132,6 +1195,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			inc.ChallengeCategory, inc.ChallengeModel = rcFailureCategory(err), gateModel
 			return "", inc, nil
 		}
+		// The check settled what is true; the selection step chooses what is
+		// worth publishing (review_commit_ensemble.go).
+		rcRankSupported(publicationCtx, prov, intent, diff, len(changed), res)
 		raw = res.Review
 		inc.Challenge = res
 		// One root cause, one finding: a short call groups the confirmed
@@ -1141,7 +1207,17 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			raw = grouped
 		}
 	}
-	return rcPutEarlierTags(raw, earlier), inc, nil
+	final := rcPutEarlierTags(raw, earlier)
+	if prior != nil {
+		inc.Earlier = rcEarlierStatuses(prior, earlierClaims, final, inc.Challenge, earlier, priorChanged, priorKnown)
+		counts := map[string]int{}
+		for _, e := range inc.Earlier {
+			counts[e.Status]++
+		}
+		fmt.Fprintf(os.Stderr, "  earlier points: %d fixed, %d withdrawn, %d open, %d unknown\n",
+			counts[rcEarlierFixed], counts[rcEarlierWithdrawn], counts[rcEarlierOpen], counts[rcEarlierUnknown])
+	}
+	return final, inc, nil
 }
 
 // rcCommitContextReserve is how much of rcMaxAuthorContextBytes is held back
@@ -1491,6 +1567,18 @@ type rcIncomplete struct {
 	// Unlike ChallengeFailure, the review body is real and kept; items it
 	// could not settle are listed in it under "Could not verify".
 	Challenge *rcChallengeResult
+	// Earlier is what became of each point of the previous review
+	// (review_commit_status.go); nil when there was none.
+	Earlier []rcEarlierStatus
+}
+
+// rcEarlierOf is the earlier-point statuses a bundle carries: none from a
+// review that did not finish.
+func rcEarlierOf(inc *rcIncomplete, incomplete bool) []rcEarlierStatus {
+	if inc == nil || incomplete {
+		return nil
+	}
+	return inc.Earlier
 }
 
 // rcCoverage is the machine-written record of what a review actually did:
@@ -1643,10 +1731,16 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 // failure returns "" and the caller keeps whatever the run produced. The
 // second result is rcFailureCategory's label for why it returned "".
 func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
+	return rcConcludeWithModel(ctx, prov, rcStageModel(rcStageConclusion, model), transcript)
+}
+
+// rcConcludeWithModel is rcConcludeFromTranscript on exactly the model given,
+// for a finder whose transcript must be concluded by the model that wrote it
+// (the second finder, review_commit_ensemble.go).
+func rcConcludeWithModel(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
 	if len(transcript) == 0 {
 		return "", "no_transcript"
 	}
-	model = rcStageModel(rcStageConclusion, model)
 	// Preserve the actual evidence. Prefix trimming can remove the changed
 	// function while retaining the model's allegation about it. Desktop #418's
 	// incorrect shell review went through this fallback.
@@ -1861,6 +1955,12 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 		case labelled && key == "decisions":
 			section = "decisions"
 			sawMachineLine = true
+		case labelled && key == "earlier":
+			// Statuses of the previous review's points (review_commit_status.go),
+			// read separately. Never findings: a bullet here must not be
+			// filed under the ISSUES or DECISIONS before it.
+			section = "earlier"
+			sawMachineLine = true
 		case labelled && key == "intent_match":
 			section = ""
 			sawMachineLine = true
@@ -1890,9 +1990,10 @@ func rcParseReviewOutput(raw string) (prose string, risks, decisions []string, m
 			// rc-d93f2dc3595c38e0 shipped one as a verified claim).
 			bullet := rcUnwrapMachineBullet(t)
 			if item := strings.TrimSpace(strings.TrimPrefix(bullet, "-")); item != "" && !rcIsEmptyListItem(item) {
-				if section == "decisions" {
+				switch section {
+				case "decisions":
 					decisions = append(decisions, item)
-				} else {
+				case "issues":
 					risks = append(risks, item)
 				}
 			}
