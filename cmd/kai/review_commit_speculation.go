@@ -50,6 +50,20 @@ func rcSpeculativePhrase(item string) (string, bool) {
 	return "", false
 }
 
+// rcLatentDefectsEnabled relaxes the "trigger must exist today" rule so a
+// correctness defect that is wrong as written counts even when the path that
+// reaches it would have to be added. OFF by default: production keeps the
+// precision-first behaviour (the speculative drop below and the gate's
+// hypothetical-trigger refutation) unchanged. It exists to A/B the recall it
+// costs on the offline benchmark, which scores latent defects as true positives.
+func rcLatentDefectsEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("KAI_REVIEW_LATENT_DEFECTS"))) {
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return false
+}
+
 // rcWithoutSpeculativeIssues removes, from a draft's ISSUES list, every bullet
 // whose trigger is a future change, and returns the draft without them plus
 // one refuted result per removal. It runs BEFORE the publication gate: the
@@ -58,6 +72,12 @@ func rcSpeculativePhrase(item string) (string, bool) {
 // — and the gate is not asked to spend its budget on it. Only ISSUES are
 // touched; prose and DECISIONS pass through.
 func rcWithoutSpeculativeIssues(draft string) (string, []rcAllegationResult) {
+	if rcLatentDefectsEnabled() {
+		// Let the gate adjudicate future-trigger issues on merit instead of
+		// dropping them by phrase; the gate's relaxed clause then supports the
+		// wrong-as-written ones. Recall experiment only; default path unchanged.
+		return draft, nil
+	}
 	start := 0
 	if i := strings.Index(draft, rcReviewDataMarker); i >= 0 {
 		start = i + len(rcReviewDataMarker)
