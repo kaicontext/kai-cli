@@ -211,6 +211,14 @@ type rcAllegationResult struct {
 	Finding        string          `json:"finding,omitempty"`
 	Remedy         string          `json:"remedy,omitempty"`
 	WithheldRemedy string          `json:"withheldRemedy,omitempty"`
+	// Written by the humanize pass (review_commit_humanize.go) on a supported
+	// allegation: a title, and the explanation, trigger, impact and fix in
+	// plain words. kai-server renders them over the fields above when set.
+	Title  string `json:"title,omitempty"`
+	Plain  string `json:"plain,omitempty"`
+	When   string `json:"when,omitempty"`
+	Impact string `json:"impact,omitempty"`
+	Fix    string `json:"fix,omitempty"`
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
 	unchecked bool

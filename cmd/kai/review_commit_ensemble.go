@@ -44,6 +44,9 @@ var rcEnsembleDefaults = map[string]struct{ modelEnv, model, effortEnv, effort s
 	rcStageSweep2: {"KAI_SWEEP2_MODEL", "z-ai/glm-5.2", "KAI_SWEEP2_EFFORT", ""},
 	// One call per review, so the strongest judgement available.
 	rcStageRank: {"KAI_RANK_MODEL", "anthropic/claude-opus-5.5", "KAI_RANK_EFFORT", "medium"},
+	// Wording, not judgement: one short call that rewrites what is already
+	// settled, so a strong writer with no reasoning effort.
+	rcStageHumanize: {"KAI_HUMANIZE_MODEL", "anthropic/claude-sonnet-5.5", "KAI_HUMANIZE_EFFORT", ""},
 }
 
 // rcEnsembleModel is an ensemble stage's model: the profile's, else its
