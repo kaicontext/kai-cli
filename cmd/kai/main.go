@@ -44,6 +44,7 @@ import (
 	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/gitio"
 	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/ignore"
 	"github.com/kaicontext/kai-engine/intent"
 	"github.com/kaicontext/kai-engine/kaipath"
 	"github.com/kaicontext/kai-engine/memstat"
@@ -5348,12 +5349,7 @@ func runInit(cmd *cobra.Command, args []string) (err error) {
 		return fmt.Errorf("creating kai data directory: %w", err)
 	}
 
-	// Maintain a .gitignore entry only when the data dir lives in the
-	// worktree (.kai); the .git/kai layout is auto-ignored by git so we
-	// skip touching .gitignore there.
-	if kaipath.NeedsGitignore(kaiDir) {
-		ensureGitignore(filepath.Base(kaiDir))
-	}
+	initGitignore(kaiDir)
 
 	// --git-bridge: mark bridge enabled before runHookInstall runs so the
 	// post-commit hook gets written. Requires .git/ to actually exist.
@@ -6322,6 +6318,40 @@ func printBYOMHintIfActive() {
 	}
 }
 
+// initGitignore applies kai init's .gitignore rules: the worktree data dir
+// entry, plus the greenfield seed when the repo has no .gitignore yet.
+func initGitignore(kaiDir string) {
+	// Greenfield: the repo has no .gitignore yet (decided before kai writes
+	// any entry of its own below or in writeAgentHooks).
+	_, giErr := os.Stat(".gitignore")
+	greenfield := os.IsNotExist(giErr)
+
+	// Maintain a .gitignore entry only when the data dir lives in the
+	// worktree (.kai); the .git/kai layout is auto-ignored by git so we
+	// skip touching .gitignore there.
+	if kaipath.NeedsGitignore(kaiDir) {
+		ensureGitignore(filepath.Base(kaiDir))
+	}
+
+	// Greenfield seeding (same rule as kit): when kai creates the repo's
+	// .gitignore, seed common build/runtime artifacts so the first
+	// `git add -A` or capture doesn't commit them (2026-10-21: a Python
+	// repo's __pycache__/*.pyc went into history and had to be purged).
+	// Only-on-create never overrides an existing project decision.
+	if greenfield {
+		for _, entry := range greenfieldIgnores {
+			ensureGitignore(entry)
+		}
+	}
+}
+
+// greenfieldIgnores seed a .gitignore that kai init creates (kit uses the
+// same list).
+var greenfieldIgnores = []string{
+	"node_modules/", "dist/", "build/", "*.sqlite", "*.sqlite3", "*.db",
+	"__pycache__/", "*.pyc", ".venv/", ".DS_Store",
+}
+
 // ensureGitignore appends entry to .gitignore if not already present.
 func ensureGitignore(entry string) {
 	const gitignorePath = ".gitignore"
@@ -6416,6 +6446,12 @@ func runGitImport(db *graph.DB) error {
 
 	creator := snapshot.NewCreator(db, nil)
 	refMgr := ref.NewRefManager(db)
+	purged := loadPurgePatterns(kaiDir)
+	// The working tree's ignore rules, as every directory capture applies.
+	ignoreRules, ierr := ignore.LoadFromDir(".")
+	if ierr != nil {
+		return fmt.Errorf("loading ignore rules: %w", ierr)
+	}
 
 	// Pin every imported commit in graph_refs (batched: one load, one save)
 	// so drift classification can resolve exact-SHA states for the whole
@@ -6447,7 +6483,7 @@ func runGitImport(db *graph.DB) error {
 		if serr != nil {
 			return fmt.Errorf("reading commit %.12s: %w", commitHash, serr)
 		}
-		snapshotID, err := creator.CreateSnapshot(dirLangSource{gs})
+		snapshotID, err := creator.CreateSnapshot(dirLangSource{GitSource: gs, purged: purged, ignore: ignoreRules})
 		if err != nil {
 			return fmt.Errorf("snapshotting commit %.12s: %w", commitHash, err)
 		}
@@ -6508,26 +6544,128 @@ func runGitImport(db *graph.DB) error {
 	return nil
 }
 
+// purgedFile is where `kai purge` records its patterns.
+func purgedFile(kd string) string { return filepath.Join(kd, "purged.json") }
+
+type purgeRecord struct {
+	Patterns []string `json:"patterns"`
+}
+
+func loadPurgePatterns(kd string) []string {
+	data, err := os.ReadFile(purgedFile(kd))
+	if err != nil {
+		return nil
+	}
+	var rec purgeRecord
+	if json.Unmarshal(data, &rec) != nil {
+		return nil
+	}
+	return rec.Patterns
+}
+
+func recordPurgePatterns(kd string, patterns []string) error {
+	seen := map[string]bool{}
+	all := loadPurgePatterns(kd)
+	for _, p := range all {
+		seen[p] = true
+	}
+	for _, p := range patterns {
+		if !seen[p] {
+			all = append(all, p)
+			seen[p] = true
+		}
+	}
+	data, err := json.MarshalIndent(purgeRecord{Patterns: all}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(purgedFile(kd), append(data, '\n'), 0644)
+}
+
+// purgeMatch mirrors kai-engine graph.matchesAnyPattern (the matcher
+// `kai purge` used): exact path, filepath.Match, "dir/**" prefixes and
+// "**/x" suffixes.
+func purgeMatch(patterns []string, path string) bool {
+	for _, p := range patterns {
+		if p == path {
+			return true
+		}
+		if ok, _ := filepath.Match(p, path); ok {
+			return true
+		}
+		if strings.HasSuffix(p, "/**") && strings.HasPrefix(path, strings.TrimSuffix(p, "**")) {
+			return true
+		}
+		if strings.HasPrefix(p, "**/") {
+			suffix := strings.TrimPrefix(p, "**/")
+			if strings.HasSuffix(path, "/"+suffix) || path == suffix {
+				return true
+			}
+			if ok, _ := filepath.Match(suffix, filepath.Base(path)); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // dirLangSource labels a git tree's files with the directory capture's
 // language classification, so a commit imported from git objects shares File
 // nodes (and their symbols) with captures of the same files from disk —
 // gitio and dirio disagree on a few extensions, e.g. .proto.
-type dirLangSource struct{ *gitio.GitSource }
+// It also drops what a directory capture would never record — files the
+// repo's ignore rules exclude (.kaiignore, .gitignore, kai's structural
+// excludes; the checkout-based import got these from dirio) — and files
+// matching patterns from `kai purge`, so re-importing history doesn't
+// resurrect what was purged.
+type dirLangSource struct {
+	*gitio.GitSource
+	purged []string
+	ignore *ignore.Matcher
+}
+
+// excluded reports whether path is dropped from an imported snapshot.
+func (s dirLangSource) excluded(path string) bool {
+	if purgeMatch(s.purged, path) {
+		return true
+	}
+	if s.ignore == nil {
+		return false
+	}
+	// Directory patterns ("ignored-dir/") only match directories, and the
+	// directory walker never descends into an ignored one — check every
+	// ancestor, then the file itself.
+	parts := strings.Split(path, "/")
+	for i := 1; i < len(parts); i++ {
+		if s.ignore.Match(strings.Join(parts[:i], "/"), true) {
+			return true
+		}
+	}
+	return s.ignore.Match(path, false)
+}
 
 func (s dirLangSource) GetFiles() ([]*filesource.FileInfo, error) {
 	files, err := s.GitSource.GetFiles()
 	if err != nil {
 		return nil, err
 	}
+	out := files[:0]
 	for _, f := range files {
+		if s.excluded(f.Path) {
+			continue
+		}
 		if f.Mode != filesource.ModeSymlink {
 			f.Lang = dirio.DetectLang(f.Path)
 		}
+		out = append(out, f)
 	}
-	return files, nil
+	return out, nil
 }
 
 func (s dirLangSource) GetFile(path string) (*filesource.FileInfo, error) {
+	if s.excluded(path) {
+		return nil, os.ErrNotExist
+	}
 	f, err := s.GitSource.GetFile(path)
 	if err == nil && f != nil && f.Mode != filesource.ModeSymlink {
 		f.Lang = dirio.DetectLang(f.Path)
@@ -7178,7 +7316,15 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	var capSummary *captureSummary
 	if !isFirstScan && !skipSummary {
 		debugf("Computing changes...")
-		capSummary = computeCaptureSummary(db, snapshotID, matcher)
+		// Compare against what this capture replaces: the workspace head when
+		// one is checked out, else snap.latest. It used to resolve @snap:last,
+		// which in a fresh clone (empty log) fell back to the newest Snapshot
+		// node — this capture itself — and printed "no changes".
+		baseline := previousSnapID
+		if existingLatestRef != nil {
+			baseline = existingLatestRef.TargetID
+		}
+		capSummary = computeCaptureSummary(db, baseline, snapshotID, matcher)
 		debugf("Computing changes: done")
 	}
 	captureTimingPrint("11-change-summary", captureTimingPhaseStart)
@@ -7397,14 +7543,11 @@ func bucketChangeTypes(changeTypes map[string][]string) map[ChangeBucket][]strin
 }
 
 // computeCaptureSummary computes a quick summary of changes between @snap:last and new snapshot
-func computeCaptureSummary(db *graph.DB, newSnapshotID []byte, matcher *module.Matcher) *captureSummary {
+func computeCaptureSummary(db *graph.DB, baseSnapID, newSnapshotID []byte, matcher *module.Matcher) *captureSummary {
 	summary := &captureSummary{
 		changeTypes: make(map[string][]string),
 	}
-
-	// Get baseline snapshot
-	baseSnapID, err := resolveSnapshotID(db, "@snap:last")
-	if err != nil {
+	if len(baseSnapID) == 0 {
 		return summary
 	}
 
@@ -17856,9 +17999,75 @@ func runFetch(cmd *cobra.Command, args []string) (err error) {
 		}
 		fmt.Printf("  %s -> %s\n", localName, hex.EncodeToString(r.Target)[:12])
 	}
+	if n := adoptRemoteHistory(refMgr, remoteRefs); n > 0 {
+		fmt.Printf("  adopted %d history ref(s) (tags, snapshots, git commits)\n", n)
+	}
 
 	fmt.Println("Fetch complete.")
 	return nil
+}
+
+// historySnapRef matches capture-history refs (snap.<timestamp>).
+var historySnapRef = regexp.MustCompile(`^snap\.\d{8}T\d{6}`)
+
+// isHistoryRef reports whether a remote ref is history a local repo should
+// see as its own: tags, capture-history snapshots and git-commit mappings.
+// Branch-like refs (snap.latest, snap.main, git.HEAD, cs.*, ws.*) are left
+// to pull/checkout.
+func isHistoryRef(name string) bool {
+	switch {
+	case strings.HasPrefix(name, "tag."):
+		return true
+	case strings.HasPrefix(name, "git.") && name != "git.HEAD":
+		return true
+	case historySnapRef.MatchString(name):
+		return true
+	}
+	return false
+}
+
+// adoptRemoteHistory creates local refs for remote history refs that have no
+// local ref yet (never moves an existing ref). Without this, fetched history
+// lived only under remote/<name>/*, invisible to `kai log` and `kai tag list`.
+func adoptRemoteHistory(refMgr *ref.RefManager, remoteRefs []*remote.RefEntry) int {
+	n := 0
+	for _, r := range remoteRefs {
+		if !isHistoryRef(r.Name) {
+			continue
+		}
+		if existing, _ := refMgr.Get(r.Name); existing != nil {
+			continue
+		}
+		if err := refMgr.Set(r.Name, r.Target, ref.KindSnapshot); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// fetchRemoteHistory hydrates every history snapshot the remote has, records
+// the remote-tracking refs, and adopts the history refs locally. Returns how
+// many history refs the remote has.
+func fetchRemoteHistory(db *graph.DB, client *remote.Client, remoteName string) (int, error) {
+	remoteRefs, err := client.ListRefs("")
+	if err != nil {
+		return 0, err
+	}
+	refMgr := ref.NewRefManager(db)
+	n := 0
+	for _, r := range remoteRefs {
+		if !isHistoryRef(r.Name) {
+			continue
+		}
+		if err := hydrateSnapshot(db, client, r.Target); err != nil {
+			fmt.Printf("  Warning: hydrating %s: %v\n", r.Name, err)
+			continue
+		}
+		_ = refMgr.Set(fmt.Sprintf("remote/%s/%s", remoteName, r.Name), r.Target, ref.KindSnapshot)
+		n++
+	}
+	adoptRemoteHistory(refMgr, remoteRefs)
+	return n, nil
 }
 
 // pullTagsAndReviews brings tag.* and review.* refs across during `kai pull`
@@ -18177,8 +18386,14 @@ func runPull(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	// Update local snap.latest
+	prevLatest, _ := refMgr.Get("snap.latest")
 	if err := refMgr.Set("snap.latest", snapRef.Target, ref.KindSnapshot); err != nil {
 		return fmt.Errorf("updating local snap.latest: %w", err)
+	}
+	// Log the pulled head like a local capture, so @snap:last / @snap:prev
+	// follow what this repo actually moved through.
+	if prevLatest == nil || !bytes.Equal(prevLatest.TargetID, snapRef.Target) {
+		_ = ref.NewLogManager(db).Append(ref.KindSnapshot, snapRef.Target)
 	}
 
 	// Advance the remote-tracking ref to the head we just synced so a later pull
@@ -18441,6 +18656,10 @@ func runCloneKaiOnly(args []string) error {
 	refMgr := ref.NewRefManager(db)
 	_ = refMgr.Set("snap.latest", headRef.Target, ref.KindSnapshot)
 	_ = refMgr.Set("snap.main", headRef.Target, ref.KindSnapshot)
+	// Record it in the snapshot log, as a capture would, so @snap:last and
+	// @snap:prev resolve to this repo's history rather than to whichever
+	// snapshot node happened to be created last.
+	_ = ref.NewLogManager(db).Append(ref.KindSnapshot, headRef.Target)
 	// Also store as remote-tracking ref so kai pull recognizes no divergence
 	_ = refMgr.Set("remote/origin/snap.latest", headRef.Target, ref.KindSnapshot)
 
@@ -18453,12 +18672,19 @@ func runCloneKaiOnly(args []string) error {
 	}
 	fmt.Printf("  Wrote %d files\n", result.FilesWritten)
 
-	// Add the data dir to .gitignore so a future `git init` plays nicely.
-	// Only needed when the data dir lives in the worktree (.kai); when it
-	// lands in .git/kai, git ignores it automatically.
-	if kaipath.NeedsGitignore(kaiPath) {
-		ensureGitignore(filepath.Base(kaiPath))
+	// Bring the history across: every snapshot, tag and git-commit mapping the
+	// remote has, adopted as local refs. Clone used to fetch only snap.main, so
+	// `kai log`, tags and bisect saw a single snapshot.
+	fmt.Println("Fetching history...")
+	if n, err := fetchRemoteHistory(db, client, "origin"); err != nil {
+		fmt.Printf("  Warning: history not fetched (%v) — run `kai fetch`\n", err)
+	} else {
+		fmt.Printf("  %d history ref(s)\n", n)
 	}
+
+	// No .gitignore edit: kai never captures its own data dir (.kai/ is a
+	// structural exclusion in the ignore matcher), and appending to the
+	// repo's tracked .gitignore made every clone push that edit back.
 
 	fmt.Println()
 	fmt.Printf("✓ Cloned %s/%s into %s\n", tenant, repo, dirName)
@@ -19007,6 +19233,11 @@ func runPurge2(cmd *cobra.Command, args []string) error {
 
 	if err := db.ExecutePurge(plan); err != nil {
 		return fmt.Errorf("executing purge: %w", err)
+	}
+	// Remember the patterns so re-importing history from git (kai init,
+	// kai import --git) doesn't bring the purged files back.
+	if err := recordPurgePatterns(kaiDir, args); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not record purge patterns (%v) — a later `kai init` may re-import these files from git\n", err)
 	}
 
 	fmt.Printf("\nPurge complete.")

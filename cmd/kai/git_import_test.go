@@ -28,6 +28,11 @@ func gitT(t *testing.T, args ...string) string {
 // uncommitted files leaked into every historical snapshot.
 func TestGitImportMapsEveryCommitFromGitObjects(t *testing.T) {
 	setupBridgeRepo(t) // git repo with one commit (hello.txt) + .kai
+	// Like a real repo, don't commit kai's data dir (capture always
+	// excludes it, so a committed .kai/ could never match).
+	if err := os.WriteFile(".gitignore", []byte(".kai/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	for i, step := range []map[string]string{
 		{"main.go": "package main\n"},
 		{"main.go": "package main\n\nfunc main() {}\n", "run.sh": "#!/bin/sh\necho hi\n"},
@@ -82,7 +87,7 @@ func TestGitImportMapsEveryCommitFromGitObjects(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(edges) != len(inGit) {
-			t.Errorf("commit %.7s: snapshot has %d files, git tree has %d", c, len(edges), len(inGit))
+			t.Errorf("commit %.7s: snapshot has %d files, git tree has %d: %v", c, len(edges), len(inGit), inGit)
 		}
 		for _, e := range edges {
 			node, _ := db.GetNode(e.Dst)
