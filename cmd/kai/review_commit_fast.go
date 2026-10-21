@@ -59,19 +59,11 @@ const rcFastMaxTokens = 2000
 // confirm and posts a hollow all-clear, or it asserts what it never checked.
 // So this prompt tells the model what it CAN conclude from a diff alone, makes
 // the shallow scope part of the deliverable, and forbids the green check.
-// rcFastTriggerClause* mirror the deep finder knob for the fast pass; same
-// KAI_REVIEW_LATENT_DEFECTS flag, default off.
-const rcFastTriggerClauseDefault = `The trigger must exist today: "dormant now, but breaks if X is ever added" or "a footgun for a future change" is not an issue at all.`
-
-const rcFastTriggerClauseLatent = `Wrong-as-written code is an issue even if the path that reaches it would have to be added ("dormant now: only one handler writes this field, but the delete removes the others' rows"); only a pure "footgun if someone later rewrites this", where the code is correct today, is not an issue.`
-
-func rcFastReviewSystemText() string {
-	if !rcLatentDefectsEnabled() {
-		return rcFastReviewSystem
-	}
-	return strings.Replace(rcFastReviewSystem, rcFastTriggerClauseDefault, rcFastTriggerClauseLatent, 1)
-}
-
+//
+// The fast pass is deliberately NOT relaxed by KAI_REVIEW_LATENT_DEFECTS: it is
+// retired in --deep (the benchmark's mode and where the flag is measured), has
+// no tools to verify a latent claim, and its ISSUES flip the PR badge. Latent
+// defects belong to the grounded finder and the gate, which can check them.
 const rcFastReviewSystem = `You are doing a FAST FIRST PASS on a merged commit or PR range. You get the author's description, the commit message, the diff, the symbols this change declares, and a set of already-resolved identifier lookups. You have NO tools: you cannot read a file the diff did not touch, cannot look up callers or dependents, and cannot search the web. A slower, graph-grounded review of this same change is running behind you and will supersede this one.
 
 That shapes what you are for. Report what is VISIBLE IN THE DIFF ITSELF — the changed hunks and their context lines, read carefully. These are the defects a careful reader finds without leaving the patch:
@@ -204,7 +196,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 
 	resp, err := prov.Send(cctx, provider.Request{
 		Model:           model,
-		System:          rcFastReviewSystemText(),
+		System:          rcFastReviewSystem,
 		MaxTokens:       rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)),
 		ReasoningEffort: rcStageEffort(rcStageQuickDraft),
 		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: user.String()}}}},

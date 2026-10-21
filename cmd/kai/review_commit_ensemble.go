@@ -213,15 +213,23 @@ func rcWithSecondFinder(raw string, r rcFinderResult) string {
 // few defects worth a maintainer's attention; past the cap, a review stops
 // being read.
 func rcRankCap(changedFiles int) int {
+	limit := 6
 	switch {
 	case changedFiles <= 3:
-		return 3
+		limit = 3
 	case changedFiles <= 10:
-		return 4
+		limit = 4
 	case changedFiles <= 25:
-		return 5
+		limit = 5
 	}
-	return 6
+	// Latent defects are ordered last by the selection step, so on a change
+	// already at the cap they would be the ones cut — the flag would buy no
+	// recall. Raise the cap under KAI_REVIEW_LATENT_DEFECTS so the recovered
+	// defects can actually publish; off by default, so production is unchanged.
+	if rcLatentDefectsEnabled() {
+		limit += 2
+	}
+	return limit
 }
 
 const (

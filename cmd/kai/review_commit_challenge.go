@@ -1245,6 +1245,13 @@ func rcValidateChallenge(raw string, issues, draftDecisions []string, sources []
 
 	res := &rcChallengeResult{Allegations: results, Decisions: dresults, unassessed: unassessed}
 	supported, refuted, unresolved := rcCountAllegations(results)
+	// Under the latent-defects experiment the gate sees the previously-dropped
+	// not-reached allegations too; they share the same per-call lookup budget,
+	// so a rising unresolved count is the signal that the budget is starving
+	// real allegations (edge case R3). Surface it so an A/B run can catch it.
+	if rcLatentDefectsEnabled() {
+		fmt.Fprintf(os.Stderr, "  latent-defects: gate settled %d supported, %d refuted, %d unresolved (watch unresolved for budget starvation)\n", supported, refuted, unresolved)
+	}
 	keptDecisions, unresolvedDecisions := 0, 0
 	for _, d := range dresults {
 		switch d.Status {
