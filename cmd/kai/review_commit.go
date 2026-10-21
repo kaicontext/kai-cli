@@ -387,6 +387,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		rcStageFinder2:        rcEnsembleModel(rcStageFinder2),
 		rcStageSweep2:         rcEnsembleModel(rcStageSweep2),
 		rcStageRank:           rcEnsembleModel(rcStageRank),
+		rcStageHumanize:       rcEnsembleModel(rcStageHumanize),
 	}
 	if err := rcCheckProfileEfforts(stageModels); err != nil {
 		return err
@@ -1209,6 +1210,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// worth publishing (review_commit_ensemble.go).
 		rcRankSupported(publicationCtx, prov, intent, diff, len(changed), res)
 		raw = res.Review
+		// Then the confirmed findings, reworded for the person reading the PR
+		// (review_commit_humanize.go). Wording only: no verdict changes.
+		rcHumanize(publicationCtx, prov, intent, res)
 		inc.Challenge = res
 		// One root cause, one finding: a short call groups the confirmed
 		// findings that repeat each other (review_commit_group.go).
