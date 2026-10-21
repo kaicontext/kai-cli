@@ -44,6 +44,7 @@ import (
 	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/gitio"
 	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/ignore"
 	"github.com/kaicontext/kai-engine/intent"
 	"github.com/kaicontext/kai-engine/kaipath"
 	"github.com/kaicontext/kai-engine/memstat"
@@ -6446,6 +6447,11 @@ func runGitImport(db *graph.DB) error {
 	creator := snapshot.NewCreator(db, nil)
 	refMgr := ref.NewRefManager(db)
 	purged := loadPurgePatterns(kaiDir)
+	// The working tree's ignore rules, as every directory capture applies.
+	ignoreRules, ierr := ignore.LoadFromDir(".")
+	if ierr != nil {
+		return fmt.Errorf("loading ignore rules: %w", ierr)
+	}
 
 	// Pin every imported commit in graph_refs (batched: one load, one save)
 	// so drift classification can resolve exact-SHA states for the whole
@@ -6477,7 +6483,7 @@ func runGitImport(db *graph.DB) error {
 		if serr != nil {
 			return fmt.Errorf("reading commit %.12s: %w", commitHash, serr)
 		}
-		snapshotID, err := creator.CreateSnapshot(dirLangSource{GitSource: gs, purged: purged})
+		snapshotID, err := creator.CreateSnapshot(dirLangSource{GitSource: gs, purged: purged, ignore: ignoreRules})
 		if err != nil {
 			return fmt.Errorf("snapshotting commit %.12s: %w", commitHash, err)
 		}
@@ -6607,11 +6613,35 @@ func purgeMatch(patterns []string, path string) bool {
 // language classification, so a commit imported from git objects shares File
 // nodes (and their symbols) with captures of the same files from disk —
 // gitio and dirio disagree on a few extensions, e.g. .proto.
-// It also drops files matching patterns from `kai purge`, so re-importing
-// history doesn't resurrect what was purged.
+// It also drops what a directory capture would never record — files the
+// repo's ignore rules exclude (.kaiignore, .gitignore, kai's structural
+// excludes; the checkout-based import got these from dirio) — and files
+// matching patterns from `kai purge`, so re-importing history doesn't
+// resurrect what was purged.
 type dirLangSource struct {
 	*gitio.GitSource
 	purged []string
+	ignore *ignore.Matcher
+}
+
+// excluded reports whether path is dropped from an imported snapshot.
+func (s dirLangSource) excluded(path string) bool {
+	if purgeMatch(s.purged, path) {
+		return true
+	}
+	if s.ignore == nil {
+		return false
+	}
+	// Directory patterns ("ignored-dir/") only match directories, and the
+	// directory walker never descends into an ignored one — check every
+	// ancestor, then the file itself.
+	parts := strings.Split(path, "/")
+	for i := 1; i < len(parts); i++ {
+		if s.ignore.Match(strings.Join(parts[:i], "/"), true) {
+			return true
+		}
+	}
+	return s.ignore.Match(path, false)
 }
 
 func (s dirLangSource) GetFiles() ([]*filesource.FileInfo, error) {
@@ -6621,7 +6651,7 @@ func (s dirLangSource) GetFiles() ([]*filesource.FileInfo, error) {
 	}
 	out := files[:0]
 	for _, f := range files {
-		if purgeMatch(s.purged, f.Path) {
+		if s.excluded(f.Path) {
 			continue
 		}
 		if f.Mode != filesource.ModeSymlink {
@@ -6633,7 +6663,7 @@ func (s dirLangSource) GetFiles() ([]*filesource.FileInfo, error) {
 }
 
 func (s dirLangSource) GetFile(path string) (*filesource.FileInfo, error) {
-	if purgeMatch(s.purged, path) {
+	if s.excluded(path) {
 		return nil, os.ErrNotExist
 	}
 	f, err := s.GitSource.GetFile(path)

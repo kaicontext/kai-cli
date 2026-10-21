@@ -195,3 +195,48 @@ func TestGitImportSkipsPurgedFiles(t *testing.T) {
 		t.Fatal("import produced an empty snapshot")
 	}
 }
+
+// The git-object import must apply the repo's ignore rules like every
+// directory capture (the checkout-based import got them from dirio): a
+// tracked file under a .kaiignore'd directory stays out of history.
+func TestGitImportAppliesIgnoreRules(t *testing.T) {
+	setupBridgeRepo(t)
+	if err := os.MkdirAll("ignored-dir", 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		".kaiignore":            "ignored-dir/\n",
+		"ignored-dir/secret.go": "package secret\n",
+		"kept.go":               "package kept\n",
+	} {
+		if err := os.WriteFile(name, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-qm", "kaiignore"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	db := openKaiDB(t)
+	defer db.Close()
+	initMode = true
+	defer func() { initMode = false }()
+	if err := runGitImport(db); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := ref.NewRefManager(db).Get("git.HEAD")
+	edges, _ := db.GetEdges(r.TargetID, graph.EdgeHasFile)
+	paths := map[string]bool{}
+	for _, e := range edges {
+		if n, _ := db.GetNode(e.Dst); n != nil {
+			paths[n.Payload["path"].(string)] = true
+		}
+	}
+	if paths["ignored-dir/secret.go"] {
+		t.Fatal("file under a .kaiignore'd directory was imported")
+	}
+	if !paths["kept.go"] || !paths[".kaiignore"] {
+		t.Fatalf("imported paths = %v, want kept.go and .kaiignore", paths)
+	}
+}
