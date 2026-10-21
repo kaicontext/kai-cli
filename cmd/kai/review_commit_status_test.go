@@ -292,7 +292,7 @@ func TestPriorBlockMarksOlderPoints(t *testing.T) {
 		{Kind: "defect", Ref: "111111111111", Text: "new"},
 		{Kind: "defect", Ref: "222222222222", Text: "old", Since: "956a68def53dbbbb"},
 	}}
-	b := rcPriorBlock(p, nil, true)
+	b := rcPriorBlock(p, nil, true, nil)
 	if !strings.Contains(b, "[defect, ref 222222222222, raised at 956a68def53d, still open on the pull request] old") {
 		t.Errorf("older point not marked:\n%s", b)
 	}
