@@ -82,3 +82,17 @@ func TestReviewSandboxDesktop418(t *testing.T) {
 		}
 	})
 }
+
+// The operator names the image's runtimes; the tool tells the model so it can
+// settle a language-runtime claim by running it. Unset, the description is the
+// plain /bin/sh one.
+func TestShellToolNamesTheImageRuntimes(t *testing.T) {
+	t.Setenv("KAI_REVIEW_SANDBOX_RUNTIMES", "")
+	if d := rcShellToolInfo().Description; strings.Contains(d, "Runtimes installed") {
+		t.Fatalf("unset runtimes must leave the description alone: %q", d)
+	}
+	t.Setenv("KAI_REVIEW_SANDBOX_RUNTIMES", "python3 3.12")
+	if d := rcShellToolInfo().Description; !strings.Contains(d, "Runtimes installed in the image: python3 3.12.") {
+		t.Fatalf("description does not name the runtimes: %q", d)
+	}
+}
