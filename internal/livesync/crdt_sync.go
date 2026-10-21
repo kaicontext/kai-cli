@@ -75,6 +75,10 @@ func (e *Engine) pushOpsForChange(relPath string) {
 		ops = crdt.Reconcile(doc, content)
 		e.docsMu.Unlock()
 	}
+	// Ops from an earlier failed push go first: they are already in the
+	// local Doc, so the diff above no longer produces them, and peers can't
+	// anchor these new ops without them.
+	ops = append(e.takeUnsent(relPath), ops...)
 	if len(ops) == 0 {
 		return
 	}
@@ -86,7 +90,11 @@ func (e *Engine) pushOpsForChange(relPath string) {
 	}
 	syncPath := toGitRelativePath(e.workDir, relPath)
 	if err := e.client.SyncPushOps(e.syncAgent, e.channelID, syncPath, base64.StdEncoding.EncodeToString(opsJSON)); err != nil {
-		fmt.Fprintf(os.Stderr, "[kai-sync] op push failed for %s: %v\n", syncPath, err)
+		// Keep them for the next push / reconnect instead of losing them:
+		// a dropped genesis left peers with edits anchored to lines they
+		// never received, and they wrote the file out EMPTY.
+		e.putUnsent(relPath, ops)
+		fmt.Fprintf(os.Stderr, "[kai-sync] op push failed for %s (%d op(s) queued for retry): %v\n", syncPath, len(ops), err)
 		return
 	}
 	// Disk already equals doc.Materialize() (the local edit IS the disk state);
@@ -132,6 +140,7 @@ func (e *Engine) migrateUnconverted(files []string) {
 		}
 		syncPath := toGitRelativePath(e.workDir, rel)
 		if err := e.client.SyncPushOps(e.syncAgent, e.channelID, syncPath, base64.StdEncoding.EncodeToString(opsJSON)); err != nil {
+			e.putUnsent(rel, genesis) // the Doc exists now; never drop its genesis
 			continue
 		}
 		e.setBase(rel, content)
@@ -176,7 +185,18 @@ func (e *Engine) applyOps(relPath, absPath string, opsJSON []byte, agent string)
 		doc.Integrate(op)
 	}
 	merged := doc.Materialize()
+	waiting := pendingInserts(doc)
 	e.docsMu.Unlock()
+
+	// Some inserts are anchored to lines this replica hasn't received (a
+	// peer's earlier push was lost or hasn't arrived). The materialized view
+	// is incomplete — writing it replaced a 55-line file with an empty one.
+	// Keep the ops in the Doc and leave disk alone until the missing ops
+	// arrive (sender retry, or replay on reconnect).
+	if waiting > 0 {
+		fmt.Fprintf(os.Stderr, "[kai-sync] %s: %d op(s) wait for lines not received yet — not writing an incomplete file\n", relPath, waiting)
+		return
+	}
 
 	// Skip the write if disk already matches (avoids a watcher feedback loop).
 	// This is also the SELF-ECHO path: the server broadcasts a push back to its
@@ -318,4 +338,124 @@ func (e *Engine) loadCRDTDocs() int {
 		fmt.Fprintf(os.Stderr, "[kai-sync] restored %d CRDT doc snapshot(s)\n", n)
 	}
 	return n
+}
+
+// pendingInserts is how many inserts in doc are buffered waiting for their
+// anchor line (read from the Doc snapshot, which serializes them).
+func pendingInserts(doc *crdt.Doc) int {
+	snap, err := doc.Snapshot()
+	if err != nil {
+		return 0
+	}
+	var s struct {
+		Pending []json.RawMessage `json:"pending"`
+	}
+	if json.Unmarshal(snap, &s) != nil {
+		return 0
+	}
+	return len(s.Pending)
+}
+
+func (e *Engine) unsentPath() string { return filepath.Join(e.crdtDir(), "unsent.json") }
+
+// putUnsent queues ops whose push failed (after any already queued).
+func (e *Engine) putUnsent(relPath string, ops []crdt.Op) {
+	e.unsentMu.Lock()
+	defer e.unsentMu.Unlock()
+	if e.unsent == nil {
+		e.unsent = make(map[string][]crdt.Op)
+	}
+	e.unsent[relPath] = append(e.unsent[relPath], ops...)
+	e.saveUnsentLocked()
+}
+
+// takeUnsent removes and returns relPath's queued ops.
+func (e *Engine) takeUnsent(relPath string) []crdt.Op {
+	e.unsentMu.Lock()
+	defer e.unsentMu.Unlock()
+	ops := e.unsent[relPath]
+	if len(ops) == 0 {
+		return nil
+	}
+	delete(e.unsent, relPath)
+	e.saveUnsentLocked()
+	return ops
+}
+
+func (e *Engine) saveUnsentLocked() {
+	if e.kaiDir == "" {
+		return
+	}
+	wire := make(map[string]string, len(e.unsent))
+	for p, ops := range e.unsent {
+		if b, err := crdt.MarshalOps(ops); err == nil {
+			wire[p] = base64.StdEncoding.EncodeToString(b)
+		}
+	}
+	if len(wire) == 0 {
+		_ = os.Remove(e.unsentPath())
+		return
+	}
+	data, err := json.Marshal(wire)
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(e.crdtDir(), 0o755)
+	tmp := e.unsentPath() + ".tmp"
+	if os.WriteFile(tmp, data, 0o644) == nil {
+		_ = os.Rename(tmp, e.unsentPath())
+	}
+}
+
+// loadUnsent restores ops queued by a previous run.
+func (e *Engine) loadUnsent() {
+	data, err := os.ReadFile(e.unsentPath())
+	if err != nil {
+		return
+	}
+	var wire map[string]string
+	if json.Unmarshal(data, &wire) != nil {
+		return
+	}
+	e.unsentMu.Lock()
+	defer e.unsentMu.Unlock()
+	if e.unsent == nil {
+		e.unsent = make(map[string][]crdt.Op)
+	}
+	for p, enc := range wire {
+		raw, err := base64.StdEncoding.DecodeString(enc)
+		if err != nil {
+			continue
+		}
+		if ops, err := crdt.UnmarshalOps(raw); err == nil {
+			e.unsent[p] = append(e.unsent[p], ops...)
+		}
+	}
+}
+
+// retryUnsent resends every queued op batch (idempotent at the receiver).
+func (e *Engine) retryUnsent() {
+	e.unsentMu.Lock()
+	paths := make([]string, 0, len(e.unsent))
+	for p := range e.unsent {
+		paths = append(paths, p)
+	}
+	e.unsentMu.Unlock()
+	for _, rel := range paths {
+		ops := e.takeUnsent(rel)
+		if len(ops) == 0 {
+			continue
+		}
+		opsJSON, err := crdt.MarshalOps(ops)
+		if err != nil {
+			e.putUnsent(rel, ops)
+			continue
+		}
+		syncPath := toGitRelativePath(e.workDir, rel)
+		if err := e.client.SyncPushOps(e.syncAgent, e.channelID, syncPath, base64.StdEncoding.EncodeToString(opsJSON)); err != nil {
+			e.putUnsent(rel, ops)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "[kai-sync] resent %d queued op(s) for %s\n", len(ops), syncPath)
+	}
 }

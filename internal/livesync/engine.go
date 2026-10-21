@@ -119,6 +119,12 @@ type Engine struct {
 	crdtMode bool
 	docsMu   sync.Mutex
 	docs     map[string]*crdt.Doc // path -> RGA replica
+
+	// Ops applied to a local Doc whose push failed, per file, resent with
+	// the next push and after every (re)subscribe. Persisted per scope
+	// (unsent.json) so a restart doesn't drop them.
+	unsentMu sync.Mutex
+	unsent   map[string][]crdt.Op
 }
 
 // New constructs an Engine. It does not touch the network until Start.
@@ -265,7 +271,9 @@ func (e *Engine) Start(files []string) (synced int, err error) {
 		// Convert any tracked whole-file files to op-transport (one-time cutover),
 		// then persist the rebuilt Docs so the next start is a delta replay.
 		if e.crdtMode {
+			e.loadUnsent()
 			e.migrateUnconverted(files)
+			e.retryUnsent()
 			e.saveAllCRDTDocs()
 		}
 	}
@@ -615,6 +623,9 @@ func (e *Engine) connectSSE(url, channelID string) {
 		}
 		e.channelID = newResp.ChannelID
 		fmt.Fprintf(os.Stderr, "[kai-sync] re-subscribed on channel %s\n", newResp.ChannelID)
+		if e.crdtMode {
+			e.retryUnsent()
+		}
 		return
 	}
 	if resp.StatusCode != 200 {
