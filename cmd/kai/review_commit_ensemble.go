@@ -47,11 +47,11 @@ var rcEnsembleDefaults = map[string]struct{ modelEnv, model, effortEnv, effort s
 	// Wording, not judgement: one short call that rewrites what is already
 	// settled, so a strong writer with no reasoning effort.
 	rcStageHumanize: {"KAI_HUMANIZE_MODEL", "anthropic/claude-sonnet-5.5", "KAI_HUMANIZE_EFFORT", ""},
-	// Specialist finders (review_commit_specialists.go): off unless a profile
-	// or environment names a model.
-	rcStageSpecLogic:     {"KAI_SPEC_LOGIC_MODEL", "off", "KAI_SPEC_LOGIC_EFFORT", ""},
-	rcStageSpecSecurity:  {"KAI_SPEC_SECURITY_MODEL", "off", "KAI_SPEC_SECURITY_EFFORT", ""},
-	rcStageSpecContracts: {"KAI_SPEC_CONTRACTS_MODEL", "off", "KAI_SPEC_CONTRACTS_EFFORT", ""},
+	// Specialist finders (review_commit_specialists.go). CANDIDATE BUILD ONLY:
+	// on by default on GLM-5.2 for the kai org's review image (kai-cli#207).
+	rcStageSpecLogic:     {"KAI_SPEC_LOGIC_MODEL", "z-ai/glm-5.2", "KAI_SPEC_LOGIC_EFFORT", ""},
+	rcStageSpecSecurity:  {"KAI_SPEC_SECURITY_MODEL", "z-ai/glm-5.2", "KAI_SPEC_SECURITY_EFFORT", ""},
+	rcStageSpecContracts: {"KAI_SPEC_CONTRACTS_MODEL", "z-ai/glm-5.2", "KAI_SPEC_CONTRACTS_EFFORT", ""},
 }
 
 // rcEnsembleModel is an ensemble stage's model: the profile's, else its
