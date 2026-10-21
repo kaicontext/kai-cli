@@ -38,11 +38,41 @@ var rcSpeculativePhrases = []string{
 	"would break if someone", "will break if someone",
 }
 
+// rcFutureRewritePhrases is the subset of rcSpeculativePhrases whose code is
+// CORRECT as written and only misbehaves after someone edits, reorders or
+// refactors it later (a pure footgun, e.g. Cal.com #11059 "future strict
+// comparisons"). The complement — "dormant"/"is ever added"/"a future caller"
+// — names code that is already wrong and simply not reached yet; the benchmark
+// scores those as true positives (e.g. Cal.com #14943). With
+// KAI_REVIEW_LATENT_DEFECTS on, only the future-rewrite subset is dropped
+// pre-gate, so the gate's relaxed clause (which also keeps refuting rewrite
+// footguns) and this filter agree, and no gate budget is spent on bullets the
+// gate would refute anyway.
+var rcFutureRewritePhrases = []string{
+	"is ever reordered", "are ever reordered", "is ever changed to", "is ever refactored",
+	"if someone later", "if someone ever", "should anyone later",
+	"a future change", "a future refactor", "future strict",
+	"a future step", "a future edit", "a future version", "a future maintainer",
+	"a future contributor", "future non-terminal", "future code path",
+	"future guard reorder", "if the guards are reordered", "if the checks are reordered",
+	"would break if someone", "will break if someone",
+}
+
+// rcActiveSpeculativePhrases is the phrase list rcWithoutSpeculativeIssues drops
+// by. Default: the full list (precision-first, production unchanged). With
+// KAI_REVIEW_LATENT_DEFECTS on: only the pure future-rewrite footguns.
+func rcActiveSpeculativePhrases() []string {
+	if rcLatentDefectsEnabled() {
+		return rcFutureRewritePhrases
+	}
+	return rcSpeculativePhrases
+}
+
 // rcSpeculativePhrase reports the first future-change phrase in an ISSUES
 // bullet, if any.
 func rcSpeculativePhrase(item string) (string, bool) {
 	lower := strings.ToLower(item)
-	for _, p := range rcSpeculativePhrases {
+	for _, p := range rcActiveSpeculativePhrases() {
 		if strings.Contains(lower, p) {
 			return p, true
 		}
@@ -53,9 +83,10 @@ func rcSpeculativePhrase(item string) (string, bool) {
 // rcLatentDefectsEnabled relaxes the "trigger must exist today" rule so a
 // correctness defect that is wrong as written counts even when the path that
 // reaches it would have to be added. OFF by default: production keeps the
-// precision-first behaviour (the speculative drop below and the gate's
-// hypothetical-trigger refutation) unchanged. It exists to A/B the recall it
-// costs on the offline benchmark, which scores latent defects as true positives.
+// precision-first behaviour (the full speculative drop below and the gate's
+// hypothetical-trigger refutation) unchanged. On, it narrows both to pure
+// future-rewrite footguns. It exists to A/B the recall it costs on the offline
+// benchmark, which scores latent (not-yet-reached) defects as true positives.
 func rcLatentDefectsEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("KAI_REVIEW_LATENT_DEFECTS"))) {
 	case "1", "true", "on", "yes":
@@ -72,12 +103,10 @@ func rcLatentDefectsEnabled() bool {
 // — and the gate is not asked to spend its budget on it. Only ISSUES are
 // touched; prose and DECISIONS pass through.
 func rcWithoutSpeculativeIssues(draft string) (string, []rcAllegationResult) {
-	if rcLatentDefectsEnabled() {
-		// Let the gate adjudicate future-trigger issues on merit instead of
-		// dropping them by phrase; the gate's relaxed clause then supports the
-		// wrong-as-written ones. Recall experiment only; default path unchanged.
-		return draft, nil
-	}
+	// The phrases dropped here depend on KAI_REVIEW_LATENT_DEFECTS via
+	// rcActiveSpeculativePhrases: the full list by default, only pure
+	// future-rewrite footguns when the flag is on (dormant/not-reached bullets
+	// then flow to the gate, which supports the wrong-as-written ones).
 	start := 0
 	if i := strings.Index(draft, rcReviewDataMarker); i >= 0 {
 		start = i + len(rcReviewDataMarker)

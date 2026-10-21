@@ -5,9 +5,10 @@ import (
 	"testing"
 )
 
-// TestReachableClauseIsVerbatim guards the invariant rcChallengeSystemHeadText
-// relies on: the default clause must be an exact substring of the shipped head,
-// or the KAI_REVIEW_LATENT_DEFECTS swap would silently no-op.
+// TestReachableClauseIsVerbatim guards the invariant the swaps rely on: each
+// default clause must be an exact substring of its shipped prompt, or the
+// KAI_REVIEW_LATENT_DEFECTS replace would silently no-op. The fast pass is
+// deliberately NOT relaxed, so only the gate and the deep finder are checked.
 func TestReachableClauseIsVerbatim(t *testing.T) {
 	if !strings.Contains(rcChallengeSystemHead, rcReachableClauseDefault) {
 		t.Fatal("rcReachableClauseDefault is no longer a verbatim substring of rcChallengeSystemHead")
@@ -15,26 +16,35 @@ func TestReachableClauseIsVerbatim(t *testing.T) {
 	if strings.Contains(rcChallengeSystemHead, rcReachableClauseLatent) {
 		t.Fatal("rcReachableClauseLatent should not already be in the shipped head")
 	}
-	// Finder prompts carry the same contract; their default clauses must also
-	// stay verbatim substrings or the swap no-ops.
 	for _, c := range []struct {
 		name, prompt, clause string
 	}{
 		{"deep trigger", rcReviewSystem, rcReviewTriggerClauseDefault},
 		{"deep score", rcReviewSystem, rcReviewScoreClauseDefault},
-		{"fast trigger", rcFastReviewSystem, rcFastTriggerClauseDefault},
 	} {
 		if !strings.Contains(c.prompt, c.clause) {
 			t.Fatalf("%s clause is no longer a verbatim substring of its prompt", c.name)
 		}
 	}
+	// rcFutureRewritePhrases must be a strict subset of the full list, or the
+	// flag-on filter would drop phrases the flag-off path never did.
+	full := map[string]bool{}
+	for _, p := range rcSpeculativePhrases {
+		full[p] = true
+	}
+	for _, p := range rcFutureRewritePhrases {
+		if !full[p] {
+			t.Fatalf("rcFutureRewritePhrases has %q, not in rcSpeculativePhrases", p)
+		}
+	}
 }
 
-// TestFinderPromptsSwapUnderFlag: the finder prompts relax only when the flag is set.
-func TestFinderPromptsSwapUnderFlag(t *testing.T) {
+// TestDeepFinderSwapsUnderFlag: the deep finder prompt relaxes only when set;
+// the fast finder is never touched.
+func TestDeepFinderSwapsUnderFlag(t *testing.T) {
 	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "")
-	if rcReviewSystemText() != rcReviewSystem || rcFastReviewSystemText() != rcFastReviewSystem {
-		t.Fatal("finder prompts must be unchanged when the flag is off")
+	if rcReviewSystemText() != rcReviewSystem {
+		t.Fatal("deep finder must be unchanged when the flag is off")
 	}
 	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "on")
 	if strings.Contains(rcReviewSystemText(), rcReviewTriggerClauseDefault) {
@@ -43,13 +53,10 @@ func TestFinderPromptsSwapUnderFlag(t *testing.T) {
 	if !strings.Contains(rcReviewSystemText(), rcReviewTriggerClauseLatent) {
 		t.Fatal("deep finder must contain the latent trigger clause when the flag is on")
 	}
-	if !strings.Contains(rcFastReviewSystemText(), rcFastTriggerClauseLatent) {
-		t.Fatal("fast finder must contain the latent trigger clause when the flag is on")
-	}
 }
 
 // TestLatentDefectsFlagOffUnchanged: with the flag unset the gate prompt is
-// byte-identical to the shipped head and the speculative drop still runs.
+// byte-identical to the shipped head.
 func TestLatentDefectsFlagOffUnchanged(t *testing.T) {
 	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "")
 	if rcLatentDefectsEnabled() {
@@ -58,14 +65,11 @@ func TestLatentDefectsFlagOffUnchanged(t *testing.T) {
 	if rcChallengeSystemHeadText() != rcChallengeSystemHead {
 		t.Fatal("default head must equal the shipped const")
 	}
-	if !strings.Contains(rcChallengeSystemHeadText(), rcReachableClauseDefault) {
-		t.Fatal("default head must contain the default reachability clause")
-	}
 }
 
-// TestLatentDefectsFlagOnSwaps: with the flag on the clause is swapped and the
-// pre-gate speculative drop becomes a no-op (the gate adjudicates instead).
-func TestLatentDefectsFlagOnSwaps(t *testing.T) {
+// TestGateClauseSwapsUnderFlag: with the flag on the gate's reachability clause
+// is swapped for the latent variant.
+func TestGateClauseSwapsUnderFlag(t *testing.T) {
 	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "1")
 	if !rcLatentDefectsEnabled() {
 		t.Fatal("flag should be on for \"1\"")
@@ -77,12 +81,55 @@ func TestLatentDefectsFlagOnSwaps(t *testing.T) {
 	if !strings.Contains(head, rcReachableClauseLatent) {
 		t.Fatal("latent head must contain the latent clause")
 	}
+}
 
-	// A draft whose only ISSUE carries a future-change phrase would be dropped
-	// with the flag off; with it on, rcWithoutSpeculativeIssues passes it through.
-	draft := rcReviewDataMarker + "\nISSUES:\n- a.go:1 — breaks if someone later adds a caller\n"
+// TestSpeculativeDropNarrowsUnderFlag: the pre-gate filter and the gate agree.
+// Off, both the wrong-as-written dormant case and the pure footgun are dropped.
+// On, the dormant case (Cal.com #14943 wording) flows to the gate while the
+// pure future-rewrite footgun (Cal.com #11059 "future strict") is still dropped.
+func TestSpeculativeDropNarrowsUnderFlag(t *testing.T) {
+	dormant := rcSpeculativeBenchmarkIssues[0] // "...dormant today... if retry-incrementing is ever added..."
+	footgun := rcSpeculativeBenchmarkIssues[1] // "...latent footgun for future strict comparisons."
+
+	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "")
+	if _, ok := rcSpeculativePhrase(dormant); !ok {
+		t.Fatal("flag off: dormant case should be recognised by the full list")
+	}
+	if _, ok := rcSpeculativePhrase(footgun); !ok {
+		t.Fatal("flag off: footgun case should be recognised by the full list")
+	}
+
+	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "1")
+	if _, ok := rcSpeculativePhrase(dormant); ok {
+		t.Fatal("flag on: wrong-as-written dormant case must flow to the gate, not be dropped")
+	}
+	if _, ok := rcSpeculativePhrase(footgun); !ok {
+		t.Fatal("flag on: pure future-rewrite footgun must still be dropped pre-gate")
+	}
+
+	// End to end through rcWithoutSpeculativeIssues: flag on keeps the dormant
+	// issue in the draft and still removes the footgun.
+	draft := rcTestReview(dormant, footgun)
 	out, dropped := rcWithoutSpeculativeIssues(draft)
-	if out != draft || dropped != nil {
-		t.Fatalf("flag on: expected pass-through, got dropped=%d", len(dropped))
+	_, issues, _, _, _, _ := rcParseReviewOutput(out)
+	if len(issues) != 1 || issues[0] != dormant {
+		t.Fatalf("flag on: issues after filter = %q, want only the dormant case kept", issues)
+	}
+	if len(dropped) != 1 || dropped[0].Issue != footgun {
+		t.Fatalf("flag on: dropped = %+v, want only the footgun", dropped)
+	}
+}
+
+// TestRankCapRaisedUnderFlag: the publish cap grows by 2 under the flag so the
+// recovered latent defects can actually be published, and is unchanged off.
+func TestRankCapRaisedUnderFlag(t *testing.T) {
+	for _, n := range []int{1, 3, 8, 20, 40} {
+		t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "")
+		off := rcRankCap(n)
+		t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "1")
+		on := rcRankCap(n)
+		if on != off+2 {
+			t.Fatalf("changedFiles=%d: cap off=%d on=%d, want on=off+2", n, off, on)
+		}
 	}
 }
