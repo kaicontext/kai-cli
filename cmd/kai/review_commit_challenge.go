@@ -79,6 +79,27 @@ Assess every DECISIONS bullet in the draft the same way, one "decisions" entry e
 
 Set intent_match and merge_ready from the SUPPORTED findings only. A fast draft remains a fast, limited review, with merge_ready at most 4.`
 
+// rcReachableClauseDefault is the exact "trigger must exist today" sentence
+// inside rcChallengeSystemHead (production, precision-first). The latent variant
+// keeps supporting wrong-as-written code when the path that reaches it would
+// have to be added, which the offline code-review benchmark scores as a true
+// positive (e.g. Cal.com #14943). rcReachableClauseDefault MUST stay a verbatim
+// substring of rcChallengeSystemHead; TestReachableClauseIsVerbatim guards it.
+const rcReachableClauseDefault = `An allegation is a defect only when its trigger is reachable in the code as it stands: an input, caller, configuration or state that exists today and reaches the line. REFUTE one whose failure needs a future change ("dormant today", "if X is ever added", "if the guards are reordered", "a footgun for later") — say in the reason that the trigger is hypothetical. But code that is wrong as written is a defect now, even when no current caller exercises it: a query arm missing a condition its siblings apply, a new subclass that leaves abstract methods unimplemented, a function that mishandles an input its own signature, schema or type allows once the checks the code applies before it have run. Refute only when the failure requires someone to change code.`
+
+const rcReachableClauseLatent = `An allegation is a defect when the code is WRONG AS WRITTEN, even when the input, caller, configuration or state that reaches the line does not exist in the tree yet. SUPPORT such a defect and name the latency in the finding ("dormant: only the SMS handler writes retryCount today, but the delete removes the e-mail and WhatsApp rows the moment any other handler increments it"): a query arm missing a condition its siblings apply, a deletion whose filter omits rows a sibling path produces, a new subclass that leaves abstract methods unimplemented, a function that mishandles an input its signature, schema or type allows. Do NOT refute such a defect merely because no current caller exercises it, and do NOT call it hypothetical. Still REFUTE a finding whose code is CORRECT as written and would only become wrong after someone rewrites it (a pure "footgun if these guards are ever reordered" where every input is handled correctly today), and keep refuting generic advice, a preference between two correct styles, and a behaviour change the author describes as intended.`
+
+// rcChallengeSystemHeadText returns the gate's system-prompt head. By default it
+// is rcChallengeSystemHead unchanged. With KAI_REVIEW_LATENT_DEFECTS set, it
+// swaps the reachability clause for the recall-leaning variant. Default path is
+// byte-identical to the shipped prompt, so production is untouched.
+func rcChallengeSystemHeadText() string {
+	if rcLatentDefectsEnabled() {
+		return strings.Replace(rcChallengeSystemHead, rcReachableClauseDefault, rcReachableClauseLatent, 1)
+	}
+	return rcChallengeSystemHead
+}
+
 // rcChallengeSystemPrompt is the challenger's system prompt. It mentions
 // review_shell only when the tool is actually offered.
 func rcChallengeSystemPrompt(shell bool) string {
@@ -95,7 +116,7 @@ func rcChallengeSystemPromptWith(shell, repo bool) string {
 	if repo {
 		para += "\n\n" + rcChallengeRepoAvailable
 	}
-	return rcChallengeSystemHead + "\n\n" + para + "\n\n" + rcChallengeSystemTail
+	return rcChallengeSystemHeadText() + "\n\n" + para + "\n\n" + rcChallengeSystemTail
 }
 
 // rcChallengeMaxTokens bounds each challenge answer. 6000 was too small for a
