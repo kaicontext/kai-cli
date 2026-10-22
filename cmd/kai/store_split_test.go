@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,7 +49,7 @@ func TestSplitStoreMessageNamesBothStores(t *testing.T) {
 }
 
 func TestSplitStoreExemptKeepsDiagnosisAvailable(t *testing.T) {
-	for _, path := range []string{"kai store merge", "kai doctor", "kai log ingest"} {
+	for _, path := range []string{"kai store merge", "kai doctor", "kai log ingest", "kai __complete", "kai __completeNoDesc"} {
 		if !splitStoreExempt[path] {
 			t.Errorf("%s must run on a split project", path)
 		}
@@ -58,5 +59,23 @@ func TestSplitStoreExemptKeepsDiagnosisAvailable(t *testing.T) {
 		if splitStoreExempt[path] {
 			t.Errorf("%s must refuse on a split project", path)
 		}
+	}
+}
+
+// A store whose refs table can't be read must not look like an empty,
+// never-pushed store when the user is choosing which one to keep.
+func TestDescribeStoreReportsUnreadableRefs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, kaipath.StoreFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE nodes (kind TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	if got := describeStore(dir); !strings.HasPrefix(got, "unreadable: ") {
+		t.Fatalf("describeStore without a refs table = %q, want unreadable", got)
 	}
 }

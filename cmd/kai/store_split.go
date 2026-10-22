@@ -17,6 +17,8 @@ import (
 var splitStoreExempt = map[string]bool{
 	"kai store": true, "kai store merge": true, "kai doctor": true, "kai version": true,
 	"kai help": true, "kai completion": true, "kai log ingest": true,
+	// cobra's hidden commands behind shell tab-completion
+	"kai __complete": true, "kai __completeNoDesc": true,
 }
 
 // refuseSplitStore stops any command that would read or write a project
@@ -58,7 +60,9 @@ func describeStore(dir string) string {
 	if err := db.QueryRow(`SELECT count(*) FROM nodes WHERE kind = 'Snapshot'`).Scan(&snaps); err != nil {
 		return "unreadable: " + err.Error()
 	}
-	_ = db.QueryRow(`SELECT count(*), coalesce(sum(name LIKE 'git.%'), 0), coalesce(sum(name LIKE 'remote/%'), 0) FROM refs`).Scan(&refs, &gitRefs, &remoteRefs)
+	if err := db.QueryRow(`SELECT count(*), coalesce(sum(name LIKE 'git.%'), 0), coalesce(sum(name LIKE 'remote/%'), 0) FROM refs`).Scan(&refs, &gitRefs, &remoteRefs); err != nil {
+		return "unreadable: " + err.Error()
+	}
 	parts := []string{fmt.Sprintf("%d snapshots", snaps), fmt.Sprintf("%d refs", refs)}
 	if gitRefs > 0 {
 		parts = append(parts, fmt.Sprintf("%d git commits mapped", gitRefs))
