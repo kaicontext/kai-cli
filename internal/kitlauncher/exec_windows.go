@@ -12,6 +12,15 @@ import (
 // kitBinaryName is the managed kit's file name inside BinDir.
 const kitBinaryName = "kit.exe"
 
+// isExecutable is always true on Windows: there are no execute bits.
+// os.Stat derives the mode from file attributes, so a regular file is
+// 0666 (0444 if read-only) and an &0o100 test rejects every kit.exe.
+// Whether Windows will run the file is decided by CreateProcess, which
+// execHandoff surfaces as an error.
+func isExecutable(os.FileInfo) bool {
+	return true
+}
+
 // execHandoff is the Windows stand-in for exec(2), which does not exist
 // there: run kit as a child with our stdio, then exit with its status so
 // the caller still sees "kai code" end the way kit did. Ctrl-C reaches
