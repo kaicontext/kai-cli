@@ -10,26 +10,26 @@ import (
 )
 
 // The session-ingest hook wrote <root>/.kai/loops beside a .git/kai store,
-// which flipped kaipath onto an empty second store (riddle, 2026-10-22).
-// Loop records go into the store kaipath resolves instead.
-func TestLoopRecordLandsInTheResolvedStore(t *testing.T) {
+// which split ~/Desktop/riddle into two databases. Now the loop record goes
+// into the one store, and a legacy .git/kai store is moved to .kai first.
+func TestLoopRecordLandsInTheOneStore(t *testing.T) {
 	t.Setenv("KAI_DIR", "")
 	root := t.TempDir()
-	store := filepath.Join(root, ".git", "kai")
-	if err := os.MkdirAll(store, 0o755); err != nil {
+	legacy := filepath.Join(root, ".git", "kai")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(store, kaipath.StoreFile), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(legacy, kaipath.StoreFile), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	writeLoopRecord(&loopRecord{ID: "s1", Cwd: root})
 
-	if _, err := os.Stat(filepath.Join(store, "loops", "s1.json")); err != nil {
-		t.Fatalf("loop record not in the .git/kai store: %v", err)
+	if _, err := os.Stat(filepath.Join(root, ".kai", "loops", "s1.json")); err != nil {
+		t.Fatalf("loop record not in .kai: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".kai")); !os.IsNotExist(err) {
-		t.Fatalf("ingest created <root>/.kai beside a .git/kai store (err=%v)", err)
+	if got := kaipath.Stores(root); len(got) != 1 || got[0] != filepath.Join(root, ".kai") {
+		t.Fatalf("stores after ingest = %v, want only .kai", got)
 	}
 }
 
@@ -42,20 +42,21 @@ func TestSplitStoreMessageNamesBothStores(t *testing.T) {
 			t.Errorf("message does not name %s:\n%s", s, msg)
 		}
 	}
-	if !strings.Contains(msg, "mv "+stores[1]) {
+	if !strings.Contains(msg, "kai store merge") {
 		t.Errorf("message gives no way out:\n%s", msg)
 	}
 }
 
 func TestSplitStoreExemptKeepsDiagnosisAvailable(t *testing.T) {
-	for _, name := range []string{"doctor", "version", "ingest"} {
-		if !splitStoreExempt[name] {
-			t.Errorf("%s must run on a split project", name)
+	for _, path := range []string{"kai store merge", "kai doctor", "kai log ingest"} {
+		if !splitStoreExempt[path] {
+			t.Errorf("%s must run on a split project", path)
 		}
 	}
-	for _, name := range []string{"capture", "push", "status", "checkpoint"} {
-		if splitStoreExempt[name] {
-			t.Errorf("%s must refuse on a split project", name)
+	// `kai merge` shares its name with `kai store merge`; exemption is by path.
+	for _, path := range []string{"kai capture", "kai push", "kai status", "kai merge", "kai log"} {
+		if splitStoreExempt[path] {
+			t.Errorf("%s must refuse on a split project", path)
 		}
 	}
 }

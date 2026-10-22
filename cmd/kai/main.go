@@ -3156,7 +3156,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// kai data directory
 	if stores := kaipath.Stores("."); len(stores) > 1 {
-		fmt.Printf("%s two kai stores — commands refuse to run until one is moved aside:\n", bad)
+		fmt.Printf("%s two kai stores — commands refuse to run until you run 'kai store merge':\n", bad)
 		for _, s := range stores {
 			fmt.Printf("      %s  (%s)\n", filepath.Join(s, kaipath.StoreFile), describeStore(s))
 		}
@@ -17362,7 +17362,7 @@ func runPushInner(cmd *cobra.Command, args []string) (err error) {
 				}
 				return fmt.Errorf("push aborted: %d object(s) have corrupt local digests and can't be reconstructed: %s%s\n"+
 					"  these objects are part of the snapshot being pushed, so publishing would leave a headless ref that fails CI checkout (HTTP 404).\n"+
-					"  repair the local store first — restore a .git/kai/db.sqlite backup or re-capture a clean tree — then run 'kai push' again",
+					"  repair the local store first — restore a .kai/db.sqlite backup or re-capture a clean tree — then run 'kai push' again",
 					len(corrupt), strings.Join(shown, ", "), more)
 			}
 		}

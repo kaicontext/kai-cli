@@ -11,20 +11,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// splitStoreExempt are commands that run against a split project anyway:
-// they diagnose it, print static output, or never open the store
-// (`log ingest` runs from agent hooks and writes into the resolved dir).
+// splitStoreExempt are commands (by path) that run against a split
+// project anyway: they repair or diagnose it, print static output, or never
+// open the store (`log ingest` runs from agent hooks).
 var splitStoreExempt = map[string]bool{
-	"doctor": true, "version": true, "help": true, "completion": true, "ingest": true,
+	"kai store": true, "kai store merge": true, "kai doctor": true, "kai version": true,
+	"kai help": true, "kai completion": true, "kai log ingest": true,
 }
 
 // refuseSplitStore stops any command that would read or write a project
-// whose history is split across .kai/db.sqlite and .git/kai/db.sqlite.
-// Resolve would pick one and the other would keep diverging; that is how
-// riddle ended up with Desktop checkpoints in one database and the pushed
-// git history in the other.
+// whose history is split across .kai/db.sqlite and .git/kai/db.sqlite —
+// left over from when kai could put a store in either place. The other
+// store would otherwise keep diverging unseen.
 func refuseSplitStore(cmd *cobra.Command) {
-	if os.Getenv("KAI_DIR") != "" || splitStoreExempt[cmd.Name()] {
+	if os.Getenv("KAI_DIR") != "" || splitStoreExempt[cmd.CommandPath()] {
 		return
 	}
 	stores := kaipath.Stores(".")
@@ -41,9 +41,7 @@ func splitStoreMessage(stores []string) string {
 	for _, s := range stores {
 		fmt.Fprintf(&b, "  %s  (%s)\n", filepath.Join(s, kaipath.StoreFile), describeStore(s))
 	}
-	b.WriteString("Keep the one you want and move the other out of the way, e.g.\n")
-	fmt.Fprintf(&b, "  mv %s %s.split\n", stores[len(stores)-1], stores[len(stores)-1])
-	b.WriteString("then run kai again. 'kai doctor' shows the same summary.\n")
+	b.WriteString("Merge them with 'kai store merge' (nothing in .kai is overwritten; the old\nstore is kept as a backup), then run kai again.\n")
 	return b.String()
 }
 

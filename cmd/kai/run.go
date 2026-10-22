@@ -329,8 +329,8 @@ func resolveKaiDir() (string, error) {
 	// Walk up to the nearest directory holding a store, in kaipath's
 	// precedence — by its database, not a bare .kai directory.
 	for d := cwd; d != "/" && d != "."; d = filepath.Dir(d) {
-		if stores := kaipath.Stores(d); len(stores) > 0 {
-			return stores[0], nil
+		if len(kaipath.Stores(d)) > 0 {
+			return kaipath.Resolve(d), nil
 		}
 	}
 	return "", fmt.Errorf("kai directory not found (run `kai init` first)")
