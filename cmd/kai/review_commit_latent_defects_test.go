@@ -120,16 +120,27 @@ func TestSpeculativeDropNarrowsUnderFlag(t *testing.T) {
 	}
 }
 
-// TestRankCapRaisedUnderFlag: the publish cap grows by 2 under the flag so the
-// recovered latent defects can actually be published, and is unchanged off.
-func TestRankCapRaisedUnderFlag(t *testing.T) {
+// TestRankCapUnaffectedByFlag: the publish cap is the same with the flag on or
+// off. Raising it flooded the published set with the low-value tail (run42), so
+// the bump was reverted; latent precision is handled in the gate clause instead.
+func TestRankCapUnaffectedByFlag(t *testing.T) {
 	for _, n := range []int{1, 3, 8, 20, 40} {
 		t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "")
 		off := rcRankCap(n)
 		t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "1")
 		on := rcRankCap(n)
-		if on != off+2 {
-			t.Fatalf("changedFiles=%d: cap off=%d on=%d, want on=off+2", n, off, on)
+		if on != off {
+			t.Fatalf("changedFiles=%d: cap must not depend on the flag (off=%d on=%d)", n, off, on)
+		}
+	}
+}
+
+// TestLatentClauseRaisesTheBar: the latent gate clause carries the precision
+// conditions that keep the flag's recall from flooding false positives.
+func TestLatentClauseRaisesTheBar(t *testing.T) {
+	for _, want := range []string{"higher bar", "high or critical", "unverified consequence is a refutation"} {
+		if !strings.Contains(rcReachableClauseLatent, want) {
+			t.Fatalf("latent gate clause missing precision condition %q", want)
 		}
 	}
 }
