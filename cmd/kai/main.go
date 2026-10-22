@@ -2917,7 +2917,8 @@ const kaiHookMarker = "# kai-managed-hook"
 // differs, so a mismatch makes the two fight and downgrade each other.
 // v8: pre-push appends timestamped entries to push.log (rotating at ~512KB)
 // instead of truncating, and `kai push` maintains push-failed.json.
-const kaiHookVersion = "v8"
+// v9: pre-push finds the store by its db.sqlite, not a bare .kai directory.
+const kaiHookVersion = "v9"
 
 // All hook scripts early-exit when KAI_BRIDGE_INPROGRESS=1. Set by kai itself
 // when it is the one driving the git operation (e.g. milestone→commit bridge),
@@ -2971,9 +2972,11 @@ fi
 if ! command -v kai >/dev/null 2>&1; then
   exit 0
 fi
-if [ -d .kai ]; then
+# The store is where the database is, never a bare .kai directory (other
+# tools drop files there) — same rule as kaipath.Resolve.
+if [ -f .kai/db.sqlite ]; then
   KAI_HOOK_DIR=.kai
-elif [ -d .git/kai ]; then
+elif [ -f .git/kai/db.sqlite ]; then
   KAI_HOOK_DIR=.git/kai
 else
   exit 0
@@ -3152,6 +3155,12 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	// kai data directory
+	if stores := kaipath.Stores("."); len(stores) > 1 {
+		fmt.Printf("%s two kai stores — commands refuse to run until you run 'kai store merge':\n", bad)
+		for _, s := range stores {
+			fmt.Printf("      %s  (%s)\n", filepath.Join(s, kaipath.StoreFile), describeStore(s))
+		}
+	}
 	if _, err := os.Stat(kaiDir); err == nil {
 		fmt.Printf("%s kai data directory present (%s)\n", ok, kaiDir)
 		// Object-store integrity. A content-addressed node whose stored
@@ -4108,6 +4117,7 @@ func init() {
 		// print colored output (e.g. kai diff) can decide whether to emit
 		// ANSI escapes. Respects NO_COLOR.
 		initColors()
+		refuseSplitStore(cmd)
 		// `kai code` hands off to kit (syscall.Exec) moments later, which
 		// replaces this process — killing the backgroundUpdateCheck goroutine
 		// mid-write and bleeding the update notice into kit's first frame.
@@ -17352,7 +17362,7 @@ func runPushInner(cmd *cobra.Command, args []string) (err error) {
 				}
 				return fmt.Errorf("push aborted: %d object(s) have corrupt local digests and can't be reconstructed: %s%s\n"+
 					"  these objects are part of the snapshot being pushed, so publishing would leave a headless ref that fails CI checkout (HTTP 404).\n"+
-					"  repair the local store first — restore a .git/kai/db.sqlite backup or re-capture a clean tree — then run 'kai push' again",
+					"  repair the local store first — restore a .kai/db.sqlite backup or re-capture a clean tree — then run 'kai push' again",
 					len(corrupt), strings.Join(shown, ", "), more)
 			}
 		}
