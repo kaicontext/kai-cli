@@ -40,7 +40,7 @@ var (
 
 var logIngestCmd = &cobra.Command{
 	Use:           "ingest",
-	Short:         "Ingest an agent session transcript into a loop record (.kai/loops/<session>.json)",
+	Short:         "Ingest an agent session transcript into a loop record (<kai-dir>/loops/<session>.json)",
 	Hidden:        true,
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -561,7 +561,10 @@ func writeLoopRecord(rec *loopRecord) {
 	if repoRoot == "" {
 		return
 	}
-	dir := filepath.Join(repoRoot, ".kai", "loops")
+	// Into the project's store, wherever it lives. A hard-coded .kai/loops
+	// created <root>/.kai beside a .git/kai store, and kaipath then treated
+	// that bare directory as the store and started an empty second one.
+	dir := filepath.Join(kaipath.Resolve(repoRoot), "loops")
 	if os.MkdirAll(dir, 0755) != nil {
 		return
 	}
@@ -773,7 +776,7 @@ func checkAgentIngest(ok, warn, bad string, fix bool) {
 	}
 
 	// Check 3: is output actually being produced?
-	loops := filepath.Join(root, ".kai", "loops")
+	loops := filepath.Join(kaipath.Resolve(root), "loops")
 	entries, _ := os.ReadDir(loops)
 	n := 0
 	var newest time.Time

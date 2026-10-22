@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/kaicontext/kai-engine/kaipath"
 	"os"
 	"path/filepath"
 	"sort"
@@ -149,12 +150,12 @@ func runRunSummary(cmd *cobra.Command, args []string) error {
 		turns[i] = t.n
 	}
 	var (
-		totalCost, maxCost                        float64
-		maxTurn                                   int
+		totalCost, maxCost                          float64
+		maxTurn                                     int
 		totalInput, totalWrite, totalRead, totalOut int
-		toolCount                                 int
-		maxToolBytes                              int
-		agentCount                                int
+		toolCount                                   int
+		maxToolBytes                                int
+		agentCount                                  int
 	)
 	for _, td := range allTurns {
 		n := td.n
@@ -325,14 +326,11 @@ func resolveKaiDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Honor both placements kaipath uses: .kai/ (legacy) and .git/kai/
-	// (preferred for git repos). Walk up trying each.
+	// Walk up to the nearest directory holding a store, in kaipath's
+	// precedence — by its database, not a bare .kai directory.
 	for d := cwd; d != "/" && d != "."; d = filepath.Dir(d) {
-		for _, candidate := range []string{".kai", filepath.Join(".git", "kai")} {
-			p := filepath.Join(d, candidate)
-			if st, err := os.Stat(p); err == nil && st.IsDir() {
-				return p, nil
-			}
+		if stores := kaipath.Stores(d); len(stores) > 0 {
+			return stores[0], nil
 		}
 	}
 	return "", fmt.Errorf("kai directory not found (run `kai init` first)")
@@ -467,8 +465,8 @@ func formatDiff(a, b *runlog.Turn) string {
 		a.Turn, a.Usage.CachedPct, b.Turn, b.Usage.CachedPct)
 
 	type row struct {
-		name           string
-		aSec, bSec     runlog.Section
+		name       string
+		aSec, bSec runlog.Section
 	}
 	rows := []row{
 		{"system", a.Sections.System, b.Sections.System},
