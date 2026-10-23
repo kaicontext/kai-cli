@@ -40,6 +40,21 @@ func TestSweepChunksSkipGeneratedFilesAndPutTestsLast(t *testing.T) {
 	}
 }
 
+// A file's whole-function patch is used when it is small; a big one keeps the
+// narrow patch, and a file only the whole-function diff has is not added.
+func TestSweepPrefersWholeFunctionsThatFit(t *testing.T) {
+	narrow := map[string]string{"small.go": "narrow", "big.go": "narrow"}
+	whole := map[string]string{
+		"small.go": "whole",
+		"big.go":   strings.Repeat("x", rcSweepWholeFuncBytes+1),
+		"extra.go": "whole",
+	}
+	got := rcPreferWhole(narrow, whole)
+	if got["small.go"] != "whole" || got["big.go"] != "narrow" || len(got) != 2 {
+		t.Fatalf("patches = %v", got)
+	}
+}
+
 func TestDraftWithSweepAppendsNewDefectsOnly(t *testing.T) {
 	draft := "Prose.\n\n" + rcReviewDataMarker + "\nINTENT_MATCH: verified\nMERGE_READY: 4\nSUMMARY: ok\nISSUES:\n- a.go:10 — the session user is dereferenced without a nil check after expiry\nDECISIONS:\n- a decision\n"
 	got := rcDraftWithSweep(draft, []string{

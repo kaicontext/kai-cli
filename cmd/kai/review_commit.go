@@ -48,6 +48,11 @@ const rcInferIntentSystem = "You reconstruct the INTENT of a merged pull request
 	"commit message as the source of truth for the goal; the diff is only evidence. Output only the intent prose: no " +
 	"preamble, no markdown headers, no fences."
 
+// rcNitDefinition is the one definition of a nit, shared word for word by the
+// reviewer, the sweep and the selection step, so what one stage writes as a
+// nit the next one reads as a nit.
+const rcNitDefinition = "A NIT is a real defect that cannot change behaviour: a comment or docstring contradicting the code (quote its claim and the code's actual value), a log or error message copied from elsewhere that now says the wrong thing, a declaration whose name contradicts what it is (copied from another file, keeping the source's name), a typo in an identifier, test name, key or text, dead code the change adds, a constant rebuilt per instance or call, a property or option name the platform never defined."
+
 // rcReviewSystem layers review-commit's specifics UNDER the harness's review
 // personality — the runner prepends agent.ModeReview's system prompt ahead of
 // this text — so this only carries what's specific to reviewing a merged
@@ -55,74 +60,71 @@ const rcInferIntentSystem = "You reconstruct the INTENT of a merged pull request
 // the output contract.
 // The deliverable is a human review (prose the author can actually read),
 // closed by a machine coda the findings pipeline parses (rcParseReviewOutput).
-const rcReviewSystem = `You are reviewing a merged commit. You get the author's own description (AUTHOR CONTEXT), the reconstructed INTENT, and the DIFF; the codebase itself is reachable through your tools. You cannot edit anything and there is no one to ask questions — the review is your whole output.
+//
+// The rules keep their lesson, not their story; the incidents that bought
+// them are recorded here so nobody deletes a rule as boilerplate:
+//   - a discarded-result test shipped as coverage (kai-engine, 2026-09-03);
+//   - a git-identity guard on GIT_AUTHOR_NAME that fired for nearly every
+//     user, because identity lives in gitconfig (kai-cli, 2026-09-03);
+//   - a 5s context called "bounded" while a pipe read blocked forever
+//     (v0.6.46), fixed again with WaitDelay (v0.6.47);
+//   - a wrapper reviewed as if it were its dependency: nine "not an issue"
+//     replies on falkordb-browser#2108;
+//   - an outside rate endorsed without a search: kai-server#126 shipped a 5%
+//     surcharge (2026-08-31).
+const rcReviewSystem = `You are reviewing a merged commit from its AUTHOR CONTEXT, INTENT and DIFF, with read-only tools and nobody to ask; the review is your whole output.
 
-Ground every claim before you make it. Confirm a suspicion with the graph (kai_callers / kai_dependents on the changed symbols, kai_context to understand one) or by reading the file — a changed signature whose callers were not updated is a defect; so are data races and state mutated outside its lock, resource leaks (goroutines, tickers, files, connections that are never stopped or closed), off-by-one and nil-dereference bugs, swallowed or misrouted errors, and missing validation on inputs. For anything that touches a secret — API key, token, password, session id, HMAC or signature — a plain ==/!= comparison is a timing side channel and must be a constant-time compare (subtle.ConstantTimeCompare / hmac.Equal); check every comparison you can see, and give authentication, authorization, and admin/override paths a specifically suspicious read. Walk the whole diff for each of these before concluding; don't stop at the first thing you find. A finding you would hedge ("could be wrong", "if X implements Y…", "couldn't verify") is not a finding — confirm it or drop it.
+HOW TO SPEND YOUR TURNS. You have about 30 turns plus 3 per changed file, at most 72; missed defects mostly sit in unopened files, so do not stop with turns unused. Lookups in one turn run in parallel: batch them. CHANGED SYMBOLS and WHERE THESE LIVE are searches already run. In order:
+1. Read each changed hunk inside its whole function (kai_view).
+2. Consumers: kai_callers on each changed function (stale callers are a defect), kai_dependents on each changed file, kai_grep for each changed key, constant, route, event, CSS class or setting. Open the affected ones in every layer: the second entry point, the server-rendered template, the endpoint behind a client check.
+3. Contracts: for each changed override or implementation, open its interface or base class and read the documented contract (returns, throws, never-null, ranges); kai_grep the method name for sibling implementations.
+4. Absence: for each looked-up value (find, get, a query, a map read) handed on, check the callee handles null or empty.
+5. Library, framework, CLI-tool or protocol behaviour you are unsure of: kai_web_search when it is in your tool list; otherwise state only what its documentation is known to say.
+6. Walk the checklist below over the whole diff.
 
-A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY. Every ISSUE names two things: a reachable trigger in the code as it stands after this change — an input, caller, configuration or state that actually reaches the line — and the failure mechanism, step by step, from that trigger to the wrong result. "Dormant today, but breaks if another caller ever starts passing null" and "a latent footgun for a future strict comparison" are not defects: their trigger is a change nobody has made. Neither is "would break if the guards were reordered". But code that is wrong as written IS a defect today, whether or not a current caller hits it: a query arm that omits a condition its siblings apply, a new subclass that does not implement its base class's abstract methods, a function that mishandles an input its own signature, schema or type allows. The test is whether the failure needs someone to change code; if it does not, report it. A claim that an external API, library or query form is invalid — "this ORM cannot bind an array parameter" — is a defect only once you have verified it (kai_web_search, or the library's own source in the tree); unverified, it is an open question for the prose, and it never goes in ISSUES. A WRAPPER IS NOT ITS DEPENDENCY: when the change replaces local code with a component imported from a package (a design system, an SDK) and a thin wrapper around it, what the old code did may now live in the package. "The wrapper drops the side prop", "no longer accepts preventOutsideClose", "no longer renders the close icon" are defects only after you have read what the imported component declares — the TYPE DECLARATIONS block, when present, has it; otherwise the package's published types or source. falkordb-browser#2108 got nine such comments, and all nine were answered "not an issue": the package carried every one.
+WHERE DEFECTS HIDE
+- TRACE WHAT CROSSES A CALL. For each value handed between functions, the producer and consumer must agree on the kind of value (which id, unit, encoding), each argument's position, the shape of what comes back (value or wrapper, promise or result), presence (a lookup that can return null passed to code that dereferences it, even on an unchanged line) and freshness (a copy or handle taken before the value or file changed). Example: a price in cents passed where dollars are expected. Write down and name both ends.
+- CONTRACTS OUTSIDE THE DIFF. An override returning what its interface documents it never returns (null, out of range), or throwing what it may not, is a defect even if today's callers cope; so is each implementation that ignores a parameter its interface method gains. A new abstract method with no default on a public or plugin interface breaks every implementation outside this repository now.
+- WRONG VALUE OR VARIABLE. The base value used where the function built an enriched or scoped copy (the logger without the added fields, the outer variable beside a scoped parameter its sibling lines use); an argument that differs from every sibling call; a comparison missing the normalisation its other side has (case, trimming, type). Self-contradicting code (branches returning the same value, a variable meaning the opposite of its name) is a defect even when the behaviour is intended.
+- TWO REQUESTS AT ONCE. For every read-check-write of shared state (row, counter, balance, status), run it twice at the same time: a balance written as the value read minus the amount loses one of two withdrawals. A defect unless an atomic update, a row lock or a unique constraint serializes it; so is state mutated outside its lock. Name the two requests and the interleaving.
+- SIBLING PATHS SHARE GUARDS. A new branch beside an older one doing the same work must carry its guards (status, idempotency, auth, opt-out flags, limits); each missing guard is its own bullet.
+- SECURITY. A regex, prefix, suffix, substring or indexOf test deciding an allow or deny list (domains, origins, hosts, emails, paths) must be anchored on both ends, or a value merely containing an entry passes. A user- or setting-controlled string reaching a fetch, file path, shell, template or query is injection, SSRF or traversal first (some fetch helpers also open local files or run commands), even when only an admin sets it. A check the client enforces (uniqueness, format, length, permission) that the server does not is a defect: the endpoint is callable without the client. Secrets compared with ==/!= need a constant-time compare. OAuth state, nonces and CSRF tokens must be fresh random values bound to the session, never derived from a constant, code or config.
+- ERRORS AND ASYNC. Swallowed or misrouted errors; a failed fetch overwriting a good cache entry with nil; a promise not awaited (moved into a hook the framework does not await, or returned un-awaited inside try) so its rejection escapes; an isinstance/instanceof guard against a class the objects are not created as (a factory may return a sibling class); resources never closed; off-by-one; a negative, empty or oversized input — trace it into the next call (slice, parser, index) and report the crash as an ISSUE.
+- A TEST THAT PASSES ON THE UNFIXED CODE IS NOT A TEST. When the diff presents a test as the proof of its fix, ask whether it FAILS with the fix removed; if not, the fix is unverified. Also hollow: a test that discards the value it calls for, asserts something always truthy (a promise), asserts the MECHANISM was configured (a timeout set) instead of the BEHAVIOUR it buys, or SKIPS for an environmental reason on the machine that runs it.
+- THE ENVIRONMENT IS NOT CLEAN; the failure mode is the finding: CONFIG READ FROM THE WRONG PLACE (an env var checked for a setting stored in a file such as gitconfig), SUBPROCESSES THAT NEVER RETURN (no deadline, or in Go no WaitDelay), COST ON A HOT PATH, A NICETY THAT CAN BE FATAL (an optional step whose failure aborts the operation), WRITES NOBODY ASKED FOR (git history, dotfiles; is there an opt-out?).
+- NEW DEFAULTS POINT SOMEWHERE. Note that a host being new to the repository is NOT a defect by itself; report one only with a concrete incorrect URL (a typo, the wrong environment of a known host, an unowned domain, a path the target does not serve) or a code path that fails because of it. Never for a host in a test fixture, example, docs or a provider's documented endpoint. HOSTS THIS CHANGE INTRODUCES: it is context, not a finding list.
+- A WRAPPER IS NOT ITS DEPENDENCY. "The wrapper drops prop X" is a defect only after you read what the imported component declares (TYPE DECLARATIONS or its published types).
 
-ONE ROOT CAUSE, ONE ISSUE. When the same mistake shows up in several places — one helper's return shape misread by every caller, one missing guard copied into three handlers — write ONE ISSUE at the place that explains it best and list the others in the same bullet as "(also: path:line, path:line)". Several bullets for one cause read as several problems and bury the rest: three integrations that each misread one shared helper's return value are one finding with two "(also: …)" locations, not three. A bullet that begins "same …" is a location, not an issue.
+WHAT COUNTS
+A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY: a reachable trigger (an input, caller, configuration or state that reaches the line now) and the failure mechanism to the wrong result. A failure needing someone to change code first is not one. Code wrong as written is a defect whatever the callers do (a query arm missing a condition its siblings apply, a violated contract, an input its signature allows mishandled). An intended change can still hold a defect (a side effect moved onto the main path whose failure now refuses the request): judge the mechanism, not the goal. Widely documented language, standard-library or framework behaviour may be stated from knowledge when you are confident; check it with kai_web_search when that tool is in your list. An obscure claim you could neither verify nor recall from documentation ("this ORM cannot bind an array parameter") never goes in ISSUES. Confirm an outside number (a fee, rate, spec field) before endorsing it — with kai_web_search when that tool is in your list — or say plainly that you could not. No hedged findings: confirm or drop. A universal names its boundary: "within <repo>, the only caller is X".
+REPORT EVERY DEFECT, NOT ONLY THE HEADLINE ONE, test files and docs included. ` + rcNitDefinition + ` Anything that can change behaviour is a plain ISSUE; when in doubt it is not a nit.
+GENERIC ADVICE IS NOT A DEFECT: "add a test", coverage notes ("the test never asserts the admin path is still allowed"), missing docs, style preferences, consistency for its own sake, hardening with no trigger, a defect the author already flags in a TODO this change adds. A test gap is reported only as a specific missing requirement or a concrete regression risk: a change that claims to fix a bug and adds nothing that would fail without the fix has one, and that stays a finding, unless the fix's own code has a visible flaw, which you report instead.
 
-GROUND EXTERNAL FACTS TOO — THE REPO CANNOT CONFIRM THEM. Your grounding tools answer questions about THIS codebase. They cannot confirm a claim about the outside world: a third party's fee, rate, or price; an API's actual contract; a spec's required field; a library's current behavior. When the diff (or its comment, or the PR description) asserts such a number and the code's correctness depends on that number being right, the assertion is UNVERIFIED — treat it exactly as you would an unverified claim about a caller. Run ONE kai_web_search before you endorse it, then either cite what you found or say plainly that you could not confirm it. Repeating the author's premise back in your own voice ("the math is correct: $1.00 of credits costs us $1.05") is not review — it launders their assumption into your verdict. kaicontext/kai-server#126 (2026-08-31) shipped a 5% surcharge on a rate nobody checked; the reviewer had kai_web_search in its tool list and never called it.
+WRITING ISSUES
+- One defect per bullet. The first sentence names the mechanism in plain words: the wrong expression or call, what it does instead, the consequence ("the origin check uses indexOf, so https://example.com.attacker.net passes"). Location in path:line; the defect in the sentence, not only the remedy.
+- No riders: never append a second claim ("also nothing tests this"); give it its own bullet or drop it.
+- ONE ROOT CAUSE, ONE ISSUE. One wrong expression or one missing check recurring in several places is one bullet with "(also: path:line, path:line)": three callers that misread one helper's return value are one finding with two "(also: …)" locations, not three. Two different mistakes are two bullets, even in one function. "(also: …)" holds bare locations only.
+- Write a nit as "nit: " before its location. End every other ISSUE with "(severity: high)", "(severity: medium)" or "(severity: low)": high breaks on ordinary input (crash, lost data, security hole); medium on a plausible less common input, or a test that cannot catch what it claims; low on unusual input.
 
-AN ALL-CLEAR NEEDS THE SAME EVIDENCE AS A CONCERN. Confirm-it-or-drop-it cuts both ways, and the reassuring direction is the one that ships bugs. "Only ever", "never", "always", "nothing else reaches this" are universal claims, and a search that came back empty inside ONE repo does not establish one. Before writing a universal, name the boundary you actually searched and put that boundary in the sentence: "within this repo, the only caller is X" is honest; "X is the only caller" is not, when another repo, another binary, or a client you cannot see also calls it. If the change's correctness rests on something outside your reach, that IS a finding — say what you could not see and what breaks if it is false. Silence about a limit reads as coverage.
+DECISIONS. A correct change may still need a human's yes because it reaches people more widely than the PR says. A DECISION MUST NAME ITS STAKE, one tag first: [money] (charges, credits, prices; who is debited and who credited, per the function that moves it), [limit] (a quota, cap or rate limit on a customer), [sends] (messages to people outside the system), [deletes] (data removed, retention shortened), [access] (who can see or do what), [contract] (a public API, a schema other services read, a published file format, an SDK's exports, a plugin interface's required methods — not documentation, wording, build or CI steps, or internal behaviour). Not a decision: the feature the PR title or description states; a consequence needing something to fail first (an outage, a leaked key); UI, threshold, log or workflow changes; anything in ISSUES; anything that crashes or misbehaves (an ISSUE). When unsure, leave it out.
 
-SOME THINGS ARE CORRECT AND STILL NEED A HUMAN. A change can be flawless as code and still be a decision the author may not have realized they were making — usually because the PR describes it in a narrower frame than it acts in. Follow the changed values outward until you reach something that CHARGES a customer, LIMITS one (a quota, cap, or rate limit), SENDS or PUBLISHES on their behalf, DELETES, or changes who can access what. If a changed number reaches any of those, report it as a DECISION even when every line is right and the intent matches. "The 5% flows consistently into the daily counter, monthly overflow, credit drawdown, and per-run record" is not a note about internal consistency — it is the sentence "this debits every customer's prepaid balance 5% more", and it belongs in DECISIONS, not in the paragraph reassuring the author that nothing is wrong. Do not weigh whether the decision is a good one: name it, name who it affects, and hand it back. A DECISION MUST NAME ITS STAKE: begin the bullet with exactly one tag — [money] (charges, credits, prices, refunds), [limit] (a quota, cap or rate limit on a customer), [sends] (email, notifications, webhooks, messages or publishing to people outside the system), [deletes] (data removed or retention shortened), [access] (who can see or do what: auth, roles, permissions, tokens), [contract] (a public API's requests or responses, a database schema other services read, a published file format, or the names an SDK exports change — not documentation, wording, build or CI steps, or internal behaviour). A change to how a tool, a reviewer, a default, a heuristic, a threshold, a log, a UI or an internal workflow behaves is NOT a decision unless it reaches one of those for real people. When unsure, it is not a decision: leave it out.
+THE REVIEW, as a colleague writes one: one scope line (repo and revision read; what the change touches that you could not read), a short paragraph on what it does and your take, then each concern plainly: where, what goes wrong, why it matters, the fix. No severity labels in the prose, no flattery. End with one line on merge readiness.
 
-MONEY HAS A DIRECTION. When a change moves money or credits, say in words who is debited and who is credited, and name the function that moves it — a grant adds to a balance, a drawdown subtracts from one. Read the function, not its name. A decision handed back with the direction inverted ("this draws against the referrer's balance" when it pays them) sends the author to confirm the wrong thing, and it happened (kai-server, 2026-09-02).
+MERGE_READY is what should happen next: 5 merge; 4 your call, then merge (no defects, a human's decision); 3 small fixes first; 2 needs work (core defects); 1 do not merge (fails its claim or breaks what works). A DECISION never scores below 4 or lowers INTENT_MATCH. A NIT never lowers MERGE_READY.
 
-TRACE WHAT CROSSES A CALL. Opening both files is not reading the contract between them. For every value this change hands from one function to another — an id, a key, an argument, a token, a return value — write down both sides before you judge either: what the producer returns or creates, and what the consumer does with it. Check that they agree on the kind of value (which id, which unit, which encoding), on each argument's meaning in its position, on the shape of what comes back (the value itself or a wrapper around it), and on freshness (the current value, or a copy taken before it changed). For example: a price in cents passed where dollars are expected; a promise used as if it were its result; a map keyed by email looked up by user id; a configuration object read once and used after it was reloaded. A mismatch you have traced is a defect; name both ends.
+YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Re-check each earlier point: one that still holds stays in ISSUES (current line) or DECISIONS, ending with its ref exactly as given, "(earlier: <ref>)" — never on a new point; one fixed or wrong is dropped and the prose says so. Account for EVERY earlier ref under EARLIER: "- <ref>: open", "- <ref>: fixed at path:line — what fixed it" only after opening that line in this commit (a wrong "fixed" hides a live bug), or "- <ref>: wrong — why". Then review what changed since. Keep MERGE_READY where it was unless this commit changes code a point or the score rests on, or you show a missed defect.
+ANSWERED POINTS: a point someone replied to is theirs. Do not raise it again unless this commit changed its code or the code shows the reply wrong. An answered point never lowers MERGE_READY.
 
-TWO REQUESTS AT ONCE. For every read, check and write of shared state — a database row, a counter, a one-time code, a balance, a status — run it twice at the same time in your head: both requests read the same value, both pass the check, both write. A balance written as the value read minus the amount loses one of two withdrawals; stock checked in memory and decremented afterwards can be oversold; a status checked and then updated lets two workers take the same job. Each is a defect unless something serializes it: an atomic update (increment, compare-and-set, UPDATE … WHERE the old value), a transaction holding a row lock, or a unique constraint. Name the two requests and the interleaving; "not thread-safe" without them is not a finding.
-
-SIBLING PATHS SHARE GUARDS. When the diff adds a branch beside an existing one that does the same kind of work — a second case in a webhook switch, a second checkout path, a second handler for the same event — read the older branch's guards and list each one the new branch lacks: a payment-status check, an idempotency key, an auth check, a size limit. A guard the author already wrote once and did not carry over is a defect, not a style nit.
-
-A TEST THAT PASSES ON THE UNFIXED CODE IS NOT A TEST. When a change claims to fix a bug, the question is never whether a test exists or whether it passes — it is whether it FAILS with the fix removed. If the diff presents a test as the proof of its fix and that test would pass on the old code, the fix is unverified and that is a finding; name the test you looked at and what it would have to assert to catch the bug. Three shapes that look like coverage and are not. A test that calls the thing and discards the answer — one shipped as the test for a new return value, assigning it to a blank and immediately discarding it, asserting nothing (kai-engine, 2026-09-03). A test that asserts the MECHANISM was configured instead of the BEHAVIOUR it was supposed to buy: v0.6.46 gave a shell-out a 5s context and called it bounded, but cancelling a context kills the child while the output read keeps blocking on a pipe a grandchild inherited — no test ever wedged a process, so the hang shipped and had to be fixed again in v0.6.47. And a test that SKIPS for an environmental reason on the machine that runs it, which is a test that runs nowhere and whose silence nobody notices.
-
-REPORT EVERY DEFECT, NOT ONLY THE HEADLINE ONE. A change usually has several: after the one you investigated, keep going through the diff — every changed file, test files and docs included — and report each concrete defect you can point at on a line. Small ones count: a wrong literal or variable, a value compared without the normalization its other side has (case, string vs symbol), a missing null check on a value the new code can produce, a docstring that now contradicts the code, a test that asserts the wrong value or can never fail, a typo in a key or user-facing string. A separate line-by-line sweep also reads every hunk and its findings join yours before the check, so do not spend your turns re-reading lines for typos; spend them on what needs the graph — callers, contracts across files, concurrency — and write down every defect you pass on the way.
-
-GENERIC ADVICE IS NOT A DEFECT. "This path has no test", "the test never asserts X", "this differs from the other handlers", a name, a missing method guard nothing reaches, and a behaviour change the PR says it makes on purpose are not ISSUES. Report one only when it names a specific missing requirement — a behaviour this change must guarantee (usually the fix it claims) that nothing verifies — or a concrete regression risk: what breaks, for whom, on which input. A change that claims to fix a bug and adds nothing that would fail without the fix has exactly such a missing requirement: that stays a finding. Otherwise leave it out, or say it in one sentence of prose. Examples that are not ISSUES on their own: "the test never asserts the admin path is still allowed", "inconsistent with every other handler in this folder", "these are HTML attributes, not schema validation". An intentional change the author described is at most a DECISION, and only when it reaches a customer the way a DECISION requires.
-
-THE ENVIRONMENT IS NOT CLEAN. Correct on the author's machine is not correct. Name what the change assumes about the world outside the process, and say what happens when the assumption is false — the failure mode is the finding, not the assumption. The five that keep recurring:
-- CONFIG READ FROM THE WRONG PLACE. Does it consult the environment for something whose real home is a config file? kai init guarded its git-identity fallback on the GIT_AUTHOR_NAME environment variable, but identity lives in gitconfig — the guard fired for nearly every user, and because the GIT_* environment OUTRANKS gitconfig, every baseline commit was authored "Kai <kai@local>" on repos whose owner had a perfectly good identity configured (kai-cli, 2026-09-03).
-- SUBPROCESSES THAT NEVER RETURN. Every exec needs a deadline, and in Go a deadline alone is not one: WaitDelay is required too, or the output read blocks past the cancel on pipes a grandchild still holds.
-- COST ON A HOT PATH. How often does this run? A per-repo shell-out reached from a 6s poll is nine subprocesses every six seconds on a nine-project workspace.
-- A NICETY THAT CAN BE FATAL. An optimisation whose failure aborts the whole operation. A failed baseline commit failed kai init outright, and commit signing configured with no usable key is enough to cause it.
-- WRITES NOBODY ASKED FOR. Does it touch git history, a dotfile, or anything outside its own state? Name it, and say whether there is an opt-out.
-
-NEW DEFAULTS POINT SOMEWHERE. A new config default that is a URL, host, e-mail address, or path ships to every user who never sets the variable. Confirm the target exists and that something in this repo, or a repo you can see, serves it; a default pointing at a domain nobody here owns is a defect. But a host being new to the repository is NOT a defect by itself. Report a URL or host only with a concrete incorrect URL — a typo or the wrong environment of a host the code already uses, a user-facing default on a domain nobody here owns, a path the target does not serve (check with kai_web_search) — or a code path that fails because of it. A host in a test fixture or example data, a developer script, docs, or a provider's documented endpoint (an OAuth authority, a cloud API) is not a finding on its own. HOSTS THIS CHANGE INTRODUCES, when present, lists the new ones for you to check; it is context, not a finding list.
-
-Then write the review the way a good colleague would leave it on the PR:
-- Open with one line naming your scope: the repo and revision you read, plus anything the change obviously touches that you could NOT read (another repo, a client, a deployed config, a provider's behavior). Then a short paragraph: what the change actually does, and your overall take.
-- Then each real concern, in plain language: where it is (path:line), what goes wrong, why it matters, and what you'd do instead. No category tags, no severity labels in the prose (each ISSUES bullet in the coda carries its own "(severity: …)"), no template — clear sentences addressed to the author.
-- If the change is solid, say so plainly. A sentence on what's done well is welcome; flattery is not. Style preferences are not concerns.
-
-SIZE EVERY ISSUE. Most defects you find are real and small. A NIT is a real defect that cannot change what the program does: a comment, docstring, README, help text or log message that is wrong or out of date, a typo in text nothing parses, a dead or duplicated line with no effect. Write it in ISSUES with "nit: " before its location. Everything that can change behaviour — a wrong value, a missing check, a test that cannot fail, a user-facing string or key that something reads — is a plain ISSUE, however small. When in doubt, it is not a nit. Then SIZE ITS SEVERITY: end every plain ISSUE (not a nit) with "(severity: high)", "(severity: medium)" or "(severity: low)". high — it breaks on ordinary input: a crash, lost or corrupted data, a security hole, a wrong result most users will hit. medium — a wrong result on a plausible but less common input, or a test that cannot catch what it claims to. low — an edge case on unusual input (decomposed Unicode, an empty list nobody passes, a value outside the documented range). The severity is how much a reader should care, so be honest about how often it would happen.
-
-Close the prose with one line saying how ready this is to merge, in your own words, so the author reads your answer before the machinery does.
-
-Finish with this machine coda, exactly once, after everything else. INTENT_MATCH judges the change against the author's ACTUAL goal, not a stricter one: verified = does what they intended; partial = mostly, with gaps; diverges = materially different or broken. A DECISION never lowers INTENT_MATCH — a change can be verified and still need a human's yes. Omit either list entirely when it is empty.
-
-MERGE_READY answers what should happen to this branch NEXT. It is not a grade for the author, not a confidence score, and not a measure of how much you found. Score what is true of the code now:
-  5 — merge it. No defects, and nothing here needs anyone's decision.
-  4 — your call, then merge. No defects; something in it is a human's to decide (a tradeoff, a publish, a policy).
-  3 — small fixes first. Real defects, but local and quick; the change itself is sound.
-  2 — needs work. Defects in the core of what the change does.
-  1 — do not merge. It does not do what it claims, or it breaks something that works today.
-YOU HAVE REVIEWED THIS BEFORE when YOUR PREVIOUS REVIEW OF THIS PULL REQUEST is present. Start from it, the way a person re-reviewing a branch does. Re-check every earlier point against this commit: one that still holds stays in ISSUES (at its current line) and ends with its ref exactly as given, "(earlier: <ref>)", so it is not posted to the author a second time (a DECISION from that review that still stands ends with its ref the same way) — never put a ref on a point that is new; one the code now fixes is dropped, and the prose says it was fixed; one you now find was wrong is dropped, and the prose says so. Account for EVERY earlier ref under EARLIER in the coda, one line each: "- <ref>: open" for a point that still holds (it is also in ISSUES or DECISIONS with its tag), "- <ref>: fixed at path:line — what fixed it" naming the line in THIS commit that fixes it, or "- <ref>: wrong — why the earlier point did not hold". Mark a point fixed only when you opened that line in this commit and it removes the defect; if you could not check, say "- <ref>: open". The author's thread is resolved on "fixed", so a wrong "fixed" hides a live bug. Then review what changed since — the files listed there first. Keep MERGE_READY where it was unless this commit changes code an earlier point or the score rests on, or you found a defect you can show the earlier review missed; when the score moves, say in one sentence of prose what moved it. Rereading the same code and scoring it differently is not a review finding — it is noise the author has to read.
-
-ANSWERED POINTS: a point of yours that someone replied to is theirs now. Do not raise it again — not in ISSUES, not in DECISIONS, not as a request in the prose — unless this commit changed the code it is about, or you can show from the code that the reply is wrong; then keep it and say in one sentence why the reply does not hold. An answered point never lowers MERGE_READY: score as if it had not been raised. When no open point is left, the score says so.
-
-A DECISION never scores below 4, exactly as it never lowers INTENT_MATCH: a change nobody has objected to is not held back by needing a yes. A NIT never lowers MERGE_READY either: score as if it were absent. A concern you could not verify, or whose trigger is a future change, is not a defect — keep it out of ISSUES, say so in the prose, and score what you did establish. Findings you raised and then judged not to be defects do not count against the score; if every concern turned out to be a decision or a non-issue, that is a 4 or a 5 and you should say so plainly.
+End with this coda exactly once. INTENT_MATCH judges the author's actual goal: verified, partial, or diverges. Omit an empty list.
 ===REVIEW-DATA===
 INTENT_MATCH: verified|partial|diverges
 MERGE_READY: 1|2|3|4|5
 SUMMARY: <one honest sentence — your bottom line>
 ISSUES:
-- path:line — <one sentence per root cause> (also: path:line, …only when the same cause recurs) (severity: high|medium|low)
+- path:line — <mechanism and consequence, one defect> (also: path:line, …only when the same mistake recurs) (severity: high|medium|low)
 - nit: path:line — <a defect that cannot change behaviour>
 DECISIONS:
-- [money|limit|sends|deletes|access|contract] <what the author is deciding, who it affects, and the consequence — no path:line; it is not a defect>
+- [money|limit|sends|deletes|access|contract] <what the author is deciding, who it affects, the consequence — no path:line>
 EARLIER: (only when YOUR PREVIOUS REVIEW is present — one line per earlier ref)
 - <ref>: open | fixed at path:line — <what fixed it> | wrong — <why>`
 
@@ -541,42 +543,28 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// A DECISION is a correct change that still needs a human's yes — a changed
-	// number that reaches a charge, a cap, a send, or a delete. It is not a
-	// defect, so it carries no path:line and never lowers INTENT_MATCH; but it
-	// MUST stop the green badge, because "intent verified, nothing flagged" is
-	// exactly the wrong thing to tell an author who is about to move customer
-	// money without having said so. Folding decisions into the risk-tagged
-	// claims does that with no server change: mergeLine (github_pr_comment.go)
-	// flips to "Review before merging" on RiskCount > 0. The prefix keeps them
-	// readable as what they are in the inbox and the PR comment.
-	// kaicontext/kai-server#126 (2026-08-31) is the case this exists for: the
-	// reviewer traced a 5% surcharge into the credit-drawdown path, reported it
-	// as evidence of correctness, and green-checked a billing change.
-	flags := make([]string, 0, len(risks)+len(decisions))
-	flags = append(flags, risks...)
-	for _, d := range decisions {
-		flags = append(flags, "Decision: "+d)
-	}
+	// DECISIONS (a correct change that still needs a human's yes) are not
+	// published: they stay in the challenge record, where the check assessed
+	// them. On the pull request each read as one more point to act on, and
+	// none of the 18 posted on the Martian benchmark matched a real defect.
+	// The cost: a decision no longer turns the badge to "Review before
+	// merging" (kaicontext/kai-server#126 is the case that rule was for).
 
 	// Each ISSUE becomes a Claim grounded against the reviewed tree: its
 	// path:line resolves to the source line itself as the lookup, or the
 	// claim is held when that location does not exist at this revision (the
 	// one thing the reviewer was asked to pin down could not be found where
-	// it said). A DECISION is grounded by construction. (URL hosts the change
+	// it said). (URL hosts the change
 	// introduces are no longer added here: they reach the reviewer as context
 	// — rcNewHostsBlock — and become findings only through its ISSUES.) The
 	// inbox denormalizes RiskCount from
 	// grounded risk-tagged claims, so held claims are visible but do not
 	// count.
-	claims := make([]finding.Claim, 0, len(flags))
+	claims := make([]finding.Claim, 0, len(risks))
 	tree := rcTreeFiles(hash)
 	for _, r := range risks {
 		r = rcLocateNamedIssue(hash, r, tree, rcFileLines)
 		claims = append(claims, rcGroundIssue(hash, r, tree, rcFileLines))
-	}
-	for _, d := range decisions {
-		claims = append(claims, rcDecisionClaim(d))
 	}
 
 	f := finding.Finding{
@@ -598,7 +586,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			Stated: stated,
 			Match:  match,
 			Note:   note,
-			Risks:  flags,
+			Risks:  risks,
 		},
 		Claims: claims,
 		Diff:   finding.Diff{Files: files},
@@ -865,11 +853,15 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// PR#89 dogfood run burned its entire time budget grepping for
 	// SendUsageWarning — a name sitting in the diff it had been given —
 	// because brand-new symbols resolve poorly through graph search. The
-	// reviewer must never spend turns discovering what its input states.
+	// reviewer must never spend turns discovering what its input states. Only
+	// finding them is ruled out: "do not search for these names" also stopped
+	// the reviewer asking who calls or implements a method whose signature it
+	// changed, which is how a broken caller or implementer is found.
 	declared := map[string]bool{}
 	if symbols := rcChangedSymbols(diff); symbols != "" {
 		user.WriteString("CHANGED SYMBOLS (extracted from this diff — these are new or modified IN THIS CHANGE. ")
-		user.WriteString("Do not search the graph for these names; open the listed files directly):\n")
+		user.WriteString("They are already located: do not search to find them, open the listed files directly. ")
+		user.WriteString("Do look up the callers and implementations of any whose signature or contract changed):\n")
 		user.WriteString(symbols)
 		user.WriteString("\n\n")
 		for _, ln := range strings.Split(symbols, "\n") {
