@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kaicontext/kai-engine/message"
+	"github.com/kaicontext/kai-engine/provider"
 )
 
 func TestSelectionPublishesTheChosenDefectsInOrder(t *testing.T) {
@@ -84,23 +88,90 @@ func TestRecoveredFindingDropsSeverityMarker(t *testing.T) {
 	}
 }
 
-// A recovered (unresolved→supported) allegation the selection publishes keeps
-// supported status; one it skips is recorded as not published.
+// The recovery path is exercised end-to-end through rcRankSupported, not just
+// rcApplyRank: an unresolved allegation enters the selection pool only under
+// KAI_REVIEW_GATE_RECOVER, is offered to the model as UNCONFIRMED, and is
+// promoted to supported ONLY after a usable selection answer — an early return
+// (or the flag off) leaves it unresolved.
 func TestRecoveredAllegationsRunThroughTheSelection(t *testing.T) {
-	res := &rcChallengeResult{Allegations: []rcAllegationResult{
-		{ID: 1, Issue: "a.go:1 — confirmed bug", Status: rcStatusSupported, Finding: "a.go:1 — confirmed bug"},
-		{ID: 2, Issue: "a.go:9 — recovered bug", Status: rcStatusSupported, Finding: "a.go:9 — recovered bug", recovered: true},
-		{ID: 3, Issue: "a.go:4 — recovered, skipped", Status: rcStatusSupported, Finding: "a.go:4 — recovered, skipped", recovered: true},
-	}}
-	kept, dropped := rcApplyRank(res, rcRankAnswer{Publish: []int{1, 2}, Skip: map[int]string{3: "unconfirmed, not compelling"}}, 6)
-	if kept != 2 || dropped != 1 {
-		t.Fatalf("kept, dropped = %d, %d; want 2, 1", kept, dropped)
-	}
-	for _, a := range res.Allegations {
-		if a.ID == 3 && a.Status != rcStatusRefuted {
-			t.Errorf("a skipped recovered finding must not be published, got %q", a.Status)
+	t.Setenv("KAI_RANK_MODEL", "test-rank") // non-empty so the selection runs
+
+	t.Run("promoted and published through the selection", func(t *testing.T) {
+		t.Setenv("KAI_REVIEW_GATE_RECOVER", "1")
+		var gotPrompt string
+		prov := rcChallengeProvider{send: func(_ context.Context, req provider.Request) (provider.Response, error) {
+			gotPrompt = req.Messages[0].Parts[0].(message.TextContent).Text
+			// publish the confirmed defect (1) and one recovered one (2); skip the other recovered one (3).
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{
+				Text: `{"publish":[1,2],"minor":[],"skip":[{"id":3,"why":"unconfirmed, not compelling"}]}`,
+			}}}, nil
+		}}
+		res := &rcChallengeResult{Allegations: []rcAllegationResult{
+			{ID: 1, Issue: "a.go:1 — confirmed bug", Status: rcStatusSupported, Finding: "a.go:1 — confirmed bug"},
+			{ID: 2, Issue: "a.go:9 — recovered bug (severity: high)", Status: rcStatusUnresolved, Reason: "could not open the caller"},
+			{ID: 3, Issue: "a.go:4 — recovered, skipped", Status: rcStatusUnresolved, Reason: "unsure"},
+		}}
+		rcRankSupported(context.Background(), prov, "intent", "diff", 3, res)
+
+		if !strings.Contains(gotPrompt, "UNCONFIRMED DEFECTS") {
+			t.Errorf("recovered findings were not offered to the selection as UNCONFIRMED:\n%s", gotPrompt)
 		}
-	}
+		byID := map[int]rcAllegationResult{}
+		for _, a := range res.Allegations {
+			byID[a.ID] = a
+		}
+		// 2 was unresolved → promoted to supported, marked recovered, published, given a finding.
+		if a := byID[2]; a.Status != rcStatusSupported || !a.recovered || a.Finding == "" {
+			t.Errorf("recovered-and-chosen finding must be promoted & published, got status=%q recovered=%v finding=%q", a.Status, a.recovered, a.Finding)
+		}
+		// 3 was unresolved → promoted then left out by the selection → recorded as not published.
+		if a := byID[3]; a.Status != rcStatusRefuted || !strings.HasPrefix(a.Reason, rcSelectionSkipPrefix) {
+			t.Errorf("recovered-but-skipped finding must be recorded as not published, got status=%q reason=%q", a.Status, a.Reason)
+		}
+		// 1 is the confirmed defect, still published.
+		if a := byID[1]; a.Status != rcStatusSupported {
+			t.Errorf("confirmed defect must stay published, got %q", a.Status)
+		}
+	})
+
+	t.Run("an unusable answer leaves recovered findings unresolved", func(t *testing.T) {
+		t.Setenv("KAI_REVIEW_GATE_RECOVER", "1")
+		prov := rcChallengeProvider{send: func(_ context.Context, _ provider.Request) (provider.Response, error) {
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: "no json here"}}}, nil
+		}}
+		res := &rcChallengeResult{Allegations: []rcAllegationResult{
+			{ID: 1, Issue: "a.go:1 — recovered a", Status: rcStatusUnresolved},
+			{ID: 2, Issue: "a.go:2 — recovered b", Status: rcStatusUnresolved},
+		}}
+		rcRankSupported(context.Background(), prov, "intent", "diff", 3, res)
+		for _, a := range res.Allegations {
+			if a.Status != rcStatusUnresolved || a.recovered {
+				t.Errorf("an early return must leave a recovered finding unresolved, got id=%d status=%q recovered=%v", a.ID, a.Status, a.recovered)
+			}
+		}
+	})
+
+	t.Run("flag off never recovers", func(t *testing.T) {
+		t.Setenv("KAI_REVIEW_GATE_RECOVER", "")
+		called := false
+		prov := rcChallengeProvider{send: func(_ context.Context, _ provider.Request) (provider.Response, error) {
+			called = true
+			return provider.Response{Parts: []message.ContentPart{message.TextContent{Text: `{"publish":[1,2]}`}}}, nil
+		}}
+		res := &rcChallengeResult{Allegations: []rcAllegationResult{
+			{ID: 1, Issue: "a.go:1 — recovered a", Status: rcStatusUnresolved},
+			{ID: 2, Issue: "a.go:2 — recovered b", Status: rcStatusUnresolved},
+		}}
+		rcRankSupported(context.Background(), prov, "intent", "diff", 3, res)
+		if called {
+			t.Error("with the flag off the selection must not run on an unresolved-only pool")
+		}
+		for _, a := range res.Allegations {
+			if a.Status != rcStatusUnresolved {
+				t.Errorf("flag off must leave unresolved findings untouched, got id=%d status=%q", a.ID, a.Status)
+			}
+		}
+	})
 }
 
 // The "never publish nothing" fallback is for CONFIRMED defects only. A
