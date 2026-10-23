@@ -135,10 +135,20 @@ func TestRankCapUnaffectedByFlag(t *testing.T) {
 	}
 }
 
-// TestLatentClauseRaisesTheBar: the latent gate clause carries the precision
-// conditions that keep the flag's recall from flooding false positives.
+// TestLatentClauseRaisesTheBar: the latent gate clause carries the explicit
+// drop-list that keeps the flag's recall from flooding false positives, plus
+// the severity guardrail that keeps a high/critical latent defect supportable
+// on an unverified consequence so the drop-list does not also cost recall.
 func TestLatentClauseRaisesTheBar(t *testing.T) {
-	for _, want := range []string{"higher bar", "high or critical", "unverified consequence is a refutation"} {
+	for _, want := range []string{
+		"higher bar",
+		"drop-list",
+		"high or critical",
+		// guardrail: an unverified consequence refutes only a low/medium latent
+		// defect; a high/critical one may still be supported.
+		"even when you could not fully verify",
+		"unverified consequence is a refutation",
+	} {
 		if !strings.Contains(rcReachableClauseLatent, want) {
 			t.Fatalf("latent gate clause missing precision condition %q", want)
 		}
