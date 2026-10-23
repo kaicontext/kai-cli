@@ -150,6 +150,11 @@ func TestLatentClauseRaisesTheBar(t *testing.T) {
 		// defect; a high/critical one may still be supported.
 		"even when you could not fully verify",
 		"unverified consequence is a refutation",
+		// recall guard: rule 2 must not drop user-facing text defects
+		// (translations/labels/messages), which are 5/92 doc_defect TP in
+		// run42's opus set and count toward core recall.
+		"text shown to a user",
+		"IS production behaviour",
 	} {
 		if !strings.Contains(rcReachableClauseLatent, want) {
 			t.Fatalf("latent gate clause missing precision condition %q", want)
