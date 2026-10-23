@@ -49,12 +49,16 @@ const (
 	rcStageFinder2 = "finder2"
 	rcStageSweep2  = "sweep2"
 	rcStageRank    = "rank"
+	// The humanize pass rewords the confirmed findings for the PR's reader
+	// (review_commit_humanize.go).
+	rcStageHumanize = "humanize"
 )
 
 var rcProfileStages = []string{
 	rcStageQuickDraft, rcStageQuickFactcheck,
 	rcStageIntent, rcStageMain, rcStageSweep, rcStageFactcheck, rcStageConclusion,
-	rcStageFinder2, rcStageSweep2, rcStageRank,
+	rcStageFinder2, rcStageSweep2, rcStageRank, rcStageHumanize,
+	rcStageSpecLogic, rcStageSpecSecurity, rcStageSpecContracts,
 }
 
 // rcProfilePath is where the harness commits the profile, on the base branch.
@@ -276,7 +280,7 @@ func rcStageEffort(stage string) string {
 	switch stage {
 	case rcStageQuickDraft, rcStageQuickFactcheck:
 		return ""
-	case rcStageFinder2, rcStageSweep2, rcStageRank:
+	case rcStageFinder2, rcStageSweep2, rcStageRank, rcStageHumanize, rcStageSpecLogic, rcStageSpecSecurity, rcStageSpecContracts:
 		return rcEnsembleEffort(stage)
 	}
 	return rcReasoningEffort()

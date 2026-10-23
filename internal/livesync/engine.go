@@ -52,6 +52,10 @@ type persistedSyncState struct {
 	Enabled bool     `json:"enabled"`
 	Files   []string `json:"files,omitempty"`
 	LastSeq int64    `json:"last_seq,omitempty"`
+	// Scope is the workspace scope LastSeq belongs to. Sync seqs are global
+	// per repo, so resuming another scope's LastSeq would skip this scope's
+	// earlier events.
+	Scope string `json:"scope,omitempty"`
 }
 
 // Options configures a new Engine.
@@ -104,10 +108,10 @@ type Engine struct {
 	billingMu sync.RWMutex
 	billing   string
 
-	// live-synced ledger (path -> base/peer digests), persisted to
-	// .kai/live-synced.json so `kai capture` can subtract peer changes.
+	// Serializes this engine's read-modify-write of the live-synced ledger
+	// (.kai/live-synced.json), which `kai capture` reads to subtract peer
+	// changes.
 	ledgerMu sync.Mutex
-	ledger   map[string]SyncedEntry
 
 	// CRDT op-transport mode (opt-in via KAI_CRDT_SYNC=1). When set, the engine
 	// syncs RGA ops instead of whole-file content: convergence happens at each
@@ -115,6 +119,12 @@ type Engine struct {
 	crdtMode bool
 	docsMu   sync.Mutex
 	docs     map[string]*crdt.Doc // path -> RGA replica
+
+	// Ops applied to a local Doc whose push failed, per file, resent with
+	// the next push and after every (re)subscribe. Persisted per scope
+	// (unsent.json) so a restart doesn't drop them.
+	unsentMu sync.Mutex
+	unsent   map[string][]crdt.Op
 }
 
 // New constructs an Engine. It does not touch the network until Start.
@@ -198,10 +208,7 @@ func (e *Engine) Start(files []string) (synced int, err error) {
 	synced = e.syncInitialPull()
 
 	// Replay durable sync events missed while offline (best-effort).
-	var replaySeq int64
-	if prev, ok := e.LoadState(); ok {
-		replaySeq = prev.LastSeq
-	}
+	replaySeq := e.resumeSeq()
 	// In CRDT mode the per-file Doc must reflect the FULL op history (genesis
 	// onward) — a partial replay onto a fresh Doc would reconstruct a different
 	// Doc on each client and diverge. Two ways to get there:
@@ -264,7 +271,9 @@ func (e *Engine) Start(files []string) (synced int, err error) {
 		// Convert any tracked whole-file files to op-transport (one-time cutover),
 		// then persist the rebuilt Docs so the next start is a delta replay.
 		if e.crdtMode {
+			e.loadUnsent()
 			e.migrateUnconverted(files)
+			e.retryUnsent()
 			e.saveAllCRDTDocs()
 		}
 	}
@@ -614,6 +623,9 @@ func (e *Engine) connectSSE(url, channelID string) {
 		}
 		e.channelID = newResp.ChannelID
 		fmt.Fprintf(os.Stderr, "[kai-sync] re-subscribed on channel %s\n", newResp.ChannelID)
+		if e.crdtMode {
+			e.retryUnsent()
+		}
 		return
 	}
 	if resp.StatusCode != 200 {
@@ -690,6 +702,14 @@ func (e *Engine) handleSyncFileChange(data string) {
 func (e *Engine) syncInitialPull() int {
 	db := e.db
 	if db == nil {
+		return 0
+	}
+
+	// The pull below fetches TRUNK (snap.latest) and merges it into the working
+	// tree. A workspace session's files come from the workspace — its checkout
+	// and its own scoped event replay — so merging trunk in produced spurious
+	// conflicts against the workspace's base and moved the local snap.latest.
+	if e.workspace != "" {
 		return 0
 	}
 
@@ -947,10 +967,10 @@ func (e *Engine) statePath() string {
 // SaveState writes Enabled=true with the given files, preserving LastSeq.
 func (e *Engine) SaveState(files []string) {
 	var lastSeq int64
-	if prev, ok := e.LoadState(); ok {
+	if prev, ok := e.LoadState(); ok && prev.Scope == e.workspace {
 		lastSeq = prev.LastSeq
 	}
-	data, err := json.Marshal(persistedSyncState{Enabled: true, Files: files, LastSeq: lastSeq})
+	data, err := json.Marshal(persistedSyncState{Enabled: true, Files: files, LastSeq: lastSeq, Scope: e.workspace})
 	if err != nil {
 		return
 	}
@@ -959,7 +979,7 @@ func (e *Engine) SaveState(files []string) {
 
 func (e *Engine) saveSyncSeq(seq int64) {
 	prev, _ := e.LoadState()
-	state := persistedSyncState{Enabled: true, LastSeq: seq}
+	state := persistedSyncState{Enabled: true, LastSeq: seq, Scope: e.workspace}
 	if prev != nil {
 		state.Files = prev.Files
 	}
@@ -976,6 +996,15 @@ func (e *Engine) ClearState() {
 }
 
 // LoadState reads the persisted sync-state; ok=false if missing/disabled.
+// resumeSeq is the sync seq to replay from: the saved LastSeq when it was
+// recorded under this engine's scope, else 0 (replay this scope from the start).
+func (e *Engine) resumeSeq() int64 {
+	if prev, ok := e.LoadState(); ok && prev.Scope == e.workspace {
+		return prev.LastSeq
+	}
+	return 0
+}
+
 func (e *Engine) LoadState() (*persistedSyncState, bool) {
 	data, err := os.ReadFile(e.statePath())
 	if err != nil {

@@ -114,3 +114,10 @@ func applyPeerExclusion(source filesource.FileSource, db *graph.DB, kaiDirPath, 
 	}
 	return &peerFilteredSource{inner: source, overrides: ov, omit: omit}, n
 }
+
+// clearPeerLedger forgets recorded live-sync peer contributions (best-effort).
+func clearPeerLedger(kaiDirPath string) {
+	if err := livesync.ClearSyncedLedger(kaiDirPath); err != nil {
+		debugf("clearing live-synced ledger: %v", err)
+	}
+}

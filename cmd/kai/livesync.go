@@ -8,17 +8,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kaicontext/kai-engine/authorship"
-	"kai/internal/livesync"
 	"github.com/kaicontext/kai-engine/ref"
-	"github.com/kaicontext/kai-engine/remote"
 	"github.com/kaicontext/kai-engine/watcher"
+	"kai/internal/livesync"
 )
 
 // liveRunCmd runs a foreground bidirectional peer-sync session for the
@@ -150,9 +148,9 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 	// daemon — even a manually-started one — not a stale pidfile entry.
 	_ = os.WriteFile(autoSyncPidPath(kaiDir), []byte(strconv.Itoa(os.Getpid())), 0644)
 
-	client, err := remote.NewClientForRemote("origin")
+	client, err := configuredOrigin()
 	if err != nil {
-		return fmt.Errorf("live sync: no `origin` remote configured (`kai remote set origin <url>`): %w", err)
+		return fmt.Errorf("live sync: %w", err)
 	}
 	if client.AuthToken == "" {
 		return fmt.Errorf("live sync: not logged in (`kai auth login`)")
@@ -177,7 +175,7 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 		Client:           client,
 		Agent:            "kai-cli",
 		SessionID:        sessionID,
-		Workspace:        ws,
+		Workspace:        liveSyncScope(db, ws),
 		CheckpointWriter: authorship.NewCheckpointWriter(kaiDir, sessionID),
 		CRDTMode:         crdtMode,
 	})
@@ -187,41 +185,21 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 	// (default) pushes every change. Receiving peers' edits is unaffected by
 	// the mode. The flag wins; otherwise the persisted per-repo mode applies.
 	checkpointMode := liveRunCheckpoint || readSyncMode(kaiDir) == "checkpoint"
-	var dirtyMu sync.Mutex
-	dirty := make(map[string]bool)
+	queue := newLivePushQueue(checkpointMode)
 
-	// File watcher: feed changed paths to the engine's push side.
+	// File watcher: feed each changed path to the engine's push side as soon
+	// as the watcher has processed it (100ms debounce). Not OnActivity — that
+	// fires on a 30s ticker and delayed every local edit by up to 30s.
 	w, err := watcher.New(workDir, db)
 	if err != nil {
 		return fmt.Errorf("starting file watcher: %w", err)
 	}
 	w.OnError = func(err error) { fmt.Fprintf(os.Stderr, "[kai-watcher] %v\n", err) }
-	w.OnActivity = func(entries []watcher.ActivityEntry) {
-		paths := make([]string, 0, len(entries))
-		for _, e := range entries {
-			paths = append(paths, e.Path)
-		}
-		if checkpointMode {
-			dirtyMu.Lock()
-			for _, p := range paths {
-				dirty[p] = true
-			}
-			dirtyMu.Unlock()
-			return
-		}
-		eng.PushChanges(paths)
-	}
+	w.OnUpdate = func(path, _ string) { queue.Add(path) }
 
 	// flushCheckpoint pushes everything edited since the last checkpoint.
 	flushCheckpoint := func() {
-		dirtyMu.Lock()
-		paths := make([]string, 0, len(dirty))
-		for p := range dirty {
-			paths = append(paths, p)
-		}
-		dirty = make(map[string]bool)
-		dirtyMu.Unlock()
-		if len(paths) > 0 {
+		if paths := queue.Drain(); len(paths) > 0 {
 			eng.PushChanges(paths)
 			fmt.Printf("Live sync: checkpoint pushed %d file(s)\n", len(paths))
 		}
@@ -265,7 +243,10 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 
 		if probeOnline(client.BaseURL) {
 			synced, err := eng.Start(nil)
-			if err != nil {
+			if err != nil && permanentSyncError(err) {
+				w.Stop()
+				return fmt.Errorf("live sync: server refused the subscription for %s (%s) — not retrying", client.BaseURL, strings.TrimSpace(err.Error()))
+			} else if err != nil {
 				fmt.Printf("Live sync: connect failed (%v) — retrying...\n", err)
 			} else {
 				eng.SaveState(nil)
@@ -300,10 +281,16 @@ func runLiveRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Start pushing only once subscribed: edits made while connecting stay
+	// queued and go out in the first batch instead of no-opping.
+	stopPush := make(chan struct{})
+	go queue.Run(stopPush, eng.PushChanges)
+
 	for {
 		select {
 		case <-sig:
 			fmt.Println("\nStopping live sync...")
+			close(stopPush)
 			if checkpointMode {
 				flushCheckpoint() // don't lose the last batch
 			}
@@ -351,9 +338,9 @@ func setupLiveSync(kaiDir string) (*liveSyncWiring, error) {
 		return nil, nil
 	}
 
-	client, err := remote.NewClientForRemote("origin")
+	client, err := configuredOrigin()
 	if err != nil {
-		return nil, fmt.Errorf("live sync: no `origin` remote configured (`kai remote set origin <url>`): %w", err)
+		return nil, fmt.Errorf("live sync: %w", err)
 	}
 	if client.AuthToken == "" {
 		return nil, fmt.Errorf("live sync: not logged in (`kai auth login`)")
@@ -361,8 +348,7 @@ func setupLiveSync(kaiDir string) (*liveSyncWiring, error) {
 
 	agent := fmt.Sprintf("kai-code:%d", os.Getpid())
 	// Scope to the current workspace (empty = repo-wide, backward compatible).
-	cw, _ := getCurrentWorkspace()
-	resp, err := client.SubscribeSync(agent, client.Actor, cw, state.Files)
+	resp, err := client.SubscribeSync(agent, client.Actor, currentLiveSyncScope(), state.Files)
 	if err != nil {
 		return nil, fmt.Errorf("live sync: subscribe failed: %w", err)
 	}

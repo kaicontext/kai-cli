@@ -65,14 +65,15 @@ func (e *Engine) recordPeerContribution(path string, local, peerContent []byte) 
 	}
 	e.ledgerMu.Lock()
 	defer e.ledgerMu.Unlock()
-	if e.ledger == nil {
-		if m, ok := LoadSyncedLedger(e.kaiDir); ok {
-			e.ledger = m
-		} else {
-			e.ledger = make(map[string]SyncedEntry)
-		}
+	// Re-read from disk every time rather than caching: the ledger is cleared
+	// by other processes (workspace switch/leave/close, a capture that records
+	// the peer content as yours), and rewriting a cached copy resurrected the
+	// cleared entries.
+	ledger, ok := LoadSyncedLedger(e.kaiDir)
+	if !ok {
+		ledger = make(map[string]SyncedEntry)
 	}
-	entry, exists := e.ledger[path]
+	entry, exists := ledger[path]
 	if !exists {
 		// First peer edit since the last reconcile — pin my pre-peer base.
 		baseDigest := ""
@@ -84,8 +85,21 @@ func (e *Engine) recordPeerContribution(path string, local, peerContent []byte) 
 		entry.BaseDigest = baseDigest
 	}
 	entry.PeerDigest = peerDigest
-	e.ledger[path] = entry
-	writeSyncedLedger(e.kaiDir, e.ledger)
+	ledger[path] = entry
+	writeSyncedLedger(e.kaiDir, ledger)
+}
+
+// ClearSyncedLedger forgets every recorded peer contribution. Call it when
+// the entries stop describing the working tree's peer edits: the checked-out
+// workspace changed (switch, leave, close, delete) or a capture recorded the
+// peer content as the user's own (`kai capture --all`, a bridge capture of a
+// git commit). Left in place, a stale entry made every later default capture
+// silently revert that file to its pre-peer version.
+func ClearSyncedLedger(kaiDir string) error {
+	if err := os.Remove(ledgerPath(kaiDir)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // ReconstructLocal returns "my version" of a file: the current on-disk content

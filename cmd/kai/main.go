@@ -44,6 +44,7 @@ import (
 	"github.com/kaicontext/kai-engine/filesource"
 	"github.com/kaicontext/kai-engine/gitio"
 	"github.com/kaicontext/kai-engine/graph"
+	"github.com/kaicontext/kai-engine/ignore"
 	"github.com/kaicontext/kai-engine/intent"
 	"github.com/kaicontext/kai-engine/kaipath"
 	"github.com/kaicontext/kai-engine/memstat"
@@ -1147,39 +1148,50 @@ Examples:
 }
 
 var wsLogCmd = &cobra.Command{
-	Use:   "log",
-	Short: "Show workspace changelog",
+	Use:   "log [workspace]",
+	Short: "Show workspace changelog (default: the checked-out workspace)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runWsLog,
 }
 
 var wsShelveCmd = &cobra.Command{
-	Use:   "shelve",
-	Short: "Shelve a workspace (freeze staging)",
+	Use:   "shelve [workspace]",
+	Short: "Shelve a workspace (freeze staging; default: the checked-out workspace)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runWsShelve,
 }
 
 var wsUnshelveCmd = &cobra.Command{
-	Use:   "unshelve",
-	Short: "Unshelve a workspace (resume staging)",
+	Use:   "unshelve [workspace]",
+	Short: "Unshelve a workspace (resume staging; default: the checked-out workspace)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runWsUnshelve,
 }
 
 var wsCloseCmd = &cobra.Command{
-	Use:   "close",
+	Use:   "close <workspace>",
 	Short: "Close a workspace (permanent)",
-	RunE:  runWsClose,
+	Long: `Close a workspace permanently. If it is the checked-out workspace, Kai
+stops treating it as current (and stops its live sync); files on disk are
+left as they are — run 'kai checkout snap.latest' to restore trunk's files.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runWsClose,
 }
 
 var wsDeleteCmd = &cobra.Command{
-	Use:   "delete",
+	Use:   "delete <workspace>",
+	Args:  cobra.MaximumNArgs(1),
 	Short: "Delete a workspace (metadata and refs; run `kai prune` to reclaim storage)",
 	Long: `Delete a workspace permanently, removing the workspace node, edges, and refs.
 
 Content (snapshots, changesets, files) is NOT deleted - that's the GC's job.
 Run 'kai prune' after deleting workspaces to reclaim storage.
 
+If it is the checked-out workspace, Kai stops treating it as current (and
+stops its live sync); files on disk are left as they are.
+
 Examples:
-  kai ws delete --ws feature/experiment --dry-run  # Preview what would be deleted
+  kai ws delete feature/experiment --dry-run       # Preview what would be deleted
   kai ws delete --ws feature/experiment            # Actually delete
   kai ws delete --ws old-branch --keep-refs        # Keep refs (rare)`,
 	RunE: runWsDelete,
@@ -1187,14 +1199,18 @@ Examples:
 
 var wsCheckoutCmd = &cobra.Command{
 	Use:   "checkout [workspace]",
-	Short: "Checkout workspace and set as current",
+	Short: "Checkout workspace and set as current (no name: leave it, back to trunk)",
 	Long: `Checkout a workspace's head snapshot and set it as the current workspace.
 
 This writes files from the workspace's current state to a directory and
 sets .kai/workspace so subsequent commands use this workspace by default.
 
+With no name, leaves the current workspace: restores trunk (snap.latest)
+into the directory, clears the current workspace and stops its live sync.
+
 Examples:
   kai ws checkout feat/demo              # Checkout and set as current
+  kai ws checkout                        # Leave the workspace, back to trunk
   kai ws checkout feat/demo --dir ./src  # Checkout to specific directory
   kai ws checkout feat/demo --clean      # Remove files not in snapshot`,
 	Args: cobra.MaximumNArgs(1),
@@ -1999,8 +2015,7 @@ func runLiveStatus(cmd *cobra.Command, args []string) error {
 
 	// Scope status to the current workspace (empty = repo-wide), matching how
 	// sync events are scoped on the server.
-	curWs, _ := getCurrentWorkspace()
-	summary, err := client.GetSyncLive(sinceFlag, !noFiles, curWs, limitFlag)
+	summary, err := client.GetSyncLive(sinceFlag, !noFiles, currentLiveSyncScope(), limitFlag)
 	if err != nil {
 		return err
 	}
@@ -2902,7 +2917,8 @@ const kaiHookMarker = "# kai-managed-hook"
 // differs, so a mismatch makes the two fight and downgrade each other.
 // v8: pre-push appends timestamped entries to push.log (rotating at ~512KB)
 // instead of truncating, and `kai push` maintains push-failed.json.
-const kaiHookVersion = "v8"
+// v9: pre-push finds the store by its db.sqlite, not a bare .kai directory.
+const kaiHookVersion = "v9"
 
 // All hook scripts early-exit when KAI_BRIDGE_INPROGRESS=1. Set by kai itself
 // when it is the one driving the git operation (e.g. milestone→commit bridge),
@@ -2956,9 +2972,11 @@ fi
 if ! command -v kai >/dev/null 2>&1; then
   exit 0
 fi
-if [ -d .kai ]; then
+# The store is where the database is, never a bare .kai directory (other
+# tools drop files there) — same rule as kaipath.Resolve.
+if [ -f .kai/db.sqlite ]; then
   KAI_HOOK_DIR=.kai
-elif [ -d .git/kai ]; then
+elif [ -f .git/kai/db.sqlite ]; then
   KAI_HOOK_DIR=.git/kai
 else
   exit 0
@@ -3137,6 +3155,12 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	// kai data directory
+	if stores := kaipath.Stores("."); len(stores) > 1 {
+		fmt.Printf("%s two kai stores — commands refuse to run until you run 'kai store merge':\n", bad)
+		for _, s := range stores {
+			fmt.Printf("      %s  (%s)\n", filepath.Join(s, kaipath.StoreFile), describeStore(s))
+		}
+	}
 	if _, err := os.Stat(kaiDir); err == nil {
 		fmt.Printf("%s kai data directory present (%s)\n", ok, kaiDir)
 		// Object-store integrity. A content-addressed node whose stored
@@ -3699,12 +3723,14 @@ func runBridgeMilestone(cmd *cobra.Command, args []string) error {
 	// KAI_BRIDGE_INPROGRESS below to prevent loops).
 	{
 		initMode = true
+		captureTrunkOnly = true
 		if err := runCapture(cmd, nil); err != nil {
 			debugf("bridge milestone: capture failed: %v", err)
 			// non-fatal — the milestone still goes through, just without a
 			// fresh Kai-Snapshot trailer
 		}
 		initMode = false
+		captureTrunkOnly = false
 	}
 
 	// Read snap.latest for the trailer. Missing snap.latest is fine — the
@@ -3842,7 +3868,8 @@ func runBridgeImport(cmd *cobra.Command, args []string) error {
 	// runCapture is idempotent (content-addressed) — if nothing changed since
 	// the last capture, snap.latest is unchanged and the ref just points there.
 	initMode = true
-	defer func() { initMode = false }()
+	captureTrunkOnly = true
+	defer func() { initMode = false; captureTrunkOnly = false }()
 	if err := runCapture(cmd, nil); err != nil {
 		debugf("bridge import: capture failed: %v", err)
 		return nil
@@ -4090,6 +4117,7 @@ func init() {
 		// print colored output (e.g. kai diff) can decide whether to emit
 		// ANSI escapes. Respects NO_COLOR.
 		initColors()
+		refuseSplitStore(cmd)
 		// `kai code` hands off to kit (syscall.Exec) moments later, which
 		// replaces this process — killing the backgroundUpdateCheck goroutine
 		// mid-write and bleeding the update notice into kit's first frame.
@@ -4173,22 +4201,17 @@ func init() {
 	wsStageCmd.Flags().StringVarP(&wsStageMessage, "message", "m", "", "Message describing the staged changes")
 	wsStageCmd.Flags().StringVar(&wsSignKey, "sign-ssh-key", "", "Path to SSH private key for signing changesets")
 
-	wsLogCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
-	wsLogCmd.MarkFlagRequired("ws")
+	wsLogCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (default: the checked-out workspace)")
 
-	wsShelveCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
-	wsShelveCmd.MarkFlagRequired("ws")
+	wsShelveCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (default: the checked-out workspace)")
 
-	wsUnshelveCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
-	wsUnshelveCmd.MarkFlagRequired("ws")
+	wsUnshelveCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (default: the checked-out workspace)")
 
-	wsCloseCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
-	wsCloseCmd.MarkFlagRequired("ws")
+	wsCloseCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (or pass as positional arg)")
 
-	wsDeleteCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (required)")
+	wsDeleteCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name or ID (or pass as positional arg)")
 	wsDeleteCmd.Flags().BoolVar(&wsDeleteKeepRefs, "keep-refs", false, "Preserve workspace refs (rare)")
 	wsDeleteCmd.Flags().BoolVar(&wsDeleteDryRun, "dry-run", false, "Show what would be deleted without actually deleting")
-	wsDeleteCmd.MarkFlagRequired("ws")
 
 	wsCheckoutCmd.Flags().StringVar(&wsName, "ws", "", "Workspace name (or pass as positional arg)")
 	wsCheckoutCmd.Flags().StringVar(&wsDir, "dir", ".", "Target directory to write files to")
@@ -5018,6 +5041,17 @@ func orgSlugs(orgs []remote.OrgInfo) string {
 // initMode suppresses chatty output from sub-commands called during kai init
 var initMode bool
 
+// captureTrunkOnly is set by the bridge, whose captures record a git commit
+// and must match it exactly:
+//   - snap.latest advances even when a workspace is checked out. A git
+//     commit is trunk history; staging it into the checked-out workspace
+//     absorbed the commit into that workspace and left git.<sha> pointing
+//     at the PREVIOUS snapshot.
+//   - live-synced peer contributions are NOT reverted out (as with --all).
+//     The commit contains what is on disk; reverting a ledgered peer edit
+//     recorded the commit with an older version of the file.
+var captureTrunkOnly bool
+
 // ANSI color helpers for init output. Respect NO_COLOR and non-TTY stderr.
 var stderrColor bool
 
@@ -5325,12 +5359,7 @@ func runInit(cmd *cobra.Command, args []string) (err error) {
 		return fmt.Errorf("creating kai data directory: %w", err)
 	}
 
-	// Maintain a .gitignore entry only when the data dir lives in the
-	// worktree (.kai); the .git/kai layout is auto-ignored by git so we
-	// skip touching .gitignore there.
-	if kaipath.NeedsGitignore(kaiDir) {
-		ensureGitignore(filepath.Base(kaiDir))
-	}
+	initGitignore(kaiDir)
 
 	// --git-bridge: mark bridge enabled before runHookInstall runs so the
 	// post-commit hook gets written. Requires .git/ to actually exist.
@@ -5685,8 +5714,8 @@ Kai uses a two-tier snapshot model to prevent database bloat:
 
 | Ref | Purpose | GC Root? |
 |-----|---------|----------|
-| ` + "`" + `@snap:working` + "`" + ` | Current working directory state | No (ephemeral) |
-| ` + "`" + `@snap:last` + "`" + ` | Last committed baseline | No (ephemeral) |
+| ` + "`" + `@snap:working` + "`" + ` | Current working directory state | Yes (until replaced) |
+| ` + "`" + `@snap:last` + "`" + ` | Last committed baseline | Yes |
 | ` + "`" + `snap.main` + "`" + `, etc. | Named refs you create | Yes (permanent) |
 
 ### How it works:
@@ -5706,6 +5735,8 @@ kai prune --keep "src/**"  # Preserve files matching pattern
 ` + "```" + `
 
 **What stays alive:**
+- The latest capture (` + "`" + `snap.latest` + "`" + `) and the current working snapshot
+- Every capture in the history log (` + "`" + `@snap:last~N` + "`" + `)
 - Snapshots referenced by workspaces
 - Snapshots referenced by reviews
 - Snapshots with named refs (` + "`" + `snap.main` + "`" + `, etc.)
@@ -6297,6 +6328,40 @@ func printBYOMHintIfActive() {
 	}
 }
 
+// initGitignore applies kai init's .gitignore rules: the worktree data dir
+// entry, plus the greenfield seed when the repo has no .gitignore yet.
+func initGitignore(kaiDir string) {
+	// Greenfield: the repo has no .gitignore yet (decided before kai writes
+	// any entry of its own below or in writeAgentHooks).
+	_, giErr := os.Stat(".gitignore")
+	greenfield := os.IsNotExist(giErr)
+
+	// Maintain a .gitignore entry only when the data dir lives in the
+	// worktree (.kai); the .git/kai layout is auto-ignored by git so we
+	// skip touching .gitignore there.
+	if kaipath.NeedsGitignore(kaiDir) {
+		ensureGitignore(filepath.Base(kaiDir))
+	}
+
+	// Greenfield seeding (same rule as kit): when kai creates the repo's
+	// .gitignore, seed common build/runtime artifacts so the first
+	// `git add -A` or capture doesn't commit them (2026-10-21: a Python
+	// repo's __pycache__/*.pyc went into history and had to be purged).
+	// Only-on-create never overrides an existing project decision.
+	if greenfield {
+		for _, entry := range greenfieldIgnores {
+			ensureGitignore(entry)
+		}
+	}
+}
+
+// greenfieldIgnores seed a .gitignore that kai init creates (kit uses the
+// same list).
+var greenfieldIgnores = []string{
+	"node_modules/", "dist/", "build/", "*.sqlite", "*.sqlite3", "*.db",
+	"__pycache__/", "*.pyc", ".venv/", ".DS_Store",
+}
+
 // ensureGitignore appends entry to .gitignore if not already present.
 func ensureGitignore(entry string) {
 	const gitignorePath = ".gitignore"
@@ -6385,15 +6450,18 @@ func runGitImport(db *graph.DB) error {
 	}
 	commits := strings.Split(strings.TrimSpace(string(listOut)), "\n")
 
-	// Save current branch to restore later
+	// The branch HEAD is on, for attributing the tip in graph_refs below.
 	currentBranch, _ := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
 	currentRef := strings.TrimSpace(string(currentBranch))
-	defer func() {
-		exec.Command("git", "checkout", currentRef).Run()
-	}()
 
 	creator := snapshot.NewCreator(db, nil)
 	refMgr := ref.NewRefManager(db)
+	purged := loadPurgePatterns(kaiDir)
+	// The working tree's ignore rules, as every directory capture applies.
+	ignoreRules, ierr := ignore.LoadFromDir(".")
+	if ierr != nil {
+		return fmt.Errorf("loading ignore rules: %w", ierr)
+	}
 
 	// Pin every imported commit in graph_refs (batched: one load, one save)
 	// so drift classification can resolve exact-SHA states for the whole
@@ -6415,35 +6483,50 @@ func runGitImport(db *graph.DB) error {
 			fmt.Fprintf(os.Stderr, "\r  [%d/%d] %s %.7s", i+1, len(commits), msg, commitHash)
 		}
 
-		// Checkout this commit
-		if err := exec.Command("git", "checkout", "--quiet", commitHash).Run(); err != nil {
-			continue
-		}
-
-		// Create snapshot (no analysis — too slow for bulk import)
-		source, serr := dirio.OpenDirectory(".")
+		// Snapshot the commit's tree straight from git objects (no analysis —
+		// too slow for bulk import). This used to `git checkout` each commit
+		// and snapshot the directory: it rewrote the user's working tree during
+		// init, put untracked and uncommitted files into every historical
+		// snapshot, silently skipped commits whose checkout conflicted, and
+		// fired the installed git hooks once per commit.
+		gs, serr := gitio.OpenSource(".", commitHash)
 		if serr != nil {
-			continue
+			return fmt.Errorf("reading commit %.12s: %w", commitHash, serr)
 		}
-		snapshotID, err := creator.CreateSnapshot(source)
+		snapshotID, err := creator.CreateSnapshot(dirLangSource{GitSource: gs, purged: purged, ignore: ignoreRules})
 		if err != nil {
-			continue
+			return fmt.Errorf("snapshotting commit %.12s: %w", commitHash, err)
 		}
 
-		// Update refs
+		// Update refs. A snapshot nothing points at isn't history: fail
+		// rather than report an import that left the commit unreachable.
 		autoRefMgr := ref.NewAutoRefManager(db)
-		autoRefMgr.OnSnapshotCreated(snapshotID)
+		if err := autoRefMgr.OnSnapshotCreated(snapshotID); err != nil {
+			return fmt.Errorf("imported %s but could not publish it as snap.latest: %w", util.BytesToHex(snapshotID)[:12], err)
+		}
 
 		if graphRefsErr == nil {
 			graphRefs.Pin("", commitHash, time.Now())
 			lastImported = commitHash
 		}
 
+		// Map the commit to its snapshot exactly as the bridge does for new
+		// commits (git.<sha12>, and git.HEAD for the tip). Import wrote no
+		// mapping at all, so after `kai init` no commit — not even HEAD —
+		// resolved to a snapshot until the next commit's hook ran.
+		meta := map[string]string{"source": "init_import", "git_commit": commitHash}
+		if err := refMgr.SetWithMeta("git."+shortPrefix(commitHash), snapshotID, ref.KindSnapshot, "", meta); err != nil {
+			return fmt.Errorf("mapping commit %.12s: %w", commitHash, err)
+		}
+		if i == len(commits)-1 {
+			if err := refMgr.SetWithMeta("git.HEAD", snapshotID, ref.KindSnapshot, "", meta); err != nil {
+				return fmt.Errorf("mapping git.HEAD: %w", err)
+			}
+		}
+
 		// Store commit message for push
 		os.MkdirAll(kaiDir, 0755)
 		os.WriteFile(filepath.Join(kaiDir, "message"), []byte(msg), 0644)
-
-		_ = refMgr
 	}
 
 	if graphRefsErr == nil && lastImported != "" {
@@ -6469,6 +6552,135 @@ func runGitImport(db *graph.DB) error {
 	}
 
 	return nil
+}
+
+// purgedFile is where `kai purge` records its patterns.
+func purgedFile(kd string) string { return filepath.Join(kd, "purged.json") }
+
+type purgeRecord struct {
+	Patterns []string `json:"patterns"`
+}
+
+func loadPurgePatterns(kd string) []string {
+	data, err := os.ReadFile(purgedFile(kd))
+	if err != nil {
+		return nil
+	}
+	var rec purgeRecord
+	if json.Unmarshal(data, &rec) != nil {
+		return nil
+	}
+	return rec.Patterns
+}
+
+func recordPurgePatterns(kd string, patterns []string) error {
+	seen := map[string]bool{}
+	all := loadPurgePatterns(kd)
+	for _, p := range all {
+		seen[p] = true
+	}
+	for _, p := range patterns {
+		if !seen[p] {
+			all = append(all, p)
+			seen[p] = true
+		}
+	}
+	data, err := json.MarshalIndent(purgeRecord{Patterns: all}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(purgedFile(kd), append(data, '\n'), 0644)
+}
+
+// purgeMatch mirrors kai-engine graph.matchesAnyPattern (the matcher
+// `kai purge` used): exact path, filepath.Match, "dir/**" prefixes and
+// "**/x" suffixes.
+func purgeMatch(patterns []string, path string) bool {
+	for _, p := range patterns {
+		if p == path {
+			return true
+		}
+		if ok, _ := filepath.Match(p, path); ok {
+			return true
+		}
+		if strings.HasSuffix(p, "/**") && strings.HasPrefix(path, strings.TrimSuffix(p, "**")) {
+			return true
+		}
+		if strings.HasPrefix(p, "**/") {
+			suffix := strings.TrimPrefix(p, "**/")
+			if strings.HasSuffix(path, "/"+suffix) || path == suffix {
+				return true
+			}
+			if ok, _ := filepath.Match(suffix, filepath.Base(path)); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// dirLangSource labels a git tree's files with the directory capture's
+// language classification, so a commit imported from git objects shares File
+// nodes (and their symbols) with captures of the same files from disk —
+// gitio and dirio disagree on a few extensions, e.g. .proto.
+// It also drops what a directory capture would never record — files the
+// repo's ignore rules exclude (.kaiignore, .gitignore, kai's structural
+// excludes; the checkout-based import got these from dirio) — and files
+// matching patterns from `kai purge`, so re-importing history doesn't
+// resurrect what was purged.
+type dirLangSource struct {
+	*gitio.GitSource
+	purged []string
+	ignore *ignore.Matcher
+}
+
+// excluded reports whether path is dropped from an imported snapshot.
+func (s dirLangSource) excluded(path string) bool {
+	if purgeMatch(s.purged, path) {
+		return true
+	}
+	if s.ignore == nil {
+		return false
+	}
+	// Directory patterns ("ignored-dir/") only match directories, and the
+	// directory walker never descends into an ignored one — check every
+	// ancestor, then the file itself.
+	parts := strings.Split(path, "/")
+	for i := 1; i < len(parts); i++ {
+		if s.ignore.Match(strings.Join(parts[:i], "/"), true) {
+			return true
+		}
+	}
+	return s.ignore.Match(path, false)
+}
+
+func (s dirLangSource) GetFiles() ([]*filesource.FileInfo, error) {
+	files, err := s.GitSource.GetFiles()
+	if err != nil {
+		return nil, err
+	}
+	out := files[:0]
+	for _, f := range files {
+		if s.excluded(f.Path) {
+			continue
+		}
+		if f.Mode != filesource.ModeSymlink {
+			f.Lang = dirio.DetectLang(f.Path)
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+func (s dirLangSource) GetFile(path string) (*filesource.FileInfo, error) {
+	if s.excluded(path) {
+		return nil, os.ErrNotExist
+	}
+	f, err := s.GitSource.GetFile(path)
+	if err == nil && f != nil && f.Mode != filesource.ModeSymlink {
+		f.Lang = dirio.DetectLang(f.Path)
+	}
+	return f, err
 }
 
 // detectCIPlatform checks the git remote URL to determine GitHub vs GitLab.
@@ -6824,7 +7036,7 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	// live-synced peer contributions out of the snapshot (per-file, line-level
 	// where we both touched a file). `--all` includes everything.
 	capSource := filesource.FileSource(source)
-	if !captureAll {
+	if !captureAll && !captureTrunkOnly {
 		if filtered, n := applyPeerExclusion(capSource, db, kaiDir, capturePath); n > 0 {
 			capSource = filtered
 			if !initMode {
@@ -6868,6 +7080,14 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	}
 	debugf("snapshot created: %s", util.BytesToHex(snapshotID))
 
+	// A whole-tree capture that kept live-synced peer content (--all, or a
+	// bridge capture of a git commit) has recorded it as the user's own:
+	// drop the ledger, or later default captures keep reverting those files
+	// to their pre-peer versions.
+	if (captureAll || captureTrunkOnly) && capturePath == "." {
+		clearPeerLedger(kaiDir)
+	}
+
 	// Persist stat cache so next capture can skip unchanged files
 	if err := statCache.Save(cacheDir); err != nil {
 		debugf("warning: failed to save stat cache: %v", err)
@@ -6889,7 +7109,10 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	// tracks trunk. Compute the baseline ref once; it's reused for the
 	// analysis-skip check, authorship forward-porting, and the staging
 	// branch below.
-	currentCaptureWs, _ := getCurrentWorkspace()
+	var currentCaptureWs string
+	if !captureTrunkOnly {
+		currentCaptureWs, _ = getCurrentWorkspace()
+	}
 	baselineRefName := "snap.latest"
 	if currentCaptureWs != "" {
 		baselineRefName = "ws." + currentCaptureWs + ".head"
@@ -7103,7 +7326,15 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	var capSummary *captureSummary
 	if !isFirstScan && !skipSummary {
 		debugf("Computing changes...")
-		capSummary = computeCaptureSummary(db, snapshotID, matcher)
+		// Compare against what this capture replaces: the workspace head when
+		// one is checked out, else snap.latest. It used to resolve @snap:last,
+		// which in a fresh clone (empty log) fell back to the newest Snapshot
+		// node — this capture itself — and printed "no changes".
+		baseline := previousSnapID
+		if existingLatestRef != nil {
+			baseline = existingLatestRef.TargetID
+		}
+		capSummary = computeCaptureSummary(db, baseline, snapshotID, matcher)
 		debugf("Computing changes: done")
 	}
 	captureTimingPrint("11-change-summary", captureTimingPhaseStart)
@@ -7197,11 +7428,13 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	// Always update snap.latest (like git commit updates HEAD)
+	// A capture whose snapshot isn't published as snap.latest (and in the
+	// history log) didn't capture anything you can get back to — fail
+	// loudly instead of the debug-only warning this used to be.
 	if err := autoRefMgr.OnSnapshotCreatedWithMeta(snapshotID, snapMeta); err != nil {
-		debugf("warning: failed to update refs: %v", err)
-	} else {
-		debugf("refs updated successfully")
+		return fmt.Errorf("snapshot %s was saved but could not be published as snap.latest, so the capture did not complete: %w", shortID(util.BytesToHex(snapshotID)), err)
 	}
+	debugf("refs updated successfully")
 
 	// Auto-create changeset if there are changes
 	if capSummary != nil && capSummary.hasChanges && previousSnapID != nil {
@@ -7320,14 +7553,11 @@ func bucketChangeTypes(changeTypes map[string][]string) map[ChangeBucket][]strin
 }
 
 // computeCaptureSummary computes a quick summary of changes between @snap:last and new snapshot
-func computeCaptureSummary(db *graph.DB, newSnapshotID []byte, matcher *module.Matcher) *captureSummary {
+func computeCaptureSummary(db *graph.DB, baseSnapID, newSnapshotID []byte, matcher *module.Matcher) *captureSummary {
 	summary := &captureSummary{
 		changeTypes: make(map[string][]string),
 	}
-
-	// Get baseline snapshot
-	baseSnapID, err := resolveSnapshotID(db, "@snap:last")
-	if err != nil {
+	if len(baseSnapID) == 0 {
 		return summary
 	}
 
@@ -7482,10 +7712,9 @@ func createSnapshotFromDir(db *graph.DB, dir string) ([]byte, error) {
 	autoRefMgr := ref.NewAutoRefManager(db)
 	if err := autoRefMgr.OnSnapshotCreated(snapshotID); err != nil {
 		fmt.Println("failed")
-		fmt.Fprintf(os.Stderr, "warning: failed to update refs: %v\n", err)
-	} else {
-		fmt.Println("done")
+		return nil, fmt.Errorf("snapshot %s was saved but could not be published as snap.latest: %w", util.BytesToHex(snapshotID)[:12], err)
 	}
+	fmt.Println("done")
 
 	fmt.Printf("Created snapshot: %s\n", util.BytesToHex(snapshotID))
 	return snapshotID, nil
@@ -7636,10 +7865,9 @@ func runSnapshot(cmd *cobra.Command, args []string) (err error) {
 	autoRefMgr := ref.NewAutoRefManager(db)
 	if err := autoRefMgr.OnSnapshotCreated(snapshotID); err != nil {
 		fmt.Println("failed")
-		fmt.Fprintf(os.Stderr, "warning: failed to update refs: %v\n", err)
-	} else {
-		fmt.Println("done")
+		return fmt.Errorf("snapshot %s was saved but could not be published as snap.latest: %w", util.BytesToHex(snapshotID)[:12], err)
 	}
+	fmt.Println("done")
 
 	fmt.Println()
 	fmt.Printf("Created snapshot: %s\n", util.BytesToHex(snapshotID))
@@ -14195,7 +14423,9 @@ func runWsCreate(cmd *cobra.Command, args []string) error {
 
 		// Update refs
 		autoRefMgr := ref.NewAutoRefManager(db)
-		_ = autoRefMgr.OnSnapshotCreated(baseID)
+		if err := autoRefMgr.OnSnapshotCreated(baseID); err != nil {
+			return fmt.Errorf("base snapshot %s was saved but could not be published as snap.latest: %w", util.BytesToHex(baseID)[:12], err)
+		}
 		fmt.Printf("Created base snapshot: %s\n", util.BytesToHex(baseID)[:12])
 		fmt.Println()
 	} else if wsBase != "" {
@@ -14356,6 +14586,10 @@ func runWsStage(cmd *cobra.Command, args []string) error {
 }
 
 func runWsLog(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, true)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14409,6 +14643,10 @@ func runWsLog(cmd *cobra.Command, args []string) error {
 }
 
 func runWsShelve(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, true)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14425,6 +14663,10 @@ func runWsShelve(cmd *cobra.Command, args []string) error {
 }
 
 func runWsUnshelve(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, true)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14441,6 +14683,10 @@ func runWsUnshelve(cmd *cobra.Command, args []string) error {
 }
 
 func runWsClose(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, false)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14448,15 +14694,61 @@ func runWsClose(cmd *cobra.Command, args []string) error {
 	defer db.Close()
 
 	mgr := workspace.NewManager(db)
+	ws, err := mgr.Get(wsName)
+	if err != nil {
+		return fmt.Errorf("closing workspace: %w", err)
+	}
 	if err := mgr.Close(wsName); err != nil {
 		return fmt.Errorf("closing workspace: %w", err)
 	}
 
 	fmt.Printf("Workspace %q closed.\n", wsName)
+	if ws != nil {
+		releaseIfCurrent(ws.Name)
+	}
 	return nil
 }
 
+// resolveWsArg resolves the workspace a `kai ws` subcommand acts on: the
+// positional argument, then --ws, then (when allowCurrent) the checked-out
+// workspace. Destructive subcommands pass allowCurrent=false.
+func resolveWsArg(args []string, allowCurrent bool) (string, error) {
+	if len(args) > 0 && args[0] != "" {
+		return args[0], nil
+	}
+	if wsName != "" {
+		return wsName, nil
+	}
+	if allowCurrent {
+		if cur, _ := getCurrentWorkspace(); cur != "" {
+			return cur, nil
+		}
+		return "", fmt.Errorf("no workspace given and none is checked out (pass a name, or --ws)")
+	}
+	return "", fmt.Errorf("workspace name required (pass it as an argument, or --ws)")
+}
+
+// releaseIfCurrent stops treating name as the checked-out workspace after it
+// was closed or deleted. Leaving the marker made workspace-aware commands
+// (the pre-commit hook's capture) keep trying to stage into it. Files on
+// disk are left alone.
+func releaseIfCurrent(name string) {
+	if cur, _ := getCurrentWorkspace(); cur == "" || cur != name {
+		return
+	}
+	resetLiveSyncSession(kaiDir)
+	if err := setCurrentWorkspace(""); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to clear the current workspace: %v\n", err)
+		return
+	}
+	fmt.Printf("It was the checked-out workspace: now on trunk. Files on disk were left as they are — run `kai checkout snap.latest` to restore trunk's files.\n")
+}
+
 func runWsDelete(cmd *cobra.Command, args []string) error {
+	wsName, err := resolveWsArg(args, false)
+	if err != nil {
+		return err
+	}
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -14484,11 +14776,18 @@ func runWsDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	// Actually delete
+	ws, err := mgr.Get(wsName)
+	if err != nil {
+		return fmt.Errorf("deleting workspace: %w", err)
+	}
 	if err := mgr.Delete(wsName, wsDeleteKeepRefs); err != nil {
 		return fmt.Errorf("deleting workspace: %w", err)
 	}
 
 	fmt.Printf("Workspace %q deleted.\n", wsName)
+	if ws != nil {
+		releaseIfCurrent(ws.Name)
+	}
 	fmt.Println("Run `kai prune` to reclaim storage.")
 	return nil
 }
@@ -14531,7 +14830,7 @@ func runWsCheckout(cmd *cobra.Command, args []string) error {
 			if serr := setCurrentWorkspace(""); serr != nil {
 				return fmt.Errorf("clearing workspace: %w", serr)
 			}
-			stopAutoSync(kaiDir)
+			resetLiveSyncSession(kaiDir)
 			fmt.Printf("Left workspace %q — no trunk snapshot to restore.\n", currentWs)
 			return nil
 		}
@@ -14539,6 +14838,9 @@ func runWsCheckout(cmd *cobra.Command, args []string) error {
 		// Materialize trunk first; only clear the workspace pointer once the
 		// files are safely written. If the restore fails, the user is left in
 		// the workspace (consistent state) rather than half-exited.
+		// Stop syncing the workspace before rewriting its files, or the
+		// daemon pushes the trunk restore into the workspace's room.
+		resetLiveSyncSession(kaiDir)
 		creator := snapshot.NewCreator(db, nil)
 		result, err := creator.Checkout(trunkID, targetDir, wsCheckoutClean)
 		if err != nil {
@@ -14548,7 +14850,6 @@ func runWsCheckout(cmd *cobra.Command, args []string) error {
 		if err := setCurrentWorkspace(""); err != nil {
 			return fmt.Errorf("clearing workspace: %w", err)
 		}
-		stopAutoSync(kaiDir)
 
 		fmt.Printf("Left workspace %q — now working on snap.latest (%s)\n", currentWs, util.BytesToHex(trunkID)[:12])
 		fmt.Printf("  Restored: %d file(s)\n", result.FilesWritten)
@@ -14583,6 +14884,12 @@ func runWsCheckout(cmd *cobra.Command, args []string) error {
 	// Create target directory if it doesn't exist
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("creating target directory: %w", err)
+	}
+
+	// Switching workspaces: end the previous one's live sync before its files
+	// are overwritten (see resetLiveSyncSession).
+	if cur, _ := getCurrentWorkspace(); cur != ws.Name {
+		resetLiveSyncSession(kaiDir)
 	}
 
 	// Checkout the head snapshot
@@ -17055,7 +17362,7 @@ func runPushInner(cmd *cobra.Command, args []string) (err error) {
 				}
 				return fmt.Errorf("push aborted: %d object(s) have corrupt local digests and can't be reconstructed: %s%s\n"+
 					"  these objects are part of the snapshot being pushed, so publishing would leave a headless ref that fails CI checkout (HTTP 404).\n"+
-					"  repair the local store first — restore a .git/kai/db.sqlite backup or re-capture a clean tree — then run 'kai push' again",
+					"  repair the local store first — restore a .kai/db.sqlite backup or re-capture a clean tree — then run 'kai push' again",
 					len(corrupt), strings.Join(shown, ", "), more)
 			}
 		}
@@ -17702,9 +18009,75 @@ func runFetch(cmd *cobra.Command, args []string) (err error) {
 		}
 		fmt.Printf("  %s -> %s\n", localName, hex.EncodeToString(r.Target)[:12])
 	}
+	if n := adoptRemoteHistory(refMgr, remoteRefs); n > 0 {
+		fmt.Printf("  adopted %d history ref(s) (tags, snapshots, git commits)\n", n)
+	}
 
 	fmt.Println("Fetch complete.")
 	return nil
+}
+
+// historySnapRef matches capture-history refs (snap.<timestamp>).
+var historySnapRef = regexp.MustCompile(`^snap\.\d{8}T\d{6}`)
+
+// isHistoryRef reports whether a remote ref is history a local repo should
+// see as its own: tags, capture-history snapshots and git-commit mappings.
+// Branch-like refs (snap.latest, snap.main, git.HEAD, cs.*, ws.*) are left
+// to pull/checkout.
+func isHistoryRef(name string) bool {
+	switch {
+	case strings.HasPrefix(name, "tag."):
+		return true
+	case strings.HasPrefix(name, "git.") && name != "git.HEAD":
+		return true
+	case historySnapRef.MatchString(name):
+		return true
+	}
+	return false
+}
+
+// adoptRemoteHistory creates local refs for remote history refs that have no
+// local ref yet (never moves an existing ref). Without this, fetched history
+// lived only under remote/<name>/*, invisible to `kai log` and `kai tag list`.
+func adoptRemoteHistory(refMgr *ref.RefManager, remoteRefs []*remote.RefEntry) int {
+	n := 0
+	for _, r := range remoteRefs {
+		if !isHistoryRef(r.Name) {
+			continue
+		}
+		if existing, _ := refMgr.Get(r.Name); existing != nil {
+			continue
+		}
+		if err := refMgr.Set(r.Name, r.Target, ref.KindSnapshot); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// fetchRemoteHistory hydrates every history snapshot the remote has, records
+// the remote-tracking refs, and adopts the history refs locally. Returns how
+// many history refs the remote has.
+func fetchRemoteHistory(db *graph.DB, client *remote.Client, remoteName string) (int, error) {
+	remoteRefs, err := client.ListRefs("")
+	if err != nil {
+		return 0, err
+	}
+	refMgr := ref.NewRefManager(db)
+	n := 0
+	for _, r := range remoteRefs {
+		if !isHistoryRef(r.Name) {
+			continue
+		}
+		if err := hydrateSnapshot(db, client, r.Target); err != nil {
+			fmt.Printf("  Warning: hydrating %s: %v\n", r.Name, err)
+			continue
+		}
+		_ = refMgr.Set(fmt.Sprintf("remote/%s/%s", remoteName, r.Name), r.Target, ref.KindSnapshot)
+		n++
+	}
+	adoptRemoteHistory(refMgr, remoteRefs)
+	return n, nil
 }
 
 // pullTagsAndReviews brings tag.* and review.* refs across during `kai pull`
@@ -18023,8 +18396,14 @@ func runPull(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	// Update local snap.latest
+	prevLatest, _ := refMgr.Get("snap.latest")
 	if err := refMgr.Set("snap.latest", snapRef.Target, ref.KindSnapshot); err != nil {
 		return fmt.Errorf("updating local snap.latest: %w", err)
+	}
+	// Log the pulled head like a local capture, so @snap:last / @snap:prev
+	// follow what this repo actually moved through.
+	if prevLatest == nil || !bytes.Equal(prevLatest.TargetID, snapRef.Target) {
+		_ = ref.NewLogManager(db).Append(ref.KindSnapshot, snapRef.Target)
 	}
 
 	// Advance the remote-tracking ref to the head we just synced so a later pull
@@ -18287,6 +18666,10 @@ func runCloneKaiOnly(args []string) error {
 	refMgr := ref.NewRefManager(db)
 	_ = refMgr.Set("snap.latest", headRef.Target, ref.KindSnapshot)
 	_ = refMgr.Set("snap.main", headRef.Target, ref.KindSnapshot)
+	// Record it in the snapshot log, as a capture would, so @snap:last and
+	// @snap:prev resolve to this repo's history rather than to whichever
+	// snapshot node happened to be created last.
+	_ = ref.NewLogManager(db).Append(ref.KindSnapshot, headRef.Target)
 	// Also store as remote-tracking ref so kai pull recognizes no divergence
 	_ = refMgr.Set("remote/origin/snap.latest", headRef.Target, ref.KindSnapshot)
 
@@ -18299,12 +18682,19 @@ func runCloneKaiOnly(args []string) error {
 	}
 	fmt.Printf("  Wrote %d files\n", result.FilesWritten)
 
-	// Add the data dir to .gitignore so a future `git init` plays nicely.
-	// Only needed when the data dir lives in the worktree (.kai); when it
-	// lands in .git/kai, git ignores it automatically.
-	if kaipath.NeedsGitignore(kaiPath) {
-		ensureGitignore(filepath.Base(kaiPath))
+	// Bring the history across: every snapshot, tag and git-commit mapping the
+	// remote has, adopted as local refs. Clone used to fetch only snap.main, so
+	// `kai log`, tags and bisect saw a single snapshot.
+	fmt.Println("Fetching history...")
+	if n, err := fetchRemoteHistory(db, client, "origin"); err != nil {
+		fmt.Printf("  Warning: history not fetched (%v) — run `kai fetch`\n", err)
+	} else {
+		fmt.Printf("  %d history ref(s)\n", n)
 	}
+
+	// No .gitignore edit: kai never captures its own data dir (.kai/ is a
+	// structural exclusion in the ignore matcher), and appending to the
+	// repo's tracked .gitignore made every clone push that edit back.
 
 	fmt.Println()
 	fmt.Printf("✓ Cloned %s/%s into %s\n", tenant, repo, dirName)
@@ -18853,6 +19243,11 @@ func runPurge2(cmd *cobra.Command, args []string) error {
 
 	if err := db.ExecutePurge(plan); err != nil {
 		return fmt.Errorf("executing purge: %w", err)
+	}
+	// Remember the patterns so re-importing history from git (kai init,
+	// kai import --git) doesn't bring the purged files back.
+	if err := recordPurgePatterns(kaiDir, args); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not record purge patterns (%v) — a later `kai init` may re-import these files from git\n", err)
 	}
 
 	fmt.Printf("\nPurge complete.")
