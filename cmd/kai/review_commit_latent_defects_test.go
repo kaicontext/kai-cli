@@ -120,17 +120,19 @@ func TestSpeculativeDropNarrowsUnderFlag(t *testing.T) {
 	}
 }
 
-// TestRankCapUnaffectedByFlag: the publish cap is the same with the flag on or
-// off. Raising it flooded the published set with the low-value tail (run42), so
-// the bump was reverted; latent precision is handled in the gate clause instead.
-func TestRankCapUnaffectedByFlag(t *testing.T) {
+// TestRankCapRaisedUnderFlag: the publish cap grows by 2 under the flag so the
+// recovered latent defects can actually be published, and is unchanged off.
+// The b130168 revert of this bump was undone after measuring run42's dropped
+// tail: it was only ~65% FP, so cutting it shed ~11 points of recall and pulled
+// F1 down ~2. Precision is handled by the gate drop-list, not the cap.
+func TestRankCapRaisedUnderFlag(t *testing.T) {
 	for _, n := range []int{1, 3, 8, 20, 40} {
 		t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "")
 		off := rcRankCap(n)
 		t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "1")
 		on := rcRankCap(n)
-		if on != off {
-			t.Fatalf("changedFiles=%d: cap must not depend on the flag (off=%d on=%d)", n, off, on)
+		if on != off+2 {
+			t.Fatalf("changedFiles=%d: cap off=%d on=%d, want on=off+2", n, off, on)
 		}
 	}
 }
