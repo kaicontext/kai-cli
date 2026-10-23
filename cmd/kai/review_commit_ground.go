@@ -314,20 +314,6 @@ func rcGroundIssue(hash, item string, tree []string, readFile func(hash, path st
 	return c
 }
 
-// rcDecisionClaim wraps a DECISIONS bullet. It is grounded by construction —
-// the reviewer traced a value to a charge, a cap, a send, or a delete — and
-// deliberately carries no path:line, so its lookup says what it is instead
-// of "no lookup".
-func rcDecisionClaim(decision string) finding.Claim {
-	return finding.Claim{
-		Statement: "Decision: " + decision,
-		Lookup:    "policy, not a defect — needs the author's yes; who pays and who receives should be stated in words",
-		Tag:       finding.TagRisk,
-		Resolved:  true,
-		Verified:  true,
-	}
-}
-
 // ---------------------------------------------------------------------------
 // New URL hosts that nothing else references
 

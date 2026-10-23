@@ -36,31 +36,39 @@ import (
 // blocks the review: a chunk that fails or runs out of time contributes
 // nothing, and the review proceeds with what the reviewer found.
 
-const rcSweepSystem = `You are sweeping a code change for defects, line by line. You get part of the change as a unified diff with wide context. Read EVERY added and changed line in EVERY file shown — test files, fixtures, docs, config, styles and translations included — and list every concrete defect the change introduces or leaves in the lines it touches.
+const rcSweepSystem = `You sweep part of a code change for defects. You get a unified diff with wide context and no tools. Read EVERY added and changed line of EVERY file shown — tests, fixtures, docs, config, styles and translations included — and list every defect those lines introduce or leave.
 
-A defect is something wrong as written, that you can point at on one line and explain in one sentence. Check each changed line for:
-- WRONG VALUE OR VARIABLE: a copy-paste slip (the wrong variable, field, metric tag, map key, flag or constant), a value that disagrees with the data or comment beside it, an off-by-one, a wrong unit.
-- WRONG CONDITION: inverted or incomplete logic, a guard that tests the wrong thing, "==" where identity or order matters, a branch that can never run.
-- MISSING NULL OR ERROR HANDLING: a dereference, index or key access on a value the new code can produce as null/None/nil/undefined/empty; an error or exception that escapes where the surrounding code handles it; a failed call whose result is used anyway.
-- NORMALIZATION MISMATCH: two sides of a comparison, lookup or uniqueness check normalized differently (case, whitespace, trailing slash, string vs symbol, id kind), or data written without the normalization its readers apply.
-- CONTRACT MISMATCH VISIBLE HERE: a return shape, argument order or identifier kind that the lines shown use inconsistently; an abstract method a new subclass does not implement; a function whose result its callers use in a way it does not support.
-- SECURITY: unescaped or unsanitized output of user-controlled content, a permission check that grants more than it names, a missing authorization or ownership check on a new path, a request to a user-supplied URL, a secret compared with ==.
-- CONCURRENCY: a read-check-write on shared state (a counter, a one-time code, a status) with nothing serializing it.
-- TEST BUGS: a test that cannot fail, asserts the wrong value, or tests something other than its name says.
-- DOCS, COMMENTS AND TEXT: a docstring or comment that now contradicts the code below it, a typo in an identifier, key, message or user-facing string, a broken template tag.
-- STYLE THAT BREAKS SOMETHING: an unused or dead new code path, a magic number repeated where the constant exists, an inconsistency with the sibling code that changes behaviour.
+Work in three passes:
+1. COMPARE SIBLINGS. Line up parallel code — sibling methods, branches, repeated calls of one helper, create vs update — and compare token by token: variables, arguments, labels, keys, guards, messages. The one that differs is usually a copy-paste slip: an argument every other call passes differently, a metric or log call with the wrong value, a field read under a key its sibling writes under another name.
+2. READ EACH CHANGED LINE against the checklist.
+3. KEEP GOING. One line can hold several defects; after a finding, check the same lines for a different one.
 
-Rules:
-- Only defects in or directly caused by the changed lines. Name the exact file path and the line number in the NEW file (the "+" side; use the hunk header to count).
-- Be concrete: say what is wrong and what it should be. No hedging ("might", "could potentially", "consider"), no general advice, no "add a test" without a specific wrong behaviour it would catch, no praise.
-- Do not report a problem that depends on a future code change.
-- One defect per line of output. If the same mistake repeats, write it once and add "(also: path:line, …)".
-- Mark a defect that cannot change what the program does — a wrong comment, docstring, README or log message, a typo in text nothing parses, a dead duplicate line — with "nit: " before its path. A typo in an identifier, key or user-facing string that something reads is not a nit. When in doubt, it is not a nit.
-- A line can carry more than one defect. After you find one, keep checking the same lines for a DIFFERENT one — a second wrong value, a missing check beside the wrong one, a test that also asserts the wrong thing — and list each on its own bullet. Stopping at the first plausible problem is how real defects are missed.
-- It is fine to report nothing for a chunk that is correct. Do not pad.
-- Never write a bullet for a line you checked and found correct. Think it through before writing; a bullet is a defect, not a note.
-- Two bullets about one root cause are one defect: describe it once, on the line where it starts, and do not restate it on the next line.
-- End every bullet that is not a nit with "(severity: high)" (breaks on ordinary input: a crash, lost data, a security hole, a wrong result most users hit), "(severity: medium)" (a plausible but less common input) or "(severity: low)" (only on unusual input).
+Checklist:
+- WRONG VARIABLE: a derived value exists (a logger or context with added fields; a scoped, resolved or normalized copy; a parameter replacing an outer variable) and a line still uses the base value. A wrong field, key, flag, constant or unit; an off-by-one.
+- WRONG CONDITION: inverted or incomplete logic; branches returning the same thing; a branch that can never run; "if x" where 0, "" or an empty list is valid.
+- MATCHING: a case-sensitive comparison of emails, hosts or identifiers; an allow/deny check by unanchored regex, substring, indexOf, includes, startsWith or endsWith instead of an exact match at a boundary ("corp.io" must not admit "corp.io.evil.net"); two sides of a comparison or uniqueness check normalized differently; duplicates removed against stored rows but not within the input.
+- ABSENCE: a lookup result (find, get, first, [0], a regex match, an optional field of parsed or external data) used without a null/empty check; an index or offset that can be negative or past the end.
+- ERRORS AND ASYNC: an error swallowed, or escaping where siblings handle it; a failed result used or cached (an error path overwriting a good cache entry with nil); a promise neither awaited nor returned inside try; an async callback in forEach or map; an async call moved from a hook or function that awaited it to one that does not.
+- RESOURCES: something created per action (object URL, listener, timer, subscription, handle) not released on every exit path — close, unmount, error.
+- CONTRACT: a return shape, argument order or id kind used inconsistently; an interface method a new class does not implement; a rule the client enforces (uniqueness, format, length) that the server path does not.
+- SECURITY: user-controlled output not escaped for its context (HTML, JS string, URL, SQL, shell); a setting or user string passed to a call that can also open files, run commands or reach internal hosts; an OAuth state, nonce or CSRF token taken from a fixed or shared value instead of fresh randomness bound to the session; a permission check granting more than it names; a new path without an authorization or ownership check; a secret compared with ==.
+- CONCURRENCY: a read-check-write on shared state (counter, one-time code, status, cache) with nothing serializing it.
+- UI: a rendered list item without a stable key; a property, attribute or CSS declaration name the platform does not define.
+- TESTS: a test that cannot fail; an expected value that disagrees with the test's own input; a test that passes only because a helper ignores an argument; a name or docstring that says the opposite of the assertion (cite the assertion line); a request method or route that differs from the code's.
+- ` + rcNitDefinition + `
+
+Scope:
+- Defects in the changed lines or caused by them; moved code counts. An unchanged line in a function the change edits counts when pass 1 shows it contradicts its sibling.
+- Not reported: problems needing a future code change, hardening with no trigger, generic advice ("consider", "add a test"), style preferences, missing docs.
+
+Each bullet:
+- ONE defect. The first sentence names the wrong expression, what it does instead and the consequence ("total sums price instead of price * qty, so multi-unit orders are undercharged"). No hedges, no praise, no second claim.
+- Same mistake elsewhere: add "(also: path:line, …)". One root cause is one bullet.
+- Path verbatim from FILES IN THIS PART; line number on the NEW side, counted from the hunk header.
+- Decide before writing: no bullet for a line you found correct, no bullet that takes itself back.
+- End every non-nit with "(severity: high)" (ordinary input breaks: crash, lost data, security hole, wrong result most users hit), "(severity: medium)" (plausible, less common input) or "(severity: low)" (unusual input, or test-only).
+- Put "nit: " before the path of a defect that cannot change behaviour. A misspelling that breaks a lookup and a test asserting the wrong thing are not nits. When in doubt, it is not a nit.
+- A correct chunk gets "- (none)". Do not pad.
 
 Output ONLY this, nothing before or after:
 ISSUES:
@@ -82,8 +90,10 @@ var (
 	rcSweepMaxChunks    = 12
 	rcSweepParallel     = 6
 	rcSweepContextLines = 20
-	rcSweepMaxFileBytes = 64 * 1024
-	rcSweepMaxTokens    = 16000
+	// A file's whole-function patch replaces its narrow one up to this size.
+	rcSweepWholeFuncBytes = 16 * 1024
+	rcSweepMaxFileBytes   = 64 * 1024
+	rcSweepMaxTokens      = 16000
 )
 
 // rcSweepSkip reports files whose diff is not code anyone reviews line by
@@ -100,19 +110,47 @@ type rcSweepResult struct {
 }
 
 // rcSweepPatches returns each changed file's diff with wide context, keyed by
-// path, in diff order.
+// path, in diff order. A look-alike slip (the base logger for the scoped one,
+// the outer dataset for the filtered one) is only visible beside the right
+// name, which is often further up the same function than the context reaches;
+// so a file whose whole-function diff is small is read that way.
 func rcSweepPatches(base, ref string) ([]string, map[string]string) {
-	args := []string{"--no-pager", "diff", "--no-color", fmt.Sprintf("-U%d", rcSweepContextLines)}
+	narrow := fmt.Sprintf("-U%d", rcSweepContextLines)
+	order, patches := rcSweepDiff(base, ref, narrow)
+	if len(order) == 0 {
+		return order, patches
+	}
+	_, whole := rcSweepDiff(base, ref, narrow, "--function-context")
+	return order, rcPreferWhole(patches, whole)
+}
+
+// rcSweepDiff runs the sweep's git diff (git show for a single commit) with
+// the given context options and splits it by file.
+func rcSweepDiff(base, ref string, context ...string) ([]string, map[string]string) {
+	args := append([]string{"--no-pager", "diff", "--no-color"}, context...)
 	if strings.TrimSpace(base) != "" {
 		args = append(args, base+"..."+ref)
 	} else {
-		args = []string{"--no-pager", "show", "--no-color", fmt.Sprintf("-U%d", rcSweepContextLines), "--format=", ref}
+		args = append(append([]string{"--no-pager", "show", "--no-color"}, context...), "--format=", ref)
 	}
 	out, err := exec.Command("git", args...).Output()
 	if err != nil || len(out) == 0 {
 		return nil, nil
 	}
 	return rcSplitDiff(string(out))
+}
+
+// rcPreferWhole swaps in each file's whole-function patch when it is at most
+// rcSweepWholeFuncBytes. Git finds the enclosing function by its default
+// funcname rule, which for an indented method is often the class, so in
+// practice a small file is read whole and a big one keeps its narrow context.
+func rcPreferWhole(narrow, whole map[string]string) map[string]string {
+	for p, w := range whole {
+		if _, ok := narrow[p]; ok && len(w) <= rcSweepWholeFuncBytes {
+			narrow[p] = w
+		}
+	}
+	return narrow
 }
 
 // rcSplitDiff splits a unified diff into per-file patches, keyed by the new
@@ -184,6 +222,11 @@ func rcSweepChunks(order []string, patches map[string]string) [][]string {
 		chunks = append(chunks, cur)
 	}
 	if len(chunks) > rcSweepMaxChunks {
+		dropped := 0
+		for _, c := range chunks[rcSweepMaxChunks:] {
+			dropped += len(c)
+		}
+		fmt.Fprintf(os.Stderr, "  sweep: %d file(s) past the %d-chunk cap not swept\n", dropped, rcSweepMaxChunks)
 		chunks = chunks[:rcSweepMaxChunks]
 	}
 	return chunks
