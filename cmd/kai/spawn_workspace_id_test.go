@@ -17,10 +17,9 @@ func TestLookupWorkspaceIDResolvesGitKaiDirectory(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	kaiData := kaipath.Resolve(root)
-	if want := filepath.Join(root, ".git", "kai"); kaiData != want {
-		t.Fatalf("resolved kai dir = %q, want %q", kaiData, want)
-	}
+	// A store left in the legacy .git/kai location: the lookup must still
+	// find the workspace (kaipath moves it to .kai on first resolve).
+	kaiData := filepath.Join(root, ".git", "kai")
 	if err := os.MkdirAll(kaiData, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -49,5 +48,8 @@ func TestLookupWorkspaceIDResolvesGitKaiDirectory(t *testing.T) {
 	}
 	if want := hex.EncodeToString(ws.ID); got != want {
 		t.Fatalf("workspace id = %q, want %q", got, want)
+	}
+	if stores := kaipath.Stores(root); len(stores) != 1 || stores[0] != filepath.Join(root, ".kai") {
+		t.Fatalf("stores after lookup = %v, want only .kai", stores)
 	}
 }
