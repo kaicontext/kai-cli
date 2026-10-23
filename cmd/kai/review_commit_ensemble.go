@@ -213,15 +213,29 @@ func rcWithSecondFinder(raw string, r rcFinderResult) string {
 // few defects worth a maintainer's attention; past the cap, a review stops
 // being read.
 func rcRankCap(changedFiles int) int {
+	limit := 6
 	switch {
 	case changedFiles <= 3:
-		return 3
+		limit = 3
 	case changedFiles <= 10:
-		return 4
+		limit = 4
 	case changedFiles <= 25:
-		return 5
+		limit = 5
 	}
-	return 6
+	// Latent defects are ordered last by the selection step, so on a change
+	// already at the cap they would be the ones cut — the flag would buy no
+	// recall. Raise the cap under KAI_REVIEW_LATENT_DEFECTS so the recovered
+	// defects can actually publish; off by default, so production is unchanged.
+	//
+	// The b130168 revert of this bump was itself reverted: measuring run42's
+	// dropped tail showed it was only ~65% FP (18 of ~54 matched entries were
+	// real TP), so cutting the tail shed ~11 points of recall and pulled F1
+	// *down* ~2. Precision is handled by the gate drop-list instead, which
+	// trims the cosmetic/test/doc tail without cutting recall.
+	if rcLatentDefectsEnabled() {
+		limit += 2
+	}
+	return limit
 }
 
 const (
