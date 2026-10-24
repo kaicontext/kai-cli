@@ -518,21 +518,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		challenge = nil
 	}
 
-	// Blast radius: walk the captured graph outward from the changed files so the
-	// finding shows what the change reaches (callers/importers), not just the diff.
-	// headHex="" walks the freshly-captured (single-snapshot) graph unscoped.
-	// Non-fatal — blast is a panel, not the review itself.
-	//
-	// A --fast run in an uncaptured repo has no graph to walk; the panel is
-	// simply absent, which is honest for a pass that read no callers.
-	var blast finding.Blast
-	if set != nil {
-		b, berr := reviewanalyze.BlastFor(ctx, set.Primary().DB, changedPaths, "")
-		if berr != nil {
-			fmt.Fprintf(os.Stderr, "  blast radius unavailable: %v\n", berr)
-		}
-		blast = b
-	}
+	blast := rcBlast(ctx, set, changedPaths)
 
 	from := rcShort(rcParentHash(hash))
 	if reviewCommitBase != "" {
@@ -2308,6 +2294,33 @@ func rcCommitPatches(base, ref string) map[string]string {
 	}
 	flush()
 	return patches
+}
+
+// rcBlast walks the captured graph outward from the changed files so the
+// finding shows what the change reaches (callers/importers), not just the diff.
+// It walks the freshly-captured (single-snapshot) graph unscoped (headHex "").
+// Non-fatal — blast is a panel, not the review itself.
+//
+// A run with no graph has nothing to walk, and the panel is simply absent,
+// which is honest for a pass that read no callers. "No graph" is more than
+// set == nil: Discover can find roots while the primary has no db.sqlite — a
+// checkout under a kai.projects.yaml that does not list it (a git worktree
+// next to its repo), or a pinned project never captured — and Set.Open leaves
+// that project's DB nil. BlastFor dereferences the DB, so a --fast run there
+// printed its review and then panicked (2026-10-24, kai-server worktree).
+func rcBlast(ctx context.Context, set *projects.Set, changedPaths []string) finding.Blast {
+	if set == nil {
+		return finding.Blast{}
+	}
+	p := set.Primary()
+	if p == nil || p.DB == nil {
+		return finding.Blast{}
+	}
+	b, err := reviewanalyze.BlastFor(ctx, p.DB, changedPaths, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  blast radius unavailable: %v\n", err)
+	}
+	return b
 }
 
 func rcCommitAuthor(hash string) string {
