@@ -416,6 +416,25 @@ func TestReviewChallengePromptMatchesSandbox(t *testing.T) {
 	}
 }
 
+// The atomic-findings instruction is in the challenge prompt only when the flag
+// is on, so the default review is byte-for-byte unchanged.
+func TestAtomicFindingsIsEnvGated(t *testing.T) {
+	t.Setenv("KAI_REVIEW_ATOMIC_FINDINGS", "")
+	if rcAtomicFindings() {
+		t.Error("atomic findings must be off by default")
+	}
+	if strings.Contains(rcChallengeSystemPrompt(true), "ONE atomic claim") {
+		t.Error("the atomic clause leaked into the default prompt")
+	}
+	t.Setenv("KAI_REVIEW_ATOMIC_FINDINGS", "1")
+	if !rcAtomicFindings() {
+		t.Error("KAI_REVIEW_ATOMIC_FINDINGS=1 must turn it on")
+	}
+	if !strings.Contains(rcChallengeSystemPrompt(true), "ONE atomic claim") {
+		t.Error("the atomic clause is missing when the flag is on")
+	}
+}
+
 // An answer cut off at the output limit gets one concise retry instead of
 // failing the review. The cut-off reply (here a half-written submit_review) is
 // not replayed; the retry is told why it is being asked again.

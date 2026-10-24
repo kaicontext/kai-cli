@@ -275,7 +275,22 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 			supported = append(supported, i)
 		}
 	}
-	if len(supported) < 2 {
+	// Recovered findings: ones the fact-check could not disprove but could not
+	// fully confirm (unresolved). KAI_REVIEW_GATE_RECOVER offers them to the
+	// selection as UNCONFIRMED, so a plainly-real defect the check was merely
+	// unsure of is not lost. The selection runs only when rank is configured,
+	// so recovered findings always pass through its judgement and the cap —
+	// never published unfiltered. Default off: the pool is supported-only, as
+	// before.
+	var recovered []int
+	if rcGateRecover() {
+		for i, a := range res.Allegations {
+			if a.Status == rcStatusUnresolved {
+				recovered = append(recovered, i)
+			}
+		}
+	}
+	if len(supported)+len(recovered) < 2 {
 		return
 	}
 	limit := rcRankCap(changedFiles)
@@ -292,6 +307,16 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 		}
 		if a.Reason != "" {
 			fmt.Fprintf(&b, "    why it is confirmed: %s\n", rcOneLine(a.Reason, 500))
+		}
+	}
+	if len(recovered) > 0 {
+		b.WriteString("\nUNCONFIRMED DEFECTS (the check could neither confirm nor disprove these — publish one ONLY if the diff plainly shows it is a real defect; prefer the confirmed defects above):\n")
+		for _, i := range recovered {
+			a := res.Allegations[i]
+			fmt.Fprintf(&b, "\n[%d] %s\n", a.ID, a.Issue)
+			if a.Reason != "" {
+				fmt.Fprintf(&b, "    what the check could not settle: %s\n", rcOneLine(a.Reason, 500))
+			}
 		}
 	}
 	d := diff
@@ -331,14 +356,39 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 		fmt.Fprintf(os.Stderr, "  selection (%s) answered unusably (%v) — publishing every confirmed defect\n", model, perr)
 		return
 	}
-	// The answer itself, by allegation id, so a published defect can be traced
-	// to the main list, the minor list or the overflow past the cap: the
-	// bundle keeps only the outcome, which cannot tell them apart.
+	// The answer itself, by allegation id, for the log (main list, minor list
+	// or overflow past the cap).
 	fmt.Fprintf(os.Stderr, "  selection answer: cap=%d publish=%v minor=%v skip=%v\n", limit, ans.Publish, ans.Minor, rcSortedKeys(ans.Skip))
+	// Promote the recovered findings ONLY now, after a usable selection answer.
+	// On any early return above (selection off, pool too small, model error,
+	// unusable answer) they stay unresolved and are never published — the
+	// selection must have actually judged them. They are marked recovered so
+	// rcApplyRank's "never publish nothing" fallback, which is for confirmed
+	// defects, never force-publishes one the selection skipped.
+	for _, i := range recovered {
+		if res.Allegations[i].Finding == "" {
+			res.Allegations[i].Finding = rcRecoveredFinding(res.Allegations[i].Issue)
+		}
+		res.Allegations[i].Status = rcStatusSupported
+		res.Allegations[i].recovered = true
+	}
 	kept, dropped := rcApplyRank(res, ans, limit)
-	fmt.Fprintf(os.Stderr, "  selection (%s, %s): %d of %d confirmed defect(s) published, %d held back\n",
-		model, time.Since(started).Round(time.Second), kept, len(supported), dropped)
+	fmt.Fprintf(os.Stderr, "  selection (%s, %s): %d of %d defect(s) published (%d confirmed + %d unconfirmed in the pool), %d held back\n",
+		model, time.Since(started).Round(time.Second), kept, len(supported)+len(recovered), len(supported), len(recovered), dropped)
 	rcFinalize(res)
+}
+
+// rcGateRecover reports whether the selection should also consider the
+// fact-check's unresolved findings (KAI_REVIEW_GATE_RECOVER=1). Default off.
+func rcGateRecover() bool { return os.Getenv("KAI_REVIEW_GATE_RECOVER") == "1" }
+
+// rcRecoveredFinding turns an unresolved allegation's issue bullet into a
+// published finding: the bullet without its trailing severity marker.
+func rcRecoveredFinding(issue string) string {
+	if i := strings.LastIndex(issue, " (severity:"); i >= 0 {
+		return strings.TrimSpace(issue[:i])
+	}
+	return strings.TrimSpace(issue)
 }
 
 // rcRankAnswer is the selection's answer: the defects to publish first, the
@@ -437,10 +487,12 @@ func rcApplyRank(res *rcChallengeResult, ans rcRankAnswer, limit int) (kept, dro
 		}
 	}
 	if len(order) == 0 {
-		// Never publish nothing when the check confirmed something: keep the
-		// first confirmed defect in the draft's own order.
+		// Never publish nothing when the check CONFIRMED something: keep the
+		// first confirmed defect in the draft's own order. A recovered
+		// (unconfirmed) finding is never eligible here — if the pool was all
+		// recovered and the selection chose none, the review publishes nothing.
 		for i, a := range res.Allegations {
-			if a.Status == rcStatusSupported {
+			if a.Status == rcStatusSupported && !a.recovered {
 				order = append(order, i)
 				break
 			}
