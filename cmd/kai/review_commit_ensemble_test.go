@@ -112,6 +112,11 @@ func TestSelectionAnswerParses(t *testing.T) {
 }
 
 func TestRankCapGrowsWithTheChange(t *testing.T) {
+	// This covers the base cap (3..6), which KAI_REVIEW_LATENT_DEFECTS must not
+	// change; pin the flag off so the suite is deterministic even when a
+	// flag-on A/B run exports it. The +2 bump is asserted in
+	// TestRankCapRaisedUnderFlag.
+	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "")
 	prev := 0
 	for _, n := range []int{1, 3, 4, 10, 11, 25, 26, 200} {
 		c := rcRankCap(n)

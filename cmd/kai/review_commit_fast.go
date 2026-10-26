@@ -59,6 +59,11 @@ const rcFastMaxTokens = 2000
 // confirm and posts a hollow all-clear, or it asserts what it never checked.
 // So this prompt tells the model what it CAN conclude from a diff alone, makes
 // the shallow scope part of the deliverable, and forbids the green check.
+//
+// The fast pass is deliberately NOT relaxed by KAI_REVIEW_LATENT_DEFECTS: it is
+// retired in --deep (the benchmark's mode and where the flag is measured), has
+// no tools to verify a latent claim, and its ISSUES flip the PR badge. Latent
+// defects belong to the grounded finder and the gate, which can check them.
 const rcFastReviewSystem = `You are doing a FAST FIRST PASS on a merged commit or PR range. You get the author's description, the commit message, the diff, the symbols this change declares, and a set of already-resolved identifier lookups. You have NO tools: you cannot read a file the diff did not touch, cannot look up callers or dependents, and cannot search the web. A slower, graph-grounded review of this same change is running behind you and will supersede this one.
 
 That shapes what you are for. Report what is VISIBLE IN THE DIFF ITSELF — the changed hunks and their context lines, read carefully. These are the defects a careful reader finds without leaving the patch:
