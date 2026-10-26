@@ -243,3 +243,23 @@ func TestLoadRulesFromALocalFile(t *testing.T) {
 		t.Errorf("log line = %q, want packs reported as not yet applied", line)
 	}
 }
+
+func TestParseRulesDetail(t *testing.T) {
+	r, err := rcParseRules([]byte("detail: Short\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Detail != "short" {
+		t.Errorf("detail = %q, want short (lowercased)", r.Detail)
+	}
+	if !strings.Contains(func() string { rcActiveRules = r; defer func() { rcActiveRules = nil }(); return rcDescribeRules() }(), "detail short") {
+		t.Error("the review log line does not name the detail level")
+	}
+	if _, err := rcParseRules([]byte("detail: loud\n"), "test"); err == nil || !strings.Contains(err.Error(), "score, short, full") {
+		t.Errorf("err = %v, want an error naming the levels", err)
+	}
+	r, err = rcParseRules([]byte("instructions: hi\n"), "test")
+	if err != nil || r.Detail != "" {
+		t.Errorf("no detail line: %+v %v, want detail unset", r, err)
+	}
+}

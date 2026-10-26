@@ -17,6 +17,10 @@ package main
 //     than refuted as generic advice;
 //   - sensitive_paths: globs; the files a change touches under them are named
 //     to the finders as needing the most scrutiny;
+//   - detail: how much of the review kai-server posts on the pull request —
+//     score, short or full. Carried in the finding bundle; kai-server prefers
+//     it to the repository's Atlas setting, since this file is versioned with
+//     the code;
 //   - rules: rule packs from rcRulePacks. They are checked and recorded now
 //     but NOT handed to the finders yet: the fact-check and the selection step
 //     publish defects only, so a design or test-quality finding would be
@@ -73,12 +77,27 @@ func rcRulePackNames() []string {
 	return names
 }
 
+// rcReviewDetails are the levels of review kai-server can post (its
+// repo_review_settings.review_detail): a score line, a short review of the
+// top high-severity points, or the full review.
+var rcReviewDetails = []string{"score", "short", "full"}
+
 // rcRepoRules is a parsed rules file.
 type rcRepoRules struct {
 	Source         string
 	Packs          []string
 	SensitivePaths []string
 	Instructions   string
+	// Detail is the review detail level, "" when the file does not set one.
+	Detail string
+}
+
+// rcActiveDetail is the active rules' detail level, "" for none.
+func rcActiveDetail() string {
+	if rcActiveRules == nil {
+		return ""
+	}
+	return rcActiveRules.Detail
 }
 
 // rcActiveRules are the rules this review runs under, nil for none. Set once,
@@ -93,6 +112,7 @@ func rcParseRules(data []byte, source string) (*rcRepoRules, error) {
 		Rules          []string `yaml:"rules"`
 		SensitivePaths []string `yaml:"sensitive_paths"`
 		Instructions   string   `yaml:"instructions"`
+		Detail         string   `yaml:"detail"`
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -100,6 +120,16 @@ func rcParseRules(data []byte, source string) (*rcRepoRules, error) {
 		return nil, fmt.Errorf("review rules %s: %w", source, err)
 	}
 	r := &rcRepoRules{Source: source, Instructions: strings.TrimSpace(f.Instructions)}
+	if d := strings.ToLower(strings.TrimSpace(f.Detail)); d != "" {
+		ok := false
+		for _, v := range rcReviewDetails {
+			ok = ok || d == v
+		}
+		if !ok {
+			return nil, fmt.Errorf("review rules %s: detail %q must be one of %s", source, f.Detail, strings.Join(rcReviewDetails, ", "))
+		}
+		r.Detail = d
+	}
 	if len(r.Instructions) > rcRulesMaxInstructionBytes {
 		return nil, fmt.Errorf("review rules %s: instructions are %d bytes, at most %d", source, len(r.Instructions), rcRulesMaxInstructionBytes)
 	}
@@ -184,6 +214,9 @@ func rcDescribeRules() string {
 	}
 	if len(r.Packs) > 0 {
 		parts = append(parts, fmt.Sprintf("rule packs %s recorded, not yet applied", strings.Join(r.Packs, ", ")))
+	}
+	if r.Detail != "" {
+		parts = append(parts, "detail "+r.Detail)
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "empty")
