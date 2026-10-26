@@ -230,6 +230,11 @@ type rcAllegationResult struct {
 	When   string `json:"when,omitempty"`
 	Impact string `json:"impact,omitempty"`
 	Fix    string `json:"fix,omitempty"`
+	// DuplicateOf is the allegation the check folded this one into ("Duplicate
+	// of issue N", renumbered from its batch); Votes is how many proposals
+	// raised the same defect (review_commit_publish.go).
+	DuplicateOf int `json:"duplicateOf,omitempty"`
+	Votes       int `json:"votes,omitempty"`
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
 	unchecked bool

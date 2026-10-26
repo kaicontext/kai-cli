@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -233,7 +234,17 @@ func rcMergeBatches(batches [][]string, decisions []string, results []*rcChallen
 			}
 			continue
 		}
-		merged.Allegations = append(merged.Allegations, r.Allegations...)
+		// The check numbers duplicates within its batch; the merged result
+		// numbers allegations across all of them.
+		offset := len(merged.Allegations)
+		for _, a := range r.Allegations {
+			if m := rcDuplicateOfRe.FindStringSubmatch(a.Reason); m != nil {
+				if n, _ := strconv.Atoi(m[1]); n >= 1 && n <= len(batch) {
+					a.DuplicateOf = offset + n
+				}
+			}
+			merged.Allegations = append(merged.Allegations, a)
+		}
 		if r.proposed.Valid() && r.proposed < merged.proposed {
 			merged.proposed = r.proposed
 		}

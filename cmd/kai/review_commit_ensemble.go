@@ -248,7 +248,7 @@ SKIP only:
 - a failure whose only trigger lies outside the program and its inputs: an install path or host name containing some word, an operator reconfiguring a running system.
 
 Answer with JSON only:
-{"publish": [ids, most important first], "minor": [ids, most important first], "skip": [{"id": id, "why": "one short phrase"}]}
+{"publish": [ids, most important first], "minor": [ids, most important first], "skip": [{"id": id, "why": "one short phrase; a repeat starts: repeat of <id>"}]}
 Every id appears exactly once.`
 
 var rcRankJSON = regexp.MustCompile(`(?s)\{.*\}`)
@@ -258,11 +258,11 @@ var rcRankJSON = regexp.MustCompile(`(?s)\{.*\}`)
 // them; the rest become refuted with the selection's reason, so they are kept
 // in the record but not published. A review with a confirmed defect always
 // publishes at least one. Any failure keeps everything the fact-check
-// supported, as before this step existed.
-func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff string, changedFiles int, res *rcChallengeResult) {
+// supported, as before this step existed. Reports whether the selection ran.
+func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff string, changedFiles int, res *rcChallengeResult) bool {
 	model := rcEnsembleModel(rcStageRank)
 	if model == "" || res == nil {
-		return
+		return false
 	}
 	var supported []int
 	for i, a := range res.Allegations {
@@ -271,7 +271,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 		}
 	}
 	if len(supported) < 2 {
-		return
+		return false
 	}
 	limit := rcRankCap(changedFiles)
 
@@ -313,7 +313,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  selection (%s) failed: %v — publishing every confirmed defect\n", model, err)
-		return
+		return false
 	}
 	var text strings.Builder
 	for _, part := range resp.Parts {
@@ -324,7 +324,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	ans, perr := rcParseRank(text.String())
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "  selection (%s) answered unusably (%v) — publishing every confirmed defect\n", model, perr)
-		return
+		return false
 	}
 	// The answer itself, by allegation id, so a published defect can be traced
 	// to the main list, the minor list or the overflow past the cap: the
@@ -334,6 +334,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	fmt.Fprintf(os.Stderr, "  selection (%s, %s): %d of %d confirmed defect(s) published, %d held back\n",
 		model, time.Since(started).Round(time.Second), kept, len(supported), dropped)
 	rcFinalize(res)
+	return true
 }
 
 // rcRankAnswer is the selection's answer: the defects to publish first, the
