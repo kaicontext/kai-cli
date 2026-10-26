@@ -669,7 +669,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// write: what the change does, not what the review thinks of it.
 			// kai-server puts it in the PR's "Kai context" section.
 			Description string `json:"description,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description}, "", "  ")
+			// Detail is the repository's chosen review detail level from
+			// .kai-review.yaml (score, short or full); kai-server prefers it
+			// to the Atlas setting. Omitted when the file sets none.
+			Detail string `json:"detail,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail()}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
