@@ -1208,7 +1208,10 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		}
 		// The check settled what is true; the selection step chooses what is
 		// worth publishing (review_commit_ensemble.go).
-		rcRankSupported(publicationCtx, prov, intent, diff, len(changed), res)
+		ranked := rcRankSupported(publicationCtx, prov, intent, diff, len(changed), res)
+		// Then only what is in the change and, when both sweeps read the
+		// diff, what more than one proposal raised (review_commit_publish.go).
+		rcPublishGate(res, rcRepoFrom(publicationCtx), ranked && sw.Passes >= 2)
 		raw = res.Review
 		// Then the confirmed findings, reworded for the person reading the PR
 		// (review_commit_humanize.go). Wording only: no verdict changes.

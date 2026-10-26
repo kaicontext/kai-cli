@@ -107,6 +107,9 @@ type rcSweepResult struct {
 	Sources []rcSource
 	Chunks  int
 	Failed  int
+	// Passes is how many sweeps read at least one chunk: the publish gate
+	// counts agreement only when both did (review_commit_publish.go).
+	Passes int
 }
 
 // rcSweepPatches returns each changed file's diff with wide context, keyed by
@@ -335,6 +338,9 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, effort, 
 				res.Issues = append(res.Issues, is)
 			}
 		}
+	}
+	if res.Failed < res.Chunks {
+		res.Passes = 1
 	}
 	return res
 }
@@ -635,6 +641,7 @@ func rcMergeSweeps(a, b rcSweepResult) rcSweepResult {
 	}
 	out := a
 	out.Issues = issues
+	out.Passes = a.Passes + b.Passes
 	if len(out.Sources) == 0 {
 		out.Sources = b.Sources
 	}

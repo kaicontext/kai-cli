@@ -91,10 +91,12 @@ func rcHumanize(ctx context.Context, prov provider.Provider, intent string, res 
 	b.WriteString("WHAT THE CHANGE IS FOR:\n")
 	b.WriteString(strings.TrimSpace(intent))
 	b.WriteString("\n\nFINDINGS:\n")
-	for _, i := range picked {
+	// Numbered by position, not allegation id: after the selection reorders,
+	// ids run out of order and the model numbered its answers 1, 2, 3 anyway.
+	for k, i := range picked {
 		a := res.Allegations[i]
 		fmt.Fprintf(&b, "\n[%d]\nreported: %s\nexplanation: %s\ncheck's reasoning: %s\nproposed fix: %s\n",
-			a.ID, rcOneLine(a.Issue, 1200), rcOneLine(a.Finding, 1200), rcOneLine(a.Reason, 1200), rcOneLine(a.Remedy, 600))
+			k+1, rcOneLine(a.Issue, 1200), rcOneLine(a.Finding, 1200), rcOneLine(a.Reason, 1200), rcOneLine(a.Remedy, 600))
 	}
 
 	effort := rcStageEffort(rcStageHumanize)
@@ -147,12 +149,13 @@ func rcParseHumanize(text string) (map[int]rcHumanized, error) {
 // rcApplyHumanize writes each usable rewording onto its allegation. A
 // rewording without a title or plain text is dropped whole: a title over the
 // gate's dense text, or plain text under no title, reads worse than either
-// source alone. Returns how many were applied.
+// source alone. got is keyed by position in picked, from 1. Returns how many
+// were applied.
 func rcApplyHumanize(res *rcChallengeResult, picked []int, got map[int]rcHumanized) int {
 	n := 0
-	for _, i := range picked {
+	for k, i := range picked {
 		a := &res.Allegations[i]
-		h, ok := got[a.ID]
+		h, ok := got[k+1]
 		if !ok {
 			continue
 		}
