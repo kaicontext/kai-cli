@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -92,11 +93,17 @@ func TestReviewSystemPrompt_KeepsTheHardWonRules(t *testing.T) {
 	}
 }
 
-// Each rule cites the incident that produced it, which is what stops a
-// later reader deleting it as boilerplate. Keep the citations.
+// Each rule's incident is recorded beside the prompt, which is what stops a
+// later reader deleting the rule as boilerplate. Keep the citations; they
+// live in the comment, not the prompt, because the model needs the lesson
+// and not the story.
 func TestReviewSystemPrompt_RulesCiteTheirIncident(t *testing.T) {
+	src, err := os.ReadFile("review_commit.go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, cite := range []string{"kai-engine, 2026-09-03", "kai-cli, 2026-09-03", "v0.6.46", "v0.6.47"} {
-		if !strings.Contains(rcReviewSystem, cite) {
+		if !strings.Contains(string(src), cite) {
 			t.Errorf("a rule lost the incident that bought it: %q", cite)
 		}
 	}
@@ -118,6 +125,12 @@ func TestPromptsCarryNoBenchmarkCases(t *testing.T) {
 	prompts := map[string]string{
 		"review": rcReviewSystem, "fast": rcFastReviewSystem, "sweep": rcSweepSystem,
 		"challenge head": rcChallengeSystemHead, "challenge tail": rcChallengeSystemTail,
+		"challenge repo": rcChallengeRepoAvailable, "challenge no shell": rcChallengeShellUnavailable,
+		"rank": rcRankSystem, "humanize": rcHumanizeSystem, "group": rcGroupSystem,
+		"intent": rcInferIntentSystem, "specialist contract": rcSpecialistContract,
+	}
+	for stage, focus := range rcSpecialistFocus {
+		prompts["specialist "+stage] = focus
 	}
 	for name, prompt := range prompts {
 		for _, f := range fingerprints {

@@ -49,6 +49,19 @@ var (
 	// built from the refreshed values or from the ones read before?
 	rcClientNewRe = regexp.MustCompile(`\bnew\s+[A-Za-z_][A-Za-z0-9_.]*(Connection|Client)\s*\(`)
 	rcCallStartRe = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	// A host, origin or e-mail compared by substring, prefix, suffix or a
+	// pattern: a look-alike domain passes unless the match is exact or
+	// anchored at both ends.
+	rcLooseHostRe = regexp.MustCompile(`(?i)\b\w*(origin|host|domain|referr?er)\w*(\(\))?\.(indexOf|includes|contains|startsWith|endsWith|start_with\?|end_with\?|include\?|match|search)\(|\.test\(\s*\w*(origin|host|domain|referr?er|email)|\w*(origin|host|domain|referr?er|email)\w*\s*=~|re\.(match|search)\([^)]*(origin|host|domain|email)`)
+	// A URL or path from a request, a parameter or a setting handed to
+	// something that opens or fetches it.
+	rcOpenerRe = regexp.MustCompile(`(?i)(\bURI\.open|\bKernel\.open|(^|[^.\w])open|\burlopen|\brequests\.(get|post)|\bhttp\.Get|\bNet::HTTP\.get\w*|\bfile_get_contents|\bcreateReadStream|\bsend_?file)\s*\(\s*[\w.\[\]'":]*(param|query|request|req\.|args|input|setting|config|feed|url|uri)`)
+	// A file that runs an authorization flow, and an OAuth state, nonce or
+	// CSRF value set in it that does not come from a random source (a read of
+	// the callback's value is the check, not the generation).
+	rcOAuthFlowRe = regexp.MustCompile(`(?i)oauth|authorize|redirect_uri|client_id|openid`)
+	rcStateSetRe  = regexp.MustCompile(`(?i)\b(state|nonce|csrf\w*)\b["']?\s*(:|=|\|\|=)\s*[^=\s]`)
+	rcRandomRe    = regexp.MustCompile(`(?i)random|uuid|crypto|secrets\.|token_(hex|urlsafe)|nanoid|\b(request|req|params|query|args|session)\b`)
 )
 
 // rcAddedLines walks a unified diff and returns, per file, its added and
@@ -112,19 +125,20 @@ func rcReviewHints(diff string) string {
 			*dst = append(*dst, fmt.Sprintf("- %s:%d  %s", h.Path, h.Line, rcOneLine(h.Code, 140)))
 		}
 	}
-	var outliers, clients []string
+	var outliers, clients, hosts, openers, states []string
 	calls := map[string][]rcCall{}
 	for _, path := range sortedKeys(byFile) {
 		if rcIsTestPath(path) {
 			continue
 		}
 		lines := byFile[path]
-		hasWrite, hasRefresh := false, false
+		hasWrite, hasRefresh, hasOAuth := false, false, false
 		for _, h := range lines {
 			if h.Added {
 				hasWrite = hasWrite || rcWriteRe.MatchString(h.Code)
 				hasRefresh = hasRefresh || rcRefreshRe.MatchString(h.Code)
 			}
+			hasOAuth = hasOAuth || rcOAuthFlowRe.MatchString(h.Code)
 		}
 		for _, h := range lines {
 			// A client built from credentials is the likelier stale read, so
@@ -149,6 +163,15 @@ func rcReviewHints(diff string) string {
 			if rcCollectRe.MatchString(h.Code) {
 				add(&collect, h)
 			}
+			if rcLooseHostRe.MatchString(h.Code) {
+				add(&hosts, h)
+			}
+			if rcOpenerRe.MatchString(h.Code) {
+				add(&openers, h)
+			}
+			if hasOAuth && rcStateSetRe.MatchString(h.Code) && !rcRandomRe.MatchString(h.Code) {
+				add(&states, h)
+			}
 		}
 		for _, c := range rcAddedCalls(lines) {
 			calls[c.Name] = append(calls[c.Name], c)
@@ -162,7 +185,7 @@ func rcReviewHints(diff string) string {
 			}
 		}
 	}
-	if len(rmw)+len(check)+len(lookup)+len(collect)+len(fresh)+len(clients)+len(outliers) == 0 {
+	if len(rmw)+len(check)+len(lookup)+len(collect)+len(fresh)+len(clients)+len(outliers)+len(hosts)+len(openers)+len(states) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -183,6 +206,9 @@ func rcReviewHints(diff string) string {
 	section("A client or connection built in a file that refreshes credentials — is it built from the refreshed values or from ones read before the refresh?", clients)
 	section("Credential fields read in a file that refreshes them — does each read come after the refresh, from the refreshed value?", fresh)
 	section("A call that passes something different from every other call of the same function — is the odd one the value the parameter means?", outliers)
+	section("A host, origin or e-mail checked by substring, prefix, suffix or a pattern — does a look-alike pass (evil-example.com, example.com.attacker.net)? Only an exact comparison of the parsed host, or a pattern anchored at both ends, keeps it out.", hosts)
+	section("A URL or path from a request, a parameter or a setting handed to something that opens or fetches it — who can set it, and can it name a local file, an internal host or a command?", openers)
+	section("An OAuth state, nonce or CSRF value set in a file that runs an authorization flow — is it fresh and unpredictable for each request (a cryptographic random source), or fixed, derived from known data, or reused?", states)
 	b.WriteString("\n")
 	return b.String()
 }
