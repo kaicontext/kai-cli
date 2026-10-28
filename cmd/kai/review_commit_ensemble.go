@@ -229,32 +229,27 @@ const (
 	rcRankMaxDiffBytes = 60 * 1024
 )
 
-const rcRankSystem = `You choose which confirmed defects a code review publishes.
+const rcRankSystem = `You choose which confirmed defects a code review publishes, and in what order.
 
-A fact-check has already confirmed that each defect below is true of the change. Your job is different: order them by how much they matter to a maintainer of this repository, fold repeated statements of the same defect, and say which are minor.
+A fact-check has settled that each item is true, reachable, part of this change and not the author's stated intent; do not re-judge that. Order the items by what matters to a maintainer, fold repeats, and put each in publish, minor or skip.
 
-Publish every defect that is not minor and not skipped, most important first. Order first the ones that:
-- produces a wrong result, crashes, or throws where the surrounding code expects success;
-- breaks a contract with callers, a caller that was not updated, or a value of the wrong kind or unit;
-- opens a security hole: missing authorization, injection, a leaked secret, an unsafe default;
-- loses or corrupts data, or leaves state half-written;
-- races, deadlocks, leaks a resource, or can hang;
-- shows users wrong text, or a test that asserts the wrong value or cannot fail.
+PUBLISH, most important first: a wrong result, crash, or exception where callers expect success; a security hole; lost or half-written data; a broken contract (a caller not updated, a wrong kind or unit, a check on the wrong variable); a race, deadlock, leak or hang; wrong text shown to users; a test that asserts the wrong value or cannot fail. A Critical or High consequence is never minor. A rare trigger, no current caller, or a possibly pre-existing cause is a reason to order lower, never to skip.
 
-Put a real defect that is small under "minor" instead of skipping it. Minor defects are published after the others, so a maintainer still sees them. They include:
-- a metric name, tag key, log field or event key that something reads (a dashboard, an alert, a parser) and that differs from what sibling code uses for the same thing. That splits or loses data; it is not naming;
-- a test step that does not do what it says: a wait that is a no-op because the test patched it, setup that never runs, a check that never executes. The test then does not exercise what it claims;
-- an edge case on unusual but allowed input.
+MINOR, published after the others, small behaviour defects before nits:
+- an edge case on unusual but allowed input; a wrong error status (a 500 where a 4xx or an error page belongs); a value stale until the next reload or cache expiry;
+- a metric name, tag key, log field or event key that differs from what sibling code uses for the same thing;
+- a test that does not exercise what it claims: a wait the test patched into a no-op, setup that never runs, a request the code does not serve, a name or docstring that states a different input or result than the body;
+- ` + rcNitDefinition + `
 
-Skip only:
-- a second statement of a defect you publish: the same code and the same mechanism, said again (keep the clearest statement). Two defects in the same file or function, or with similar wording, are not duplicates unless fixing one fixes the other;
-- a point with no effect on what the program does: formatting, comment or log-message wording, the name of a local variable.
+SKIP only:
+- a repeat of the same code and mechanism (keep the clearest); defects are repeats only if one fix fixes both;
+- formatting, a local variable's name, rewording a comment that is still accurate, a choice between two correct styles;
+- hygiene that cannot affect running code: docs, changelog or sample config not updated, a migration without a down path, a stray file in the commit, test cleanup order, missing coverage, a problem the author already marks TODO or FIXME;
+- a failure whose only trigger lies outside the program and its inputs: an install path or host name containing some word, an operator reconfiguring a running system.
 
-Do not re-judge what the fact-check settled. It has already decided that each defect is real, reachable today, introduced or touched by this change, and not the author's stated intent. So never skip a defect because its trigger seems unlikely or latent, because no current caller seems to reach it, because it might be pre-existing, because it might be intended, or because its impact is small — order it lower, or put it under "minor". A Critical or High consequence (a crash, a security hole, lost data, a check on the wrong variable) is never minor.
-
-When unsure between two, prefer the one with the more concrete failure. Answer with JSON only, no prose before or after:
-{"publish": [ids, most important first], "minor": [ids, most important first], "skip": [{"id": id, "why": "one short phrase"}]}
-Every id appears exactly once, in publish, minor or skip.`
+Answer with JSON only:
+{"publish": [ids, most important first], "minor": [ids, most important first], "skip": [{"id": id, "why": "one short phrase; a repeat starts: repeat of <id>"}]}
+Every id appears exactly once.`
 
 var rcRankJSON = regexp.MustCompile(`(?s)\{.*\}`)
 
@@ -263,11 +258,11 @@ var rcRankJSON = regexp.MustCompile(`(?s)\{.*\}`)
 // them; the rest become refuted with the selection's reason, so they are kept
 // in the record but not published. A review with a confirmed defect always
 // publishes at least one. Any failure keeps everything the fact-check
-// supported, as before this step existed.
-func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff string, changedFiles int, res *rcChallengeResult) {
+// supported, as before this step existed. Reports whether the selection ran.
+func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff string, changedFiles int, res *rcChallengeResult) bool {
 	model := rcEnsembleModel(rcStageRank)
 	if model == "" || res == nil {
-		return
+		return false
 	}
 	var supported []int
 	for i, a := range res.Allegations {
@@ -276,7 +271,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 		}
 	}
 	if len(supported) < 2 {
-		return
+		return false
 	}
 	limit := rcRankCap(changedFiles)
 
@@ -318,7 +313,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  selection (%s) failed: %v — publishing every confirmed defect\n", model, err)
-		return
+		return false
 	}
 	var text strings.Builder
 	for _, part := range resp.Parts {
@@ -329,7 +324,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	ans, perr := rcParseRank(text.String())
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "  selection (%s) answered unusably (%v) — publishing every confirmed defect\n", model, perr)
-		return
+		return false
 	}
 	// The answer itself, by allegation id, so a published defect can be traced
 	// to the main list, the minor list or the overflow past the cap: the
@@ -339,6 +334,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	fmt.Fprintf(os.Stderr, "  selection (%s, %s): %d of %d confirmed defect(s) published, %d held back\n",
 		model, time.Since(started).Round(time.Second), kept, len(supported), dropped)
 	rcFinalize(res)
+	return true
 }
 
 // rcRankAnswer is the selection's answer: the defects to publish first, the
@@ -474,11 +470,12 @@ func rcApplyRank(res *rcChallengeResult, ans rcRankAnswer, limit int) (kept, dro
 }
 
 // rcDefectsOnlyProse removes the parts of the published review that are not
-// defects: the list of claims the check could not settle and the reviewer's
-// limitations. Both stay in the challenge record; on the pull request, every
-// sentence reads as a claim about the code, so only defects belong there.
+// defects: the list of claims the check could not settle, the reviewer's
+// limitations and its decisions. All stay in the challenge record; on the
+// pull request, every sentence reads as a claim about the code, so only
+// defects belong there.
 func rcDefectsOnlyProse(prose string) string {
-	for _, heading := range []string{"## Could not verify", "## Limitations"} {
+	for _, heading := range []string{"## Could not verify", "## Limitations", "## Decisions"} {
 		for from := 0; ; {
 			// Only a heading at a line start is a section; a finding that
 			// quotes the heading mid-line is skipped, not a stop (Kai's

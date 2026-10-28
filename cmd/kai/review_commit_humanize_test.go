@@ -36,6 +36,23 @@ func TestHumanizeAppliesOnlyCompleteRewordings(t *testing.T) {
 	}
 }
 
+// After the selection reorders, ids run out of order; answers are numbered by
+// position, so each title lands on the finding it was written for.
+func TestHumanizeMapsAnswersByPosition(t *testing.T) {
+	res := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Status: rcStatusSupported, Finding: "f1"},
+		{ID: 3, Status: rcStatusSupported, Finding: "f3"},
+		{ID: 2, Status: rcStatusSupported, Finding: "f2"},
+	}}
+	got := map[int]rcHumanized{1: {Title: "First", Plain: "p"}, 2: {Title: "Second", Plain: "p"}, 3: {Title: "Third", Plain: "p"}}
+	rcApplyHumanize(res, []int{0, 1, 2}, got)
+	for i, want := range []string{"First", "Second", "Third"} {
+		if res.Allegations[i].Title != want {
+			t.Errorf("position %d (id %d) titled %q, want %q", i, res.Allegations[i].ID, res.Allegations[i].Title, want)
+		}
+	}
+}
+
 func TestHumanizeRefusesAnAnswerWithoutJSON(t *testing.T) {
 	if _, err := rcParseHumanize("I could not do that."); err == nil {
 		t.Error("an answer without JSON was accepted")
