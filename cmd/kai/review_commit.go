@@ -22,6 +22,7 @@ import (
 	"github.com/kaicontext/kai-engine/agent"
 	"github.com/kaicontext/kai-engine/finding"
 	"github.com/kaicontext/kai-engine/gitio"
+	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/planner"
 	"github.com/kaicontext/kai-engine/projects"
@@ -937,7 +938,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// so the reviewer starts oriented instead of spending turns rediscovering
 	// structure. Best-effort — an empty body just skips injection.
 	var injected string
-	if gdb != nil {
+	if gdb != nil && !graph.Disabled() {
 		injected = planner.BuildInjectedContext(user.String(), gdb, planner.LoadCommandIndex(primary.Path))
 	}
 
