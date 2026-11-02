@@ -1152,7 +1152,14 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// check (review_commit_ensemble.go), and before the earlier-point tags and
 	// section are taken, so its bullets and a stand-in review of its own go
 	// through the same handling as the main finder's.
-	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second))
+	// Which finders propose each bullet is recorded through the merges, so a
+	// repeat a merge drops still counts for the bullet it repeats
+	// (review_commit_finders.go).
+	finders := newRcFinderLedger()
+	if rcUsableCoda(raw) {
+		finders.addAll(rcIssuesOf(raw), rcFinderMain)
+	}
+	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second), finders)
 	raw = rcWithSpecialists(raw, rcAwaitSpecialists(specialists))
 	// Which ISSUES are earlier points is set aside while the bullets are
 	// merged, folded and challenged by their wording (review_commit_earlier.go).
@@ -1180,7 +1187,9 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 					rcRememberTags(earlier, "issues", "- "+sw.Issues[i], tags)
 				}
 			}
-			raw = rcDraftWithSweep(raw, sw.Issues)
+			var matched []string
+			raw, matched = rcDraftWithSweepMatched(raw, sw.Issues)
+			finders.merged(sw.Issues, matched, sw.By, rcFinderSweep)
 			fmt.Fprintf(os.Stderr, "  sweep: %d defect(s) proposed from %d chunk(s) — %d added to the reviewer's %d\n",
 				len(sw.Issues), sw.Chunks, len(rcIssuesOf(raw))-before, before)
 		}
@@ -1211,11 +1220,24 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		ranked := rcRankSupported(publicationCtx, prov, intent, diff, len(changed), res)
 		// Then only what is in the change and, when both sweeps read the
 		// diff, what more than one proposal raised (review_commit_publish.go).
+		rcRecordProposers(res, finders)
 		rcPublishGate(res, rcRepoFrom(publicationCtx), ranked && sw.Passes >= 2)
-		raw = res.Review
 		// Then the confirmed findings, reworded for the person reading the PR
-		// (review_commit_humanize.go). Wording only: no verdict changes.
-		rcHumanize(publicationCtx, prov, intent, res)
+		// (review_commit_humanize.go). Wording only: no verdict changes. With
+		// the one-claim rewrite on, the rewording runs before the review is
+		// taken and its one-defect statement becomes what is posted;
+		// KAI_REVIEW_ONE_CLAIM=0 keeps it beside the check's wording instead.
+		oneClaim := rcOneClaimOn()
+		if oneClaim {
+			rcHumanize(publicationCtx, prov, intent, res)
+			if n, kept := rcApplyOneClaim(res, earlier); n+kept > 0 {
+				fmt.Fprintf(os.Stderr, "  one claim: rewrote %d of %d posted finding(s) (kept original: %d)\n", n, n+kept, kept)
+			}
+		}
+		raw = res.Review
+		if !oneClaim {
+			rcHumanize(publicationCtx, prov, intent, res)
+		}
 		inc.Challenge = res
 		// One root cause, one finding: a short call groups the confirmed
 		// findings that repeat each other (review_commit_group.go).

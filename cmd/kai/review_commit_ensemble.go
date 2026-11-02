@@ -194,14 +194,16 @@ func rcAwaitSecondFinder(sf *rcSecondFinder) rcFinderResult {
 // rcWithSecondFinder merges the second finder's issues into the first
 // finder's draft. When the first ended without a usable review and the second
 // has one, the second's review stands in for it.
-func rcWithSecondFinder(raw string, r rcFinderResult) string {
+func rcWithSecondFinder(raw string, r rcFinderResult, finders *rcFinderLedger) string {
 	switch {
 	case !rcUsableCoda(raw) && r.Raw != "":
 		fmt.Fprintf(os.Stderr, "  the main finder ended without a review; the second finder's review stands in\n")
+		finders.addAll(rcIssuesOf(r.Raw), rcFinderSecond)
 		return r.Raw
 	case len(r.Issues) > 0 && rcUsableCoda(raw):
 		before := len(rcIssuesOf(raw))
-		merged := rcDraftWithSweep(raw, r.Issues)
+		merged, matched := rcDraftWithSweepMatched(raw, r.Issues)
+		finders.merged(r.Issues, matched, nil, rcFinderSecond)
 		fmt.Fprintf(os.Stderr, "  second finder: %d added to the main finder's %d\n", len(rcIssuesOf(merged))-before, before)
 		return merged
 	}

@@ -235,9 +235,19 @@ type rcAllegationResult struct {
 	// raised the same defect (review_commit_publish.go).
 	DuplicateOf int `json:"duplicateOf,omitempty"`
 	Votes       int `json:"votes,omitempty"`
+	// Proposers are the distinct finders that raised this defect, over its
+	// vote group, including repeats the merges dropped
+	// (review_commit_finders.go). Recorded only: the gate counts Votes.
+	Proposers []string `json:"proposers,omitempty"`
+	// Original is the check's wording of a finding the one-claim rewrite
+	// replaced (rcApplyOneClaim, review_commit_humanize.go).
+	Original *rcOriginalWording `json:"original,omitempty"`
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
 	unchecked bool
+	// statement is the humanize pass's one-defect sentence for this finding,
+	// before rcApplyOneClaim decides whether to post it.
+	statement string
 }
 
 // rcDecisionResult is the final result for one of the draft's decisions.

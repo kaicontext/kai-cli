@@ -40,13 +40,16 @@ func rcPublishGate(res *rcChallengeResult, repo *rcRepo, corroborate bool) {
 	rcCountVotes(res)
 	ranged := repo != nil && len(repo.changed) > 0
 	first, firstReason := -1, ""
-	total, kept, single, outside := 0, 0, 0, 0
+	total, kept, single, outside, distinct := 0, 0, 0, 0, 0
 	for i := range res.Allegations {
 		a := &res.Allegations[i]
 		if a.Status != rcStatusSupported {
 			continue
 		}
 		total++
+		if len(a.Proposers) >= 2 {
+			distinct++
+		}
 		if first < 0 {
 			first, firstReason = i, a.Reason
 		}
@@ -75,12 +78,14 @@ func rcPublishGate(res *rcChallengeResult, repo *rcRepo, corroborate bool) {
 	if outside+single > 0 && res.match != "" {
 		rcFinalize(res)
 	}
-	fmt.Fprintf(os.Stderr, "  publish gate: kept %d of %d (single-proposal %d, outside change %d, fallback %v; corroboration %v)\n",
-		kept, total, single, outside, fallback, corroborate)
+	fmt.Fprintf(os.Stderr, "  publish gate: kept %d of %d (single-proposal %d, outside change %d, fallback %v; corroboration %v; distinct finders >=2: %d of %d)\n",
+		kept, total, single, outside, fallback, corroborate, distinct, total)
 }
 
 // rcCountVotes sets each allegation's Votes: how many allegations the check's
-// duplicates and the selection's repeats link to it, itself included.
+// duplicates and the selection's repeats link to it, itself included. It also
+// widens each allegation's Proposers to every finder behind its group
+// (review_commit_finders.go); the gate does not decide on them.
 func rcCountVotes(res *rcChallengeResult) {
 	byID := map[int]int{}
 	parent := make([]int, len(res.Allegations))
@@ -108,11 +113,21 @@ func rcCountVotes(res *rcChallengeResult) {
 		}
 	}
 	size := map[int]int{}
-	for i := range res.Allegations {
-		size[find(i)]++
+	finders := map[int]map[string]bool{}
+	for i, a := range res.Allegations {
+		r := find(i)
+		size[r]++
+		for _, f := range a.Proposers {
+			if finders[r] == nil {
+				finders[r] = map[string]bool{}
+			}
+			finders[r][f] = true
+		}
 	}
 	for i := range res.Allegations {
-		res.Allegations[i].Votes = size[find(i)]
+		r := find(i)
+		res.Allegations[i].Votes = size[r]
+		res.Allegations[i].Proposers = rcSortedFinders(finders[r])
 	}
 }
 

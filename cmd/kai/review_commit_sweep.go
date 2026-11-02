@@ -110,6 +110,9 @@ type rcSweepResult struct {
 	// Passes is how many sweeps read at least one chunk: the publish gate
 	// counts agreement only when both did (review_commit_publish.go).
 	Passes int
+	// By names the sweeps that proposed each issue, keyed by rcFinderKey
+	// (review_commit_finders.go).
+	By map[string][]string
 }
 
 // rcSweepPatches returns each changed file's diff with wide context, keyed by
@@ -416,16 +419,22 @@ func rcSweepIssues(text string, changed map[string]bool) []string {
 // gate, which folds genuine repeats (rcMergeDuplicateIssues) and checks the
 // rest.
 func rcSameDefectThere(bullet string, there []string) bool {
+	return rcSameDefectBullet(bullet, there) != ""
+}
+
+// rcSameDefectBullet is the first bullet in there that states bullet's
+// defect, or "" when none does.
+func rcSameDefectBullet(bullet string, there []string) string {
 	if len(there) == 0 {
-		return false
+		return ""
 	}
 	words := rcDefectWords(bullet)
 	for _, other := range there {
 		if rcWordOverlap(words, rcDefectWords(other)) >= rcSameDefectOverlap {
-			return true
+			return other
 		}
 	}
-	return false
+	return ""
 }
 
 // rcSameDefectOverlap is the share of the smaller bullet's substantive words
@@ -465,12 +474,22 @@ func rcWordOverlap(a, b map[string]bool) float64 {
 }
 
 func rcDraftWithSweep(draft string, extra []string) string {
+	out, _ := rcDraftWithSweepMatched(draft, extra)
+	return out
+}
+
+// rcDraftWithSweepMatched is rcDraftWithSweep that also reports, for each
+// extra issue, the draft bullet it was dropped as a repeat of ("" when it was
+// added, or when the draft had no coda to add it to), so the finders behind
+// a bullet can be recorded (review_commit_finders.go).
+func rcDraftWithSweepMatched(draft string, extra []string) (string, []string) {
+	matched := make([]string, len(extra))
 	if len(extra) == 0 {
-		return draft
+		return draft, matched
 	}
 	i := strings.Index(draft, rcReviewDataMarker)
 	if i < 0 {
-		return draft
+		return draft, matched
 	}
 	head, coda := draft[:i+len(rcReviewDataMarker)], draft[i+len(rcReviewDataMarker):]
 	lines := strings.Split(coda, "\n")
@@ -490,14 +509,15 @@ func rcDraftWithSweep(draft string, extra []string) string {
 		}
 	}
 	var add []string
-	for _, is := range extra {
-		if rcSameDefectThere(is, have[rcSweepLocation(is)]) {
+	for k, is := range extra {
+		if m := rcSameDefectBullet(is, have[rcSweepLocation(is)]); m != "" {
+			matched[k] = m
 			continue
 		}
 		add = append(add, "- "+is)
 	}
 	if len(add) == 0 {
-		return draft
+		return draft, matched
 	}
 	var out []string
 	switch {
@@ -529,9 +549,9 @@ func rcDraftWithSweep(draft string, extra []string) string {
 	default:
 		out = append(out, strings.TrimRight(coda, "\n"), "ISSUES:")
 		out = append(out, add...)
-		return head + strings.Join(out, "\n") + "\n"
+		return head + strings.Join(out, "\n") + "\n", matched
 	}
-	return head + strings.Join(out, "\n")
+	return head + strings.Join(out, "\n"), matched
 }
 
 var rcLocationRe = regexp.MustCompile(`^\s*([^\s:]+):(\d+)`)
@@ -582,12 +602,14 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 			go func() {
 				s := time.Now()
 				r := rcRunSweepWith(ctx, prov, m2, rcStageEffort(rcStageSweep2), intent, order, patches)
+				r.By = rcFindersOf(r.Issues, rcFinderSweep2)
 				fmt.Fprintf(os.Stderr, "  second sweep (%s): %d chunk(s) read in %s, %d failed, %d defect(s) proposed\n",
 					m2, r.Chunks, time.Since(s).Round(time.Second), r.Failed, len(r.Issues))
 				second <- r
 			}()
 		}
 		res := rcRunSweep(ctx, prov, model, intent, order, patches)
+		res.By = rcFindersOf(res.Issues, rcFinderSweep)
 		fmt.Fprintf(os.Stderr, "  sweep: %d chunk(s) read in %s, %d failed, %d defect(s) proposed\n",
 			res.Chunks, time.Since(started).Round(time.Second), res.Failed, len(res.Issues))
 		if second != nil {
@@ -642,6 +664,7 @@ func rcMergeSweeps(a, b rcSweepResult) rcSweepResult {
 	out := a
 	out.Issues = issues
 	out.Passes = a.Passes + b.Passes
+	out.By = rcUnionFinders(a.By, b.By)
 	if len(out.Sources) == 0 {
 		out.Sources = b.Sources
 	}
