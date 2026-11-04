@@ -1,0 +1,7 @@
+# Changes to CI workflows and to this file need an approving review from a
+# code owner other than the author (Secure Development Policy; risk R-3).
+# Workflows hold the build, release and deploy steps and their credentials,
+# so a change here can switch off the checks every other pull request relies
+# on. All other changes need a pull request, passing CI and Kai's review.
+/.github/workflows/  @jschatz1 @AdamT @iamdiogo
+/.github/CODEOWNERS  @jschatz1 @AdamT @iamdiogo
