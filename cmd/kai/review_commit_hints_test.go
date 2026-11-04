@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -75,6 +76,35 @@ func TestReviewHintsStayQuietOnOrdinaryCode(t *testing.T) {
 `, "\t", "")
 	if got := rcReviewHints(test); got != "" {
 		t.Errorf("hints on a test file:\n%s", got)
+	}
+}
+
+// The security shapes: a loose host check, input handed to an opener, and an
+// authorization flow's state set from something other than a random source.
+func TestReviewHintsPointAtLooseSecurityChecks(t *testing.T) {
+	file := func(path string, lines ...string) string {
+		return "diff --git a/" + path + " b/" + path + "\n--- a/" + path + "\n+++ b/" + path +
+			"\n@@ -1,1 +1," + strconv.Itoa(len(lines)+1) + " @@\n context\n+" + strings.Join(lines, "\n+") + "\n"
+	}
+	for _, tc := range []struct {
+		diff, want string
+	}{
+		{file("web/embed.js", "if (event.origin.indexOf(allowedHost) !== -1) {"), "web/embed.js:2  if (event.origin.indexOf(allowedHost) !== -1) {"},
+		{file("app/signup.rb", "return true if email =~ /example\\.org/"), "does a look-alike pass"},
+		{file("app/feeds.rb", "content = open(SiteConfig.feed_url).read"), "app/feeds.rb:2  content = open(SiteConfig.feed_url).read"},
+		{file("api/proxy.py", "resp = requests.get(params['target_url'])"), "can it name a local file"},
+		{file("auth/login.py", "url = build(client_id, redirect_uri)", "state = sign(client_id)"), "auth/login.py:3  state = sign(client_id)"},
+	} {
+		if got := rcReviewHints(tc.diff); !strings.Contains(got, tc.want) {
+			t.Errorf("hints miss %q\n%s", tc.want, got)
+		}
+	}
+	// A random state, the callback reading it back, and a plain file open are
+	// not hints.
+	quiet := file("auth/login.py", "url = build(client_id, redirect_uri)", "state = secrets.token_urlsafe(32)",
+		"if request.args['state'] != expected:", "with open(path) as f:")
+	if got := rcReviewHints(quiet); got != "" {
+		t.Errorf("hints on safe code:\n%s", got)
 	}
 }
 

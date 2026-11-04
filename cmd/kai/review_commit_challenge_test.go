@@ -581,12 +581,17 @@ func TestScoredStatusPublishesByConfidenceAndImpact(t *testing.T) {
 		{rcStatusRefuted, "critical", 1, true, rcStatusRefuted},
 	}
 	for _, c := range cases {
-		got, why := rcScoredStatus(c.status, c.conf, c.impact, c.evidence)
+		got, why := rcScoredStatus(c.status, "", c.conf, c.impact, c.evidence)
 		if got != c.want {
 			t.Errorf("rcScoredStatus(%s, %d, %q, evidence=%v) = %s (%q); want %s", c.status, c.conf, c.impact, c.evidence, got, why, c.want)
 		}
 		if got != c.status && why == "" {
 			t.Errorf("a changed status must say why: %+v", c)
 		}
+	}
+	// A duplicate's confidence rates the defect it repeats; promoting it
+	// would publish that defect twice.
+	if got, _ := rcScoredStatus(rcStatusRefuted, "Duplicate of issue 2: the same missing check.", 9, "high", true); got != rcStatusRefuted {
+		t.Errorf("a refuted duplicate at 9/10 was promoted to %s", got)
 	}
 }

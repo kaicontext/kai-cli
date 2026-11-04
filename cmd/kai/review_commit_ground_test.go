@@ -194,11 +194,6 @@ func TestGroundIssue(t *testing.T) {
 	if p, n := rcResolvePath("internal/api/billing.go", tree); p != "internal/api/billing.go" || n != 1 {
 		t.Errorf("exact path: got (%q, %d)", p, n)
 	}
-
-	d := rcDecisionClaim("the reward is $10 in credits to the referrer")
-	if !strings.HasPrefix(d.Statement, "Decision: ") || !d.Resolved || !d.Verified || d.Lookup == "" {
-		t.Errorf("decision claim: %+v", d)
-	}
 }
 
 const rcHostDiff = `diff --git a/internal/cfg/config.go b/internal/cfg/config.go

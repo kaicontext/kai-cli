@@ -39,7 +39,14 @@ import (
 	"github.com/kaicontext/kai-engine/provider"
 )
 
-const rcGroupSystem = `You are given the confirmed findings of a code review, numbered. Some may be the same defect said twice: the same root cause — the same wrong expression, the same missing check, the same mistaken assumption — reworded, or cited on a neighbouring line. Two different problems are NOT the same, even on the same line or in the same function: a SQL injection through one variable and another through a different variable are two findings.
+const rcGroupSystem = `You are given the confirmed findings of a code review, numbered. Say which ones repeat another, so each problem is posted once.
+
+Two findings are the same problem when they name the same wrong thing (the same expression, missing step, missing input or mistaken assumption), so correcting it once corrects both. That includes:
+- the same mistake reworded, or cited on a neighbouring line or at another caller;
+- one cause reported once per thing it breaks: several actions, fields or callers that each fail because the same input is missing or the same helper is wrong;
+- one finding stating the mechanism and another stating only its consequence ("tokens are logged unredacted" and "the log exposes session tokens").
+
+They are different problems when each needs its own correction, even on one line or in one function: two different wrong expressions; an injection through one variable and another through a different variable; two separate causes of the same symptom. When unsure, they are different: a wrong merge hides a real problem.
 
 Reply with one line per repeat, "N = M", meaning finding N repeats the earlier finding M (M < N). Reply NONE when no finding repeats another. Nothing else.`
 

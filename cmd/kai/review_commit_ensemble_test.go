@@ -125,12 +125,12 @@ func TestRankCapGrowsWithTheChange(t *testing.T) {
 func TestPublishedProseKeepsOnlyDefects(t *testing.T) {
 	prose := "## Scope\n- a.go\n\n## Findings\n\n### a.go:1 — bug\nx\n\n## Could not verify\n- maybe — why\n\n## Limitations\n- did not read b\n\n## Decisions (need your call)\n- ship it\n"
 	got := rcDefectsOnlyProse(prose)
-	for _, gone := range []string{"Could not verify", "maybe", "Limitations", "did not read b"} {
+	for _, gone := range []string{"Could not verify", "maybe", "Limitations", "did not read b", "## Decisions", "ship it"} {
 		if strings.Contains(got, gone) {
 			t.Errorf("published prose still has %q:\n%s", gone, got)
 		}
 	}
-	for _, kept := range []string{"## Scope", "### a.go:1 — bug", "## Decisions (need your call)", "ship it"} {
+	for _, kept := range []string{"## Scope", "### a.go:1 — bug"} {
 		if !strings.Contains(got, kept) {
 			t.Errorf("published prose lost %q:\n%s", kept, got)
 		}
