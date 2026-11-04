@@ -161,7 +161,7 @@ func TestReviewChallengeReceivesFullEvidenceAndFreshConversation(t *testing.T) {
 		// have dropped it.
 		text := ""
 		if len(req.Messages) == 1 {
-			text = req.Messages[0].Parts[0].(message.TextContent).Text
+			text = rcTestPromptText(req)
 		}
 		// Source 2 = the tool-call header line + 500 preamble lines + the last line.
 		if !strings.Contains(text, "SOURCE 2 (kai_view result whose file line mapping could not be established") || !strings.Contains(text, "\ncritical source at the end") {
@@ -287,7 +287,7 @@ func TestReviewCitationIsExtractedBySystem(t *testing.T) {
 	}
 	var prompt string
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
-		prompt = req.Messages[0].Parts[0].(message.TextContent).Text
+		prompt = rcTestPromptText(req)
 		if strings.Contains(rcTestAnswer(t, rcChallengeAnswer{}), "quote") {
 			t.Fatal("answer shape still carries a quote field")
 		}
