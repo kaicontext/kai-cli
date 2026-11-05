@@ -358,10 +358,43 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("commit %s has an empty diff (merge commit? try a child, or pass --base)", rcShort(hash))
 	}
 
-	// The run's review profile, if the benchmark put one on the base branch
-	// (review_commit_profile.go). Loaded before any model is resolved, so
-	// every stage below sees it.
-	if err := rcLoadProfileFor(reviewCommitBase); err != nil {
+	// Diff stat up front: it is pure git, and --fast hands the changed paths to
+	// the model so its ISSUES bullets name a file the pipeline can resolve. The
+	// first live fast run wrote both of its real defects as bare line numbers
+	// ("2152 — ..."), which rcGroundIssue holds — visible in the inbox, but not
+	// counted, so two genuine bugs would have shipped under a green badge.
+	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
+	changedPaths := make([]string, 0, len(files))
+	for _, df := range files {
+		changedPaths = append(changedPaths, df.Path)
+	}
+
+	// Blast radius: walk the captured graph outward from the changed files so the
+	// finding shows what the change reaches (callers/importers), not just the diff.
+	// headHex="" walks the freshly-captured (single-snapshot) graph unscoped.
+	// Non-fatal — blast is a panel, not the review itself. Walked before the
+	// review because the pre-review risk rating reads its direct dependents.
+	//
+	// A --fast run in an uncaptured repo has no graph to walk; the panel is
+	// simply absent, which is honest for a pass that read no callers.
+	var blast finding.Blast
+	if set != nil {
+		b, berr := reviewanalyze.BlastFor(ctx, set.Primary().DB, changedPaths, "")
+		if berr != nil {
+			fmt.Fprintf(os.Stderr, "  blast radius unavailable: %v\n", berr)
+		}
+		blast = b
+	}
+
+	// The run's review profile: the low-risk one for a change rated S before
+	// the review when the job names one (review_commit_risk.go), else the
+	// job's or the benchmark's (review_commit_profile.go). Loaded before any
+	// model is resolved, so every stage below sees it.
+	risk := rcPreReviewRisk(files, blast)
+	if os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK") != "" && risk.Level != "" {
+		fmt.Fprintf(os.Stderr, "  pre-review risk %s\n", risk)
+	}
+	if err := rcLoadProfileForRisk(reviewCommitBase, risk); err != nil {
 		return err
 	}
 	// The repository's own review rules, from the same base branch
@@ -406,17 +439,6 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	var collectDescription func(time.Duration) string
 	if reviewCommitFormat == "json" {
 		collectDescription = rcStartDescription(ctx, prov, rcStageModel(rcStageIntent, model), authorContext, diff)
-	}
-
-	// Diff stat up front: it is pure git, and --fast hands the changed paths to
-	// the model so its ISSUES bullets name a file the pipeline can resolve. The
-	// first live fast run wrote both of its real defects as bare line numbers
-	// ("2152 — ..."), which rcGroundIssue holds — visible in the inbox, but not
-	// counted, so two genuine bugs would have shipped under a green badge.
-	added, removed, files := rcCommitDiffStat(reviewCommitBase, ref)
-	changedPaths := make([]string, 0, len(files))
-	for _, df := range files {
-		changedPaths = append(changedPaths, df.Path)
 	}
 
 	mode := "review-commit --deep"
@@ -518,22 +540,6 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// bundle rather than published as a hollow block.
 	if challenge.rcEmpty() {
 		challenge = nil
-	}
-
-	// Blast radius: walk the captured graph outward from the changed files so the
-	// finding shows what the change reaches (callers/importers), not just the diff.
-	// headHex="" walks the freshly-captured (single-snapshot) graph unscoped.
-	// Non-fatal — blast is a panel, not the review itself.
-	//
-	// A --fast run in an uncaptured repo has no graph to walk; the panel is
-	// simply absent, which is honest for a pass that read no callers.
-	var blast finding.Blast
-	if set != nil {
-		b, berr := reviewanalyze.BlastFor(ctx, set.Primary().DB, changedPaths, "")
-		if berr != nil {
-			fmt.Fprintf(os.Stderr, "  blast radius unavailable: %v\n", berr)
-		}
-		blast = b
 	}
 
 	from := rcShort(rcParentHash(hash))

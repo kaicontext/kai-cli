@@ -196,16 +196,7 @@ func rcProfileSetsEffort(stage string) bool {
 func rcLoadProfileFor(base string) error {
 	rcActiveProfile = nil
 	if path := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE")); path != "" {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("review profile: %w", err)
-		}
-		p, err := rcParseProfile(data, path)
-		if err != nil {
-			return err
-		}
-		rcActiveProfile = p
-		return nil
+		return rcLoadProfileFile(path)
 	}
 	repo := strings.TrimSpace(os.Getenv("GITHUB_REPOSITORY_FULLNAME"))
 	owner, _, _ := strings.Cut(repo, "/")
@@ -229,6 +220,32 @@ func rcLoadProfileFor(base string) error {
 	}
 	rcActiveProfile = p
 	return nil
+}
+
+// rcLoadProfileFile makes the profile in a local file the active one.
+func rcLoadProfileFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("review profile: %w", err)
+	}
+	p, err := rcParseProfile(data, path)
+	if err != nil {
+		return err
+	}
+	rcActiveProfile = p
+	return nil
+}
+
+// rcLoadProfileForRisk is rcLoadProfileFor with risk routing
+// (review_commit_risk.go): a change rated S before the review runs on
+// KAI_REVIEW_PROFILE_LOW_RISK when the job names one. Every other change, and
+// every change when it is unset, loads as rcLoadProfileFor does.
+func rcLoadProfileForRisk(base string, risk rcRisk) error {
+	if path := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")); path != "" && risk.Level == "S" {
+		rcActiveProfile = nil
+		return rcLoadProfileFile(path)
+	}
+	return rcLoadProfileFor(base)
 }
 
 func rcProfileStage(stage string) (rcStageSetting, bool) {
