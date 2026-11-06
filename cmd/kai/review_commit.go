@@ -392,7 +392,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// model is resolved, so every stage below sees it.
 	risk := rcPreReviewRisk(files, blast)
 	if os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK") != "" && risk.Level != "" {
-		fmt.Fprintf(os.Stderr, "  pre-review risk %s\n", risk)
+		profile := "standard profile"
+		if rcLowRiskLevel(risk.Level) {
+			profile = "low-risk profile"
+		}
+		fmt.Fprintf(os.Stderr, "  pre-review risk %s → %s\n", risk, profile)
 	}
 	if err := rcLoadProfileForRisk(reviewCommitBase, risk); err != nil {
 		return err

@@ -45,7 +45,12 @@ func TestPreReviewRisk(t *testing.T) {
 		{"30 direct dependents", rcRiskFiles("lib/util.go"), rcRiskDirect(30), "S"},
 		{"31 direct dependents", rcRiskFiles("lib/util.go"), rcRiskDirect(31), "M"},
 		{"reaches fallback", rcRiskFiles("lib/util.go"), finding.Blast{Reaches: 101}, "M"},
-		{"high beats medium", rcRiskFiles("go.mod", "pkg/session/store.go"), finding.Blast{}, "L"},
+		{"high beats medium", rcRiskFiles("go.mod", "pkg/auth/store.go"), finding.Blast{}, "L"},
+		{"session is not auth", rcRiskFiles("ui/terminal/packages/session-titles/list.tsx"), finding.Blast{}, "S"},
+		{"helm chart", rcRiskFiles("infra/helm/terminal/values.yaml"), finding.Blast{}, "M"},
+		{"terraform", rcRiskFiles("infra/terraform/main.tf"), finding.Blast{}, "M"},
+		{"deploy dir", rcRiskFiles("deploy/gvisor/Dockerfile"), finding.Blast{}, "M"},
+		{"deploy config with auth", rcRiskFiles("infra/helm/auth/values.yaml"), finding.Blast{}, "L"},
 	}
 	for _, c := range cases {
 		if got := rcPreReviewRisk(c.files, c.blast).Level; got != c.want {
@@ -86,6 +91,14 @@ func TestLoadProfileForRisk(t *testing.T) {
 	check(rcRisk{Level: "M"}, "claude-sonnet-5-5")
 	check(rcRisk{Level: "L"}, "claude-sonnet-5-5")
 	check(rcRisk{}, "claude-sonnet-5-5") // no file list: not rated, not routed
+
+	// The job can route more levels to the low-risk profile.
+	t.Setenv("KAI_REVIEW_LOW_RISK_LEVELS", "S, m")
+	check(rcRisk{Level: "S"}, "zai-org/GLM-5.3-Flash")
+	check(rcRisk{Level: "M"}, "zai-org/GLM-5.3-Flash")
+	check(rcRisk{Level: "L"}, "claude-sonnet-5-5")
+	check(rcRisk{}, "claude-sonnet-5-5")
+	t.Setenv("KAI_REVIEW_LOW_RISK_LEVELS", "")
 
 	t.Setenv("KAI_REVIEW_PROFILE_LOW_RISK", filepath.Join(dir, "missing.json"))
 	if err := rcLoadProfileForRisk("main", rcRisk{Level: "S"}); err == nil {

@@ -3,8 +3,8 @@ package main
 // Risk routing: a low-risk change is reviewed on a cheaper review profile.
 //
 // The review job can name two profiles: KAI_REVIEW_PROFILE for every change and
-// KAI_REVIEW_PROFILE_LOW_RISK for a change rated low risk before the review
-// starts. The rating has to come before any model runs, so it is the part of
+// KAI_REVIEW_PROFILE_LOW_RISK for a change rated at one of the levels in
+// KAI_REVIEW_LOW_RISK_LEVELS (default S) before the review starts. The rating has to come before any model runs, so it is the part of
 // kai-server's risk label (kailab-control/internal/api/review_size_risk.go,
 // changeRisk) that reads only the change: where it lands, what it changes and
 // how many files depend on it directly. The server's label also reads the
@@ -16,6 +16,13 @@ package main
 // finder and Opus rank, the fact-check, second finder and second sweep on
 // Doubleword) and the rest on run50 scored Opus-judge F1 53.6 against 56.4 for
 // run50 everywhere, at about $2.22 a review against $2.90.
+//
+// 2026-11-06: deploy config (Helm, k8s, Terraform, deploy/) rates M instead of
+// L, and "session" no longer counts as auth. Re-rated, the first 81 production
+// reviews go from 43 S / 11 M / 27 L to 43 S / 27 M / 11 L. With the job routing
+// M to the low-risk profile too (KAI_REVIEW_LOW_RISK_LEVELS=S,M), that is about
+// $1.58 a review against $2.24; the bench scored routing S and M that way at
+// Opus-judge F1 52.2.
 
 import (
 	"fmt"
@@ -45,13 +52,24 @@ var rcRiskManifests = map[string]bool{
 
 // rcRiskAreas are the server's sensitiveAreas: a changed file whose path names
 // one makes the change L. Matched against whole path words.
+//
+// 2026-11-06: "session" and "sessions" are no longer auth words. In the first
+// 81 production reviews they matched UI packages and a session-titles backfill
+// script, never authentication.
 var rcRiskAreas = map[string]string{
-	"auth": "auth", "authn": "auth", "authz": "auth", "oauth": "auth", "login": "auth", "session": "auth",
-	"sessions": "auth", "permission": "auth", "permissions": "auth", "rbac": "auth", "acl": "auth", "sso": "auth",
+	"auth": "auth", "authn": "auth", "authz": "auth", "oauth": "auth", "login": "auth",
+	"permission": "auth", "permissions": "auth", "rbac": "auth", "acl": "auth", "sso": "auth",
 	"billing": "billing", "payment": "billing", "payments": "billing", "stripe": "billing", "invoice": "billing",
 	"invoices": "billing", "pricing": "billing", "credits": "billing", "subscription": "billing", "subscriptions": "billing",
 	"migration": "migrations", "migrations": "migrations", "schema": "migrations",
-	"terraform": "deploy", "k8s": "deploy", "kubernetes": "deploy", "helm": "deploy", "deploy": "deploy",
+}
+
+// rcRiskDeployWords name deploy configuration: a changed file whose path names
+// one makes the change M, like a CI change. They made a change L until
+// 2026-11-06; in the first 81 production reviews Helm charts alone put 13 of
+// 27 L reviews there, routine chart edits that run50's review did not need.
+var rcRiskDeployWords = map[string]bool{
+	"terraform": true, "k8s": true, "kubernetes": true, "helm": true, "deploy": true,
 }
 
 // rcRisk is a pre-review risk level, S, M or L, with what set it. Level is ""
@@ -141,6 +159,9 @@ func rcPreReviewRisk(files []finding.DiffFile, blast finding.Blast) rcRisk {
 		for _, w := range strings.FieldsFunc(l, func(r rune) bool { return r == '/' || r == '_' || r == '-' || r == '.' }) {
 			if area, ok := rcRiskAreas[w]; ok {
 				note(&high, "touches "+area)
+			}
+			if rcRiskDeployWords[w] {
+				note(&medium, "changes deploy config")
 			}
 		}
 		if rcRiskManifests[base] || rcRiskLockfiles[base] || (strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt")) {
