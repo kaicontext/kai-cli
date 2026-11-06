@@ -237,15 +237,35 @@ func rcLoadProfileFile(path string) error {
 }
 
 // rcLoadProfileForRisk is rcLoadProfileFor with risk routing
-// (review_commit_risk.go): a change rated S before the review runs on
-// KAI_REVIEW_PROFILE_LOW_RISK when the job names one. Every other change, and
-// every change when it is unset, loads as rcLoadProfileFor does.
+// (review_commit_risk.go): a change rated at one of the levels in
+// KAI_REVIEW_LOW_RISK_LEVELS (comma-separated, default "S") before the review
+// runs on KAI_REVIEW_PROFILE_LOW_RISK when the job names one. Every other
+// change, and every change when that is unset, loads as rcLoadProfileFor does.
 func rcLoadProfileForRisk(base string, risk rcRisk) error {
-	if path := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")); path != "" && risk.Level == "S" {
+	if path := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")); path != "" && rcLowRiskLevel(risk.Level) {
 		rcActiveProfile = nil
 		return rcLoadProfileFile(path)
 	}
 	return rcLoadProfileFor(base)
+}
+
+// rcLowRiskLevel reports whether a pre-review risk level is routed to the
+// low-risk profile: one of KAI_REVIEW_LOW_RISK_LEVELS, or S when it is unset.
+// An unrated change (no file list) never is.
+func rcLowRiskLevel(level string) bool {
+	if level == "" {
+		return false
+	}
+	levels := strings.TrimSpace(os.Getenv("KAI_REVIEW_LOW_RISK_LEVELS"))
+	if levels == "" {
+		levels = "S"
+	}
+	for _, l := range strings.Split(levels, ",") {
+		if strings.EqualFold(strings.TrimSpace(l), level) {
+			return true
+		}
+	}
+	return false
 }
 
 func rcProfileStage(stage string) (rcStageSetting, bool) {
