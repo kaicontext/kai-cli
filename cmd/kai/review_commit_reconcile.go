@@ -140,7 +140,7 @@ func rcReconcileSiblings(ctx context.Context, prov provider.Provider, model, pro
 		a := res.Allegations[i]
 		fmt.Fprintf(os.Stderr, "  challenge: re-checking a supported allegation against %d nearby refutation(s) of the same code: %s\n", len(sib), rcClip(a.Issue, 120))
 		draft := rcSubDraft(strings.TrimSpace(prose)+"\n\n"+rcSiblingContext(res.Allegations, sib), []string{a.Issue}, nil)
-		again, err := rcChallengeDraft(ctx, prov, model, draft, rcBatchSources(sources, extra, []string{a.Issue}), sandbox)
+		again, err := rcChallengeDraftShared(ctx, prov, model, draft, rcBatchSources(sources, extra, []string{a.Issue}), len(sources), sandbox)
 		if err != nil || again == nil || len(again.Allegations) == 0 {
 			why := "the re-check did not complete"
 			if err != nil {
