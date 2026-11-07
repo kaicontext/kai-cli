@@ -18,7 +18,7 @@
     "claude",
     "cursor"
   ],
-  "license": "Apache-2.0",
+  "license": "BUSL-1.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/kaicontext/kai-cli.git",
