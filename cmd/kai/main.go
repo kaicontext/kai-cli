@@ -1881,10 +1881,16 @@ var usageCmd = &cobra.Command{
 	Short: "Show billing usage for the current period",
 	Long: `Show commit usage and billing information for your organization.
 
+The org is --org (or KAI_ORG), else the org of this repo's origin remote,
+else your personal org.
+
 Examples:
-  kai usage                  # Show usage for current org`,
+  kai usage                  # Show usage for current org
+  kai usage --org acme       # Show usage for a specific org`,
 	RunE: runUsage,
 }
+
+var usageOrgFlag string
 
 var liveCmd = &cobra.Command{
 	Use:   "live",
@@ -4767,6 +4773,7 @@ func init() {
 
 	// Billing usage
 	usageCmd.GroupID = groupRemote
+	usageCmd.Flags().StringVar(&usageOrgFlag, "org", "", "Org slug to show usage for (also via KAI_ORG)")
 	rootCmd.AddCommand(usageCmd)
 
 	// Add review subcommands
@@ -19509,13 +19516,18 @@ func runUsage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no remote configured (use 'kai remote set origin <url>')")
 	}
 
-	usage, err := client.GetUsage(client.Tenant)
+	org, err := resolveUsageOrg(client)
 	if err != nil {
-		return fmt.Errorf("getting usage: %w", err)
+		return err
+	}
+
+	usage, err := client.GetUsage(org)
+	if err != nil {
+		return fmt.Errorf("getting usage for org %q: %w", org, err)
 	}
 
 	fmt.Println()
-	fmt.Printf("  Org:     %s\n", client.Tenant)
+	fmt.Printf("  Org:     %s\n", org)
 	fmt.Printf("  Plan:    %s\n", usage.Tier)
 	if usage.Tier == "pro" {
 		fmt.Printf("  Seats:   %d / %d assigned\n", usage.SeatsAssigned, usage.SeatsPurchased)
@@ -19544,6 +19556,21 @@ func runUsage(cmd *cobra.Command, args []string) error {
 		float64(usage.MonthlyCostCents)/100, float64(usage.MonthlyCapCents)/100,
 		renderUsageBar(mPct, 30), mPct)
 
+	// Credits pay for usage past the caps above, so a capped account with
+	// a balance keeps working; the line says which pot is drawn from.
+	fmt.Println()
+	if usage.BillingScope == "org" {
+		fmt.Printf("  Credits: $%.2f  (org pool, pays for usage past the caps)\n",
+			float64(usage.CreditCents)/100)
+		if usage.PersonalCreditCents > 0 {
+			fmt.Printf("           $%.2f  (personal, not used for this org)\n",
+				float64(usage.PersonalCreditCents)/100)
+		}
+	} else {
+		fmt.Printf("  Credits: $%.2f  (personal, pays for usage past the caps)\n",
+			float64(usage.CreditCents)/100)
+	}
+
 	if usage.UpgradeURL != nil {
 		fmt.Println()
 		fmt.Printf("  Manage billing & seats: %s\n", *usage.UpgradeURL)
@@ -19551,6 +19578,39 @@ func runUsage(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	return nil
+}
+
+// resolveUsageOrg picks the org `kai usage` reports on. Outside a repo
+// with an origin remote the client's tenant is the placeholder "default",
+// which is no real org, so fall back to the caller's own orgs instead.
+func resolveUsageOrg(client *remote.Client) (string, error) {
+	want := strings.TrimSpace(usageOrgFlag)
+	if want == "" {
+		want = strings.TrimSpace(os.Getenv("KAI_ORG"))
+	}
+	if want == "" {
+		if remotes, err := remote.ListRemotes(); err == nil {
+			if _, ok := remotes["origin"]; ok {
+				return client.Tenant, nil
+			}
+		}
+	}
+
+	orgs, err := remote.NewControlClient(client.BaseURL).ListOrgs()
+	if err != nil {
+		return "", fmt.Errorf("listing your orgs (or pass --org): %w", err)
+	}
+	if want != "" {
+		if findOrgBySlug(orgs, want) == nil {
+			return "", fmt.Errorf("org %q not found — you belong to: %s", want, orgSlugs(orgs))
+		}
+		return want, nil
+	}
+	if len(orgs) == 0 {
+		return "", fmt.Errorf("you don't belong to any org yet")
+	}
+	email, _, _ := remote.GetAuthStatus()
+	return pickPersonalOrg(orgs, email).Slug, nil
 }
 
 func renderUsageBar(pct, width int) string {
