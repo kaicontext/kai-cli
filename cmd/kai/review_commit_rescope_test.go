@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -87,6 +89,24 @@ func TestReReviewScopeSizesTheTurnBudget(t *testing.T) {
 	}
 	if got, want := rcReviewMaxTurns(len(rcReviewScope(changed, nil))), rcReviewMaxTurns(20); got != want {
 		t.Fatalf("whole-change turns = %d, want %d", got, want)
+	}
+}
+
+// The prompt states the scoped budget and sends the reviewer from the focus
+// into the unchanged files the change reaches; a whole review gets no block.
+func TestReReviewFocusBlock(t *testing.T) {
+	prior := &rcPrior{Head: "0123456789abcdef"}
+	b := rcReReviewFocusBlock(prior, []string{"a.go", "c.go"}, 5, rcReviewMaxTurns(2))
+	for _, want := range []string{
+		fmt.Sprintf("you have %d turns", rcReviewMaxTurns(2)),
+		"2 of 5 changed files", "a.go, c.go", rcShort(prior.Head), "kai_callers",
+	} {
+		if !strings.Contains(b, want) {
+			t.Fatalf("block missing %q:\n%s", want, b)
+		}
+	}
+	if rcReReviewFocusBlock(prior, nil, 5, 45) != "" || rcReReviewFocusBlock(nil, []string{"a.go"}, 5, 33) != "" {
+		t.Fatal("a whole review got a focus block")
 	}
 }
 

@@ -28,6 +28,7 @@ package main
 // change anyway. KAI_REVIEW_RESCOPE=off turns it off.
 
 import (
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -92,6 +93,24 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 	}
 	sort.Strings(out)
 	return out
+}
+
+// rcReReviewFocusBlock tells a scoped re-review what it is sized to, so the
+// prompt states the turns the run really has, and what the files outside the
+// focus are: reviewed already, not out of scope. The reviewer is pointed at
+// them through the change itself (its callers, dependents, shared keys), which
+// is where a fix breaks code that did not change. "" when the review covers
+// the whole change.
+func rcReReviewFocusBlock(prior *rcPrior, focus []string, changed, turns int) string {
+	if prior == nil || focus == nil {
+		return ""
+	}
+	return fmt.Sprintf("RE-REVIEW FOCUS: you have %d turns, sized to the %d of %d changed files that need reading again: %s. "+
+		"The other changed files were reviewed at %s and have not changed since: they are reviewed, not out of scope, and the whole diff is above. "+
+		"Read the focus files first. Then follow what changed into the rest: where a focus file changes a signature, return value, error, nil case, "+
+		"shared state, key, route or setting that another file uses (kai_callers, kai_dependents, kai_grep), open that use and check it, "+
+		"changed in this pull request or not. A fix that breaks code you already reviewed is the defect a re-review is for.\n\n",
+		turns, len(focus), changed, strings.Join(focus, ", "), rcShort(prior.Head))
 }
 
 // rcReScopeOff reports whether KAI_REVIEW_RESCOPE turns scoping off.

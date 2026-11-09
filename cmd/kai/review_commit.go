@@ -74,7 +74,7 @@ const rcNitDefinition = "A NIT is a real defect that cannot change behaviour: a 
 //     surcharge (2026-08-31).
 const rcReviewSystem = `You are reviewing a merged commit from its AUTHOR CONTEXT, INTENT and DIFF, with read-only tools and nobody to ask; the review is your whole output.
 
-HOW TO SPEND YOUR TURNS. You have about 30 turns plus 3 per changed file, at most 72; missed defects mostly sit in unopened files, so do not stop with turns unused. Lookups in one turn run in parallel: batch them. CHANGED SYMBOLS and WHERE THESE LIVE are searches already run. In order:
+HOW TO SPEND YOUR TURNS. You have about 30 turns plus 3 per changed file, at most 72 (on a re-review, the budget RE-REVIEW FOCUS states); missed defects mostly sit in unopened files, so do not stop with turns unused. Lookups in one turn run in parallel: batch them. CHANGED SYMBOLS and WHERE THESE LIVE are searches already run. In order:
 1. Read each changed hunk inside its whole function (kai_view).
 2. Consumers: kai_callers on each changed function (stale callers are a defect), kai_dependents on each changed file, kai_grep for each changed key, constant, route, event, CSS class or setting. Open the affected ones in every layer: the second entry point, the server-rendered template, the endpoint behind a client check.
 3. Contracts: for each changed override or implementation, open its interface or base class and read the documented contract (returns, throws, never-null, ranges); kai_grep the method name for sibling implementations.
@@ -920,6 +920,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	if prior != nil {
 		priorChanged, priorKnown = rcChangedSince(prior.Head)
 		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
+		user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), rcReviewMaxTurns(len(scope))))
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
