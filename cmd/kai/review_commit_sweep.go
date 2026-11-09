@@ -583,8 +583,9 @@ func rcSweepPaths(issues []string) []string {
 
 // rcStartSweep starts the diff sweep beside the grounded review and returns
 // the channel its result arrives on. KAI_REVIEW_SWEEP=0 turns it off; the
-// channel then carries an empty result at once.
-func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, base, ref string) <-chan rcSweepResult {
+// channel then carries an empty result at once. focus, when not nil, limits
+// both sweeps to a re-review's files to read again (review_commit_rescope.go).
+func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, base, ref string, focus []string) <-chan rcSweepResult {
 	ch := make(chan rcSweepResult, 1)
 	if os.Getenv("KAI_REVIEW_SWEEP") == "0" {
 		ch <- rcSweepResult{}
@@ -593,6 +594,7 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 	model = rcSweepModel(model)
 	go func() {
 		order, patches := rcSweepPatches(base, ref)
+		order, patches = rcOnlyPatches(order, patches, focus)
 		started := time.Now()
 		// A second sweep on another model reads the same hunks beside the
 		// first; they miss different lines (review_commit_ensemble.go).
