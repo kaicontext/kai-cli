@@ -22,11 +22,15 @@ package main
 // had just declined — it knew what it said, not what was said back.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 // rcPrior is Kai's previous review of this pull request.
@@ -90,7 +94,7 @@ func rcChangedSince(head string) ([]string, bool) {
 var rcChangedSinceFn = rcGitChangedSince
 
 func rcGitChangedSince(head string) ([]string, bool) {
-	if exec.Command("git", "rev-parse", "--verify", "--quiet", head+"^{commit}").Run() != nil {
+	if !rcHasCommit(head) && !(rcFetchCommit(head) && rcHasCommit(head)) {
 		return nil, false
 	}
 	out, err := exec.Command("git", "--no-pager", "diff", "--name-only", head, "HEAD").Output()
@@ -105,6 +109,58 @@ func rcGitChangedSince(head string) ([]string, bool) {
 	}
 	return files, true
 }
+
+// rcHasCommit reports whether the clone has commit c.
+func rcHasCommit(c string) bool {
+	return exec.Command("git", "rev-parse", "--verify", "--quiet", c+"^{commit}").Run() == nil
+}
+
+// rcFetchTimeout bounds the fetch of a previous review's commit. A miss only
+// costs the scoping (the review covers the whole change), so it never waits
+// long.
+const rcFetchTimeout = 30 * time.Second
+
+var (
+	rcFetchMu    sync.Mutex
+	rcFetchTried = map[string]bool{}
+)
+
+// rcFetchCommit fetches one commit the clone is missing from origin, and
+// reports whether the fetch ran without error. It is how a re-review of a
+// force-pushed pull request still knows what changed since the previous
+// review: an amended or rebased push leaves the previous head out of the
+// PR's history, so the CI clone does not have it, but GitHub still serves it
+// by id. kai-server sends that id in full (api/review_prior.go
+// priorReviewHead); a short id cannot be fetched, so only a full one is
+// tried, and each id once per run. In a blobless clone the fetch brings the
+// commit and its trees, which is all a name-only diff reads.
+//
+// KAI_REVIEW_FETCH_PRIOR=0 turns it off.
+func rcFetchCommit(c string) bool {
+	if os.Getenv("KAI_REVIEW_FETCH_PRIOR") == "0" || !rcFullCommitRe.MatchString(c) {
+		return false
+	}
+	rcFetchMu.Lock()
+	tried := rcFetchTried[c]
+	rcFetchTried[c] = true
+	rcFetchMu.Unlock()
+	if tried {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), rcFetchTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "fetch", "--no-tags", "--quiet", "--no-write-fetch-head", "origin", c)
+	cmd.WaitDelay = 5 * time.Second
+	if out, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "  previous review: could not fetch %s (%v): %s\n", rcShort(c), err, strings.TrimSpace(string(out)))
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "  previous review: fetched %s, which is no longer in the pull request's history\n", rcShort(c))
+	return true
+}
+
+// rcFullCommitRe matches a full 40-character commit id.
+var rcFullCommitRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // rcPriorBlock renders the previous review for the reviewer's prompt.
 // changed is what differs since its commit; known is false when that could not

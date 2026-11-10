@@ -58,6 +58,59 @@ func TestChangedSinceListsFilesOrSaysUnknown(t *testing.T) {
 	}
 }
 
+// After a force-push the previous review's commit is not in the clone; the
+// re-review fetches it from origin by its full id and still knows what
+// changed since. A short id is never fetched.
+func TestChangedSinceFetchesAForcePushedCommit(t *testing.T) {
+	root := t.TempDir()
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin := filepath.Join(root, "origin")
+	os.MkdirAll(origin, 0o755)
+	run(origin, "init", "-q", "-b", "pr")
+	run(origin, "config", "uploadpack.allowAnySHA1InWant", "true") // as GitHub serves any commit by id
+	os.WriteFile(filepath.Join(origin, "a.go"), []byte("package a\n"), 0o644)
+	os.WriteFile(filepath.Join(origin, "b.go"), []byte("package b\n"), 0o644)
+	run(origin, "add", ".")
+	run(origin, "commit", "-qm", "one")
+	os.WriteFile(filepath.Join(origin, "b.go"), []byte("package b\n\nfunc B() {}\n"), 0o644)
+	run(origin, "commit", "-qam", "two")
+	reviewed := run(origin, "rev-parse", "HEAD")
+	// The push is amended: the reviewed commit leaves the branch's history.
+	os.WriteFile(filepath.Join(origin, "a.go"), []byte("package a\n\nfunc A() {}\n"), 0o644)
+	run(origin, "commit", "-qa", "--amend", "-m", "two, amended")
+
+	clone := filepath.Join(root, "clone")
+	run(root, "clone", "-q", "file://"+origin, clone)
+	t.Chdir(clone)
+	if rcHasCommit(reviewed) {
+		t.Fatal("the clone already has the amended-away commit; the test proves nothing")
+	}
+	if _, known := rcChangedSince(rcShort(reviewed)); known {
+		t.Error("a short id was resolved; it cannot be fetched")
+	}
+	t.Setenv("KAI_REVIEW_FETCH_PRIOR", "0")
+	if _, known := rcChangedSince(reviewed); known {
+		t.Error("KAI_REVIEW_FETCH_PRIOR=0 still fetched")
+	}
+	t.Setenv("KAI_REVIEW_FETCH_PRIOR", "")
+	rcFetchMu.Lock()
+	delete(rcFetchTried, reviewed)
+	rcFetchMu.Unlock()
+	if files, known := rcChangedSince(reviewed); !known || len(files) != 1 || files[0] != "a.go" {
+		t.Errorf("changed since the force-pushed commit = %v (known %v), want [a.go]", files, known)
+	}
+}
+
 func TestPriorBlock(t *testing.T) {
 	p := &rcPrior{Head: "19db9fca4cfd10a1b24a", Readiness: 3, Summary: "One fix before merge."}
 	p.Points = append(p.Points, rcPriorPoint{Kind: "defect", Text: "internal/retry.go:12 — `lastErr` is swallowed"})
