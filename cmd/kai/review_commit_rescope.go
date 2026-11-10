@@ -106,7 +106,7 @@ func rcReReviewFocusBlock(prior *rcPrior, focus []string, changed, turns int) st
 		return ""
 	}
 	return fmt.Sprintf("RE-REVIEW FOCUS: you have %d turns, sized to the %d of %d changed files that need reading again: %s. "+
-		"The other changed files were reviewed at %s and have not changed since: they are reviewed, not out of scope, and the whole diff is below."+
+		"The other changed files were reviewed at %s and have not changed since: they are reviewed, not out of scope, and the whole diff is below. "+
 		"Read the focus files first. Then follow what changed into the rest: where a focus file changes a signature, return value, error, nil case, "+
 		"shared state, key, route or setting that another file uses (kai_callers, kai_dependents, kai_grep), open that use and check it, "+
 		"changed in this pull request or not. A fix that breaks code you already reviewed is the defect a re-review is for.\n\n",

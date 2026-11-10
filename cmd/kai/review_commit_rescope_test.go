@@ -100,6 +100,7 @@ func TestReReviewFocusBlock(t *testing.T) {
 	for _, want := range []string{
 		fmt.Sprintf("you have %d turns", rcReviewMaxTurns(2)),
 		"2 of 5 changed files", "a.go, c.go", rcShort(prior.Head), "kai_callers",
+		"the whole diff is below. Read the focus files first.",
 	} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("block missing %q:\n%s", want, b)
