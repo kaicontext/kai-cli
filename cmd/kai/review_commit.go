@@ -74,7 +74,7 @@ const rcNitDefinition = "A NIT is a real defect that cannot change behaviour: a 
 //     surcharge (2026-08-31).
 const rcReviewSystem = `You are reviewing a merged commit from its AUTHOR CONTEXT, INTENT and DIFF, with read-only tools and nobody to ask; the review is your whole output.
 
-HOW TO SPEND YOUR TURNS. You have about 30 turns plus 3 per changed file, at most 72; missed defects mostly sit in unopened files, so do not stop with turns unused. Lookups in one turn run in parallel: batch them. CHANGED SYMBOLS and WHERE THESE LIVE are searches already run. In order:
+HOW TO SPEND YOUR TURNS. You have about 30 turns plus 3 per changed file, at most 72 (on a re-review, the budget RE-REVIEW FOCUS states); missed defects mostly sit in unopened files, so do not stop with turns unused. Lookups in one turn run in parallel: batch them. CHANGED SYMBOLS and WHERE THESE LIVE are searches already run. In order:
 1. Read each changed hunk inside its whole function (kai_view).
 2. Consumers: kai_callers on each changed function (stale callers are a defect), kai_dependents on each changed file, kai_grep for each changed key, constant, route, event, CSS class or setting. Open the affected ones in every layer: the second entry point, the server-rendered template, the endpoint behind a client check.
 3. Contracts: for each changed override or implementation, open its interface or base class and read the documented contract (returns, throws, never-null, ranges); kai_grep the method name for sibling implementations.
@@ -485,11 +485,17 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
 		phase = time.Now()
 		hosts := rcNewHostsBlock(rcNewHosts(hash, diff, rcPathsOf(files), rcFilesMentioningHost))
-		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref)
+		// A re-review is sized to what changed since the previous review
+		// (review_commit_rescope.go); nil covers the whole change.
+		focus := rcReReviewFocus(rcPriorFromEnv(), rcPathsOf(files), rcChangedSince)
+		if focus != nil {
+			fmt.Fprintf(os.Stderr, "  re-review: %d of %d changed file(s) to read again; budgets sized to those\n", len(focus), len(files))
+		}
+		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref, focus)
 		// The publication gate reads the reviewed commit to settle what the
 		// reviewer's own tool results do not show (review_commit_repo.go).
 		gateCtx := rcWithRepo(ctx, rcNewRepo(reviewCommitBase, ref, hash))
-		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, hash, authorContext, intent, hosts, diff, rcPathsOf(files), sweep)
+		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, hash, authorContext, intent, hosts, diff, rcPathsOf(files), focus, sweep)
 		if err != nil {
 			return err
 		}
@@ -840,7 +846,12 @@ func rcRepoHeader(repo string) string {
 // injection seeds turn 0 with real context, the session store and run log make
 // the run inspectable (`kai run summary`), and ApplyEffort honors KAI_SPEED.
 // rcReviewSystem rides in Options.System underneath the mode prompt.
-func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, hash, sourceContext, intent, hosts, diff string, changed []string, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
+//
+// focus, when not nil, is a re-review's files to read again
+// (review_commit_rescope.go): the turn budget and the coverage gate are sized
+// to it rather than to every changed file.
+func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, hash, sourceContext, intent, hosts, diff string, changed, focus []string, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
+	scope := rcReviewScope(changed, focus)
 	publicationCtx := ctx
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
@@ -909,6 +920,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	if prior != nil {
 		priorChanged, priorKnown = rcChangedSince(prior.Head)
 		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
+		user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), rcReviewMaxTurns(len(scope))))
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
@@ -971,7 +983,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		System:     rcReviewSystem,
 		ReadOnly:   true,
 		EnableBash: false,
-		MaxTurns:   rcReviewMaxTurns(len(changed)),
+		MaxTurns:   rcReviewMaxTurns(len(scope)),
 		Prompt:     user.String(),
 
 		InjectedContext: injected,
@@ -1065,13 +1077,13 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// transcript here would throw away exactly the reading it was run for.
 	transcript := res.Transcript
 
-	unopened := rcUnopenedChanged(changed, inc.FilesRead)
+	unopened := rcUnopenedChanged(scope, inc.FilesRead)
 	if len(unopened) > 0 && res.FinishReason != message.FinishReasonTimeBudget && res.SessionID != "" {
 		if left := rcGateHeadroom(started); left <= 0 {
 			fmt.Fprintf(os.Stderr, "\n  coverage gate: %d file(s) unopened, but not enough clock left to ask\n", len(unopened))
 		} else {
 			fmt.Fprintf(os.Stderr, "\n  coverage gate: %d of %d changed file(s) never opened — asking for them\n",
-				len(unopened), len(changed))
+				len(unopened), len(scope))
 			gate := opts
 			gate.SessionID = res.SessionID
 			gate.MaxTurns = rcCoverageGateTurns(len(unopened))
@@ -1126,7 +1138,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				// the fallback below still gets the gate's transcript, so the
 				// files it opened are not lost either.
 				raw, inc.FinishReason, _ = rcMergeGate(raw, res2.FinalText, string(res2.FinishReason))
-				if still := rcUnopenedChanged(changed, inc.FilesRead); len(still) > 0 {
+				if still := rcUnopenedChanged(scope, inc.FilesRead); len(still) > 0 {
 					fmt.Fprintf(os.Stderr, "  coverage gate: %d file(s) still unopened\n", len(still))
 				}
 			}
