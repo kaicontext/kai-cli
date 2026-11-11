@@ -74,7 +74,7 @@ func TestReconcileSiblings_RechecksWithTheRefutation(t *testing.T) {
 	calls := 0
 	p := rcChallengeProvider{send: func(ctx context.Context, req provider.Request) (provider.Response, error) {
 		calls++
-		text := req.Messages[0].Parts[0].(message.TextContent).Text
+		text := rcTestPromptText(req)
 		if !strings.Contains(text, "A SEPARATE CHECK OF NEARBY CODE") || !strings.Contains(text, "invalid inventory tuple") {
 			t.Errorf("the re-check did not carry the sibling refutation:\n%s", text)
 		}

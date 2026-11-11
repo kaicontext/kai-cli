@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kaicontext/kai-engine/finding"
 	"github.com/kaicontext/kai-engine/provider"
@@ -28,13 +31,93 @@ import (
 var (
 	rcChallengeBatchSize     = 5
 	rcChallengeBatchParallel = 4
+	// rcCacheWarmWait bounds how long the other batches wait for the first to
+	// get its evidence into the prompt cache. A cache entry becomes readable
+	// once the response that writes it begins, not when it finishes: at about
+	// 180k input tokens, calls started 8 seconds after the first read all of it
+	// while the first was still generating. Waiting too little only costs the
+	// miss every batch paid before this existed.
+	rcCacheWarmWait = 15 * time.Second
 )
+
+// rcCacheWarm holds back a review's other batches while the first one writes
+// the prompt-cache entry they share. Batches started together all miss: none
+// can read what the others are still writing, so each pays to write the whole
+// evidence. The wait is deliberately short of the first batch finishing, since
+// a batch can run for minutes and the review is on a clock.
+type rcCacheWarm struct {
+	once  sync.Once
+	ready chan struct{}
+}
+
+// rcNewCacheWarm returns the wait for a run of batches, or nil when there is
+// nothing to gain. A model without breakpoints (GLM on DeepInfra caches by
+// prefix on its own) runs its batches side by side as it always has. So does
+// the fast pass, told apart by having no repository (rcGateEffort): it shares a
+// 100-second budget with its draft.
+func rcNewCacheWarm(ctx context.Context, model string, batches int) *rcCacheWarm {
+	if batches < 2 || !provider.HonorsCacheBreakpoints(model) || rcRepoFrom(ctx) == nil {
+		return nil
+	}
+	return &rcCacheWarm{ready: make(chan struct{})}
+}
+
+func (w *rcCacheWarm) open() { w.once.Do(func() { close(w.ready) }) }
+
+// wait returns once the first batch has its answer, the wait runs out, or the
+// review is cancelled.
+func (w *rcCacheWarm) wait(ctx context.Context) {
+	t := time.NewTimer(rcCacheWarmWait)
+	defer t.Stop()
+	select {
+	case <-w.ready:
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// rcWarmingProvider opens the wait when its first call returns: a first batch
+// that finished early, or failed, has nothing left to be waited for.
+type rcWarmingProvider struct {
+	provider.Provider
+	warm *rcCacheWarm
+}
+
+func (p rcWarmingProvider) Send(ctx context.Context, req provider.Request) (provider.Response, error) {
+	defer p.warm.open()
+	return p.Provider.Send(ctx, req)
+}
+
+// rcCacheSessionProvider stamps every call of one review's gate with the same
+// cache session, so they reach the upstream holding the entries they share
+// (provider.Request.CacheSession). Covers every call the gate makes, repairs
+// and re-checks included.
+type rcCacheSessionProvider struct {
+	provider.Provider
+	session string
+}
+
+func (p rcCacheSessionProvider) Send(ctx context.Context, req provider.Request) (provider.Response, error) {
+	req.CacheSession = p.session
+	return p.Provider.Send(ctx, req)
+}
+
+// rcNewCacheSession is an opaque id for one review's gate. It routes requests
+// and is all the upstream sees of it, so it carries nothing about the review.
+func rcNewCacheSession() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "" // no session: routing stays as it was, the review goes on
+	}
+	return "kai-review-" + hex.EncodeToString(b)
+}
 
 // rcChallengeBatches checks the draft's allegations in batches of at most
 // rcChallengeBatchSize and assembles one review from the results. A draft that
 // fits in one batch takes exactly the old path.
 func rcChallengeBatches(ctx context.Context, prov provider.Provider, model, draft string, sources, extra []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	prose, _, _, _, _, _ := rcParseReviewOutput(draft)
+	prov = rcCacheSessionProvider{Provider: prov, session: rcNewCacheSession()}
 	res, err := rcChallengeBatchesRaw(ctx, prov, model, draft, sources, extra, sandbox)
 	if err != nil || res == nil {
 		return res, err
@@ -50,13 +133,13 @@ func rcChallengeBatches(ctx context.Context, prov provider.Provider, model, draf
 func rcChallengeBatchesRaw(ctx context.Context, prov provider.Provider, model, draft string, sources, extra []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	prose, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
 	if len(issues) <= rcChallengeBatchSize {
-		res, err := rcChallengeDraft(ctx, prov, model, draft, rcBatchSources(sources, extra, issues), sandbox)
+		res, err := rcChallengeDraftShared(ctx, prov, model, draft, rcBatchSources(sources, extra, issues), len(sources), sandbox)
 		if err == nil || len(issues) < 2 || ctx.Err() != nil {
 			return res, err
 		}
 		fmt.Fprintf(os.Stderr, "  challenge: the check failed (%v); re-checking its %d allegations one at a time\n", err, len(issues))
 		batches := rcSingles(issues)
-		results, errs := rcRunBatches(ctx, prov, model, prose, decisions, 0, batches, sources, extra, sandbox)
+		results, errs := rcRunBatches(ctx, prov, model, prose, decisions, 0, batches, sources, extra, sandbox, nil)
 		return rcMergeBatches(batches, decisions, results, errs)
 	}
 	var batches [][]string
@@ -66,14 +149,16 @@ func rcChallengeBatchesRaw(ctx context.Context, prov provider.Provider, model, d
 		batches = append(batches, issues[lo:hi])
 	}
 	fmt.Fprintf(os.Stderr, "  challenge: %d allegations in %d batches\n", len(issues), len(batches))
-	results, errs := rcRunBatches(ctx, prov, model, prose, decisions, 0, batches, sources, extra, sandbox)
+	results, errs := rcRunBatches(ctx, prov, model, prose, decisions, 0, batches, sources, extra, sandbox, rcNewCacheWarm(ctx, model, len(batches)))
 	batches, results, errs = rcRetryFailedBatches(ctx, prov, model, prose, decisions, batches, results, errs, sources, extra, sandbox)
 	return rcMergeBatches(batches, decisions, results, errs)
 }
 
 // rcRunBatches checks each batch side by side. The batch at decisionsAt (-1
-// for none) also carries the draft's decisions.
-func rcRunBatches(ctx context.Context, prov provider.Provider, model, prose string, decisions []string, decisionsAt int, batches [][]string, sources, extra []rcSource, sandbox *rcShellSandbox) ([]*rcChallengeResult, []error) {
+// for none) also carries the draft's decisions. With warm set the first batch
+// starts alone; retries pass nil, since they follow calls that already wrote the
+// entry and a failed batch has already cost them time.
+func rcRunBatches(ctx context.Context, prov provider.Provider, model, prose string, decisions []string, decisionsAt int, batches [][]string, sources, extra []rcSource, sandbox *rcShellSandbox, warm *rcCacheWarm) ([]*rcChallengeResult, []error) {
 	results := make([]*rcChallengeResult, len(batches))
 	errs := make([]error, len(batches))
 	sem := make(chan struct{}, rcChallengeBatchParallel)
@@ -82,13 +167,22 @@ func rcRunBatches(ctx context.Context, prov provider.Provider, model, prose stri
 		wg.Add(1)
 		go func(i int, batch []string) {
 			defer wg.Done()
+			p := prov
+			if warm != nil {
+				if i == 0 {
+					p = rcWarmingProvider{Provider: prov, warm: warm}
+					defer warm.open()
+				} else {
+					warm.wait(ctx)
+				}
+			}
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			var ds []string
 			if i == decisionsAt {
 				ds = decisions
 			}
-			results[i], errs[i] = rcChallengeDraft(ctx, prov, model, rcSubDraft(prose, batch, ds), rcBatchSources(sources, extra, batch), sandbox)
+			results[i], errs[i] = rcChallengeDraftShared(ctx, p, model, rcSubDraft(prose, batch, ds), rcBatchSources(sources, extra, batch), len(sources), sandbox)
 		}(i, batch)
 	}
 	wg.Wait()
@@ -123,7 +217,7 @@ func rcRetryFailedBatches(ctx context.Context, prov provider.Provider, model, pr
 	if len(singles) == 0 {
 		return batches, results, errs
 	}
-	sr, se := rcRunBatches(ctx, prov, model, prose, decisions, decisionsAt, singles, sources, extra, sandbox)
+	sr, se := rcRunBatches(ctx, prov, model, prose, decisions, decisionsAt, singles, sources, extra, sandbox, nil)
 	var nb [][]string
 	var nr []*rcChallengeResult
 	var ne []error

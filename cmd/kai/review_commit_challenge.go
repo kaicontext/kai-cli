@@ -643,6 +643,13 @@ func rcChallengeReviewWith(ctx context.Context, prov provider.Provider, model, d
 // rcChallengeDraft is the gate itself, over a draft whose speculative issues
 // are already gone.
 func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
+	return rcChallengeDraftShared(ctx, prov, model, draft, sources, len(sources), sandbox)
+}
+
+// rcChallengeDraftShared is rcChallengeDraft for a call whose first shared
+// sources are the same for every check of this review, and whose others are
+// its own (rcBatchSources). The prompt cache is shared up to the end of those.
+func rcChallengeDraftShared(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, shared int, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	_, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
 	if len(issues) == 0 && len(decisions) == 0 {
 		return &rcChallengeResult{Review: draft}, nil
@@ -659,14 +666,23 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 	// Batches run side by side over one shared source list, and a lookup or
 	// experiment appends to it: give this call its own copy.
 	sources = append([]rcSource(nil), sources...)
-	// Sources first, then the claims. The sources are the same for every
-	// batch of one review and the claims differ, so with the sources leading
-	// the prompt, batches after the first reuse them from the provider's
-	// prompt cache instead of paying for the review's whole evidence again.
+	// Sources first, then the claims. The base sources are the same for every
+	// batch of one review, and what follows them differs: a batch's own diff
+	// chunks, then its claims. So the prompt is two text parts with a cache
+	// breakpoint between them, and batches after the first reuse the base
+	// sources from the provider's prompt cache instead of paying for the
+	// review's whole evidence again. Without the breakpoint the only one sits
+	// at the end of the message, past what differs, and no other batch can
+	// read it. The parts joined are the prompt, byte for byte; a model that
+	// has no breakpoints receives exactly that as one string.
 	var b strings.Builder
 	b.WriteString("SOURCES (the evidence; cite by source number and line range):\n")
+	split := 0
 	for i, source := range sources {
 		fmt.Fprintf(&b, "\n%s", rcRenderSource(i+1, source))
+		if i == shared-1 {
+			split = b.Len()
+		}
 	}
 	fmt.Fprintf(&b, "\n\nDRAFT (claims to challenge):\n%s\n\nISSUES TO CHECK:\n", draft)
 	for _, issue := range issues {
@@ -681,7 +697,7 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 	if b.Len() > rcEvidenceLimit {
 		return nil, fmt.Errorf("challenge evidence exceeds %d bytes; refusing to discard evidence", rcEvidenceLimit)
 	}
-	msgs := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}}
+	msgs := []message.Message{{Role: message.RoleUser, Parts: rcChallengePromptParts(b.String(), split)}}
 	available := []tools.ToolInfo{rcSubmitReviewToolInfo()}
 	if sandbox != nil {
 		available = append(available, rcShellToolInfo())
@@ -836,6 +852,19 @@ func rcRefusedToolText(name string, sandboxed bool) string {
 		return fmt.Sprintf("review_shell is not available any more: all %d experiments have been used. Settle the remaining allegations from the numbered sources, mark any they do not establish unverified, and finish with submit_review.", rcMaxExperiments)
 	}
 	return fmt.Sprintf("%s is not available in this run: submit_review is the only tool, and nothing can be executed. Settle each allegation from the numbered sources, mark any they do not establish unverified, and finish with submit_review.", name)
+}
+
+// rcChallengePromptParts cuts the prompt at split, the end of the sources every
+// check of this review shares. With nothing shared there is nothing to reuse,
+// so no breakpoint.
+func rcChallengePromptParts(prompt string, split int) []message.ContentPart {
+	if split <= 0 {
+		return []message.ContentPart{message.TextContent{Text: prompt}}
+	}
+	return []message.ContentPart{
+		message.TextContent{Text: prompt[:split], CacheBreakpoint: true},
+		message.TextContent{Text: prompt[split:]},
+	}
 }
 
 // rcAppendToLastTurn returns msgs with part added to the final (user) message,
