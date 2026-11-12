@@ -69,7 +69,7 @@ func rcGroupDuplicateIssues(ctx context.Context, prov provider.Provider, model, 
 	return rcGroupDuplicateIssuesWith(raw, refs, func(user string) (string, error) {
 		cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		resp, err := prov.Send(rcCostStage(cctx, rcCostStageGroup), provider.Request{
+		resp, err := rcSend(rcCostStage(cctx, rcCostStageGroup), prov, provider.Request{
 			Model:           model,
 			System:          rcGroupSystem,
 			MaxTokens:       rcGroupMaxTokens,

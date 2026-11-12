@@ -437,6 +437,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	if line := rcDescribeProfile(stageModels); line != "" {
 		fmt.Fprintln(os.Stderr, line)
 	}
+	// From here every model call is recorded for the bundle's "run" object
+	// (review_commit_run.go): what each stage was set to, what answered, and
+	// every failover. The low-risk test is rcLoadProfileForRisk's own.
+	lowRisk := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")) != "" && rcLowRiskLevel(risk.Level)
+	rcRunStart(risk.Level, rcRunProfile(lowRisk), rcRunStageModels(stageModels, reviewCommitFormat == "json"))
 
 	// The pull request description a person would write, asked for beside the
 	// review (review_commit_description.go); only a bundle carries it.
@@ -677,7 +682,13 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// .kai-review.yaml (score, short or full); kai-server prefers it
 			// to the Atlas setting. Omitted when the file sets none.
 			Detail string `json:"detail,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail()}, "", "  ")
+			// Run is what the review really ran on: the depth and model set
+			// the server chose, the risk level, each stage's configured and
+			// answering model, every failover and the summarising model
+			// (review_commit_run.go). Taken after the description, the last
+			// model call.
+			Run *rcRunReport `json:"run,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail(), rcRunSnapshot()}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -770,7 +781,7 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 	in.WriteString("\n\nDIFF:\n")
 	in.WriteString(diff)
 
-	resp, err := prov.Send(rcCostStage(ctx, rcStageIntent), provider.Request{
+	resp, err := rcSend(rcCostStage(ctx, rcStageIntent), prov, provider.Request{
 		Model:           model,
 		System:          rcInferIntentSystem,
 		MaxTokens:       rcTokensFor(600, rcStageEffort(rcStageIntent)),
@@ -1022,7 +1033,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	specialists := rcStartSpecialists(ctx, publicationCtx, opts, prov)
 
 	started := time.Now()
-	res, err := agent.Run(rcCostStage(ctx, rcStageMain), opts)
+	res, err := rcRunAgent(ctx, rcStageMain, opts)
 	if err != nil {
 		// The run itself failed — in practice the model provider failing
 		// every retry. Returning the error emitted NO bundle: the job exited
@@ -1106,7 +1117,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				// not have to answer.
 				gctx, gcancel := context.WithTimeout(context.Background(), left)
 				defer gcancel()
-				return agent.Run(rcCostStage(gctx, rcCostStageCoverageGate), gate)
+				return rcRunAgent(gctx, rcCostStageCoverageGate, gate)
 			}()
 			switch {
 			case err2 != nil:
@@ -1796,13 +1807,14 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 // failure returns "" and the caller keeps whatever the run produced. The
 // second result is rcFailureCategory's label for why it returned "".
 func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
-	return rcConcludeWithModel(ctx, prov, rcStageModel(rcStageConclusion, model), transcript)
+	return rcConcludeWithModel(ctx, prov, rcStageConclusion, rcStageModel(rcStageConclusion, model), transcript)
 }
 
 // rcConcludeWithModel is rcConcludeFromTranscript on exactly the model given,
 // for a finder whose transcript must be concluded by the model that wrote it
-// (the second finder, review_commit_ensemble.go).
-func rcConcludeWithModel(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
+// (the second finder, review_commit_ensemble.go). stage labels the call:
+// rcStageConclusion for the main finder, <finder>_conclusion for the others.
+func rcConcludeWithModel(ctx context.Context, prov provider.Provider, stage, model string, transcript []message.Message) (string, string) {
 	if len(transcript) == 0 {
 		return "", "no_transcript"
 	}
@@ -1829,7 +1841,7 @@ func rcConcludeWithModel(ctx context.Context, prov provider.Provider, model stri
 	send := func(m []message.Message) (provider.Response, error) {
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
-		return prov.Send(rcCostStage(cctx, rcStageConclusion), provider.Request{
+		return rcSend(rcCostStage(cctx, stage), prov, provider.Request{
 			Model:           model,
 			System:          rcReviewSystem,
 			MaxTokens:       rcTokensFor(2500, rcStageEffort(rcStageConclusion)),

@@ -728,7 +728,7 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 		// If a cheap non-reasoning challenge model is ever configured,
 		// provider.IsReasoningModel is the gate to reach for — see
 		// rcFastModel, which already makes exactly that distinction.
-		resp, err := prov.Send(ctx, provider.Request{Model: model, System: system, Messages: msgs, Tools: available, MaxTokens: rcChallengeMaxTokens, ReasoningEffort: rcGateEffort(ctx)})
+		resp, err := rcSend(ctx, prov, provider.Request{Model: model, System: system, Messages: msgs, Tools: available, MaxTokens: rcChallengeMaxTokens, ReasoningEffort: rcGateEffort(ctx)})
 		if err != nil {
 			return nil, fmt.Errorf("challenge call: %w", err)
 		}
@@ -1026,7 +1026,7 @@ func rcRequestResubmission(ctx context.Context, prov provider.Provider, model, s
 	// "correction call: context deadline exceeded" under the constraint.
 	// rcRequestResubmission accepts a plain-JSON reply, so the repair does
 	// not depend on a tool call to work.
-	resp, sendErr := prov.Send(ctx, provider.Request{Model: model, System: system, Messages: retryMsgs, Tools: []tools.ToolInfo{rcSubmitReviewToolInfo()}, MaxTokens: rcChallengeMaxTokens, ReasoningEffort: rcGateEffort(ctx)})
+	resp, sendErr := rcSend(ctx, prov, provider.Request{Model: model, System: system, Messages: retryMsgs, Tools: []tools.ToolInfo{rcSubmitReviewToolInfo()}, MaxTokens: rcChallengeMaxTokens, ReasoningEffort: rcGateEffort(ctx)})
 	if sendErr != nil {
 		return "", fmt.Errorf("correction call: %w", sendErr)
 	}

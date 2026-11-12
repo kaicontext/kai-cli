@@ -114,6 +114,9 @@ type rcFinderResult struct {
 func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options, prov provider.Provider) *rcSecondFinder {
 	model := rcEnsembleModel(rcStageFinder2)
 	if model == "" || model == opts.Model {
+		// On the main finder's own model it would only repeat it.
+		rcRunMark(rcStageFinder2, model, rcRunOff)
+		rcRunMark(rcStageFinder2+rcConclusionSuffix, model, rcRunOff)
 		return nil
 	}
 	runCtx, cancel := context.WithCancel(runCtx)
@@ -136,13 +139,13 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 	go func() {
 		started := time.Now()
 		out := rcFinderResult{Model: model}
-		res, err := agent.Run(rcCostStage(runCtx, rcStageFinder2), second)
+		res, err := rcRunAgent(runCtx, rcStageFinder2, second)
 		if err != nil {
 			out.Err = err
 		} else if res != nil {
 			raw := rcRestoreCodaMarker(strings.TrimSpace(res.FinalText))
 			if rcNeedsConclusion(raw) {
-				if c, _ := rcConcludeWithModel(concludeCtx, prov, model, res.Transcript); c != "" {
+				if c, _ := rcConcludeWithModel(concludeCtx, prov, rcStageFinder2+rcConclusionSuffix, model, res.Transcript); c != "" {
 					raw = rcRestoreCodaMarker(c)
 				}
 			}
@@ -306,7 +309,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	cctx, cancel := context.WithTimeout(ctx, rcRankTimeout)
 	defer cancel()
 	started := time.Now()
-	resp, err := prov.Send(rcCostStage(cctx, rcStageRank), provider.Request{
+	resp, err := rcSend(rcCostStage(cctx, rcStageRank), prov, provider.Request{
 		Model:           model,
 		System:          rcRankSystem,
 		MaxTokens:       rcTokensFor(2000, effort),

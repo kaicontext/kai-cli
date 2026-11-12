@@ -96,11 +96,11 @@ func rcWriteDescription(ctx context.Context, prov provider.Provider, model, auth
 	// No reasoning: describing a diff needs none, and with it on the thinking
 	// spent the whole budget — the first live runs (kai-vcs#1, 2026-10-15)
 	// were all "cut off at the token limit" with nothing written.
-	resp, err := prov.Send(rcCostStage(ctx, rcCostStageDescription), provider.Request{
+	resp, err := rcSend(rcCostStage(ctx, rcCostStageDescription), prov, provider.Request{
 		Model:     model,
 		System:    rcDescriptionSystem,
 		MaxTokens: rcDescriptionMaxTokens,
-		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
 	})
 	if err != nil {
 		return "", err
