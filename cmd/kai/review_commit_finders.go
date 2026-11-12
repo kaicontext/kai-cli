@@ -216,7 +216,7 @@ func (l *rcFinderLedger) specialists() *rcFinderLedger {
 }
 
 // stagesOf is every stage that proposed issue: its finders (of) and the
-// specialists, in rcOriginOrder.
+// specialists, in rcOriginRank order.
 func (l *rcFinderLedger) stagesOf(issue string) []string {
 	if l == nil {
 		return nil
