@@ -239,12 +239,21 @@ type rcAllegationResult struct {
 	// vote group, including repeats the merges dropped
 	// (review_commit_finders.go). Recorded only: the gate counts Votes.
 	Proposers []string `json:"proposers,omitempty"`
+	// OriginStage is the stage that produced this defect: the first, in
+	// rcOriginRank order, of the stages behind its vote group — Proposers
+	// plus the specialists (spec_logic, spec_security, spec_contracts) —
+	// or quick_draft on the fast pass. Omitted when no stage is known. A
+	// stage name only, for measuring which stages find what gets fixed.
+	OriginStage string `json:"origin_stage,omitempty"`
 	// Original is the check's wording of a finding the one-claim rewrite
 	// replaced (rcApplyOneClaim, review_commit_humanize.go).
 	Original *rcOriginalWording `json:"original,omitempty"`
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
 	unchecked bool
+	// stages are the stages behind this allegation's own bullet
+	// (rcRecordProposers), widened to its vote group by rcCountVotes.
+	stages []string
 	// statement is the humanize pass's one-defect sentence for this finding,
 	// before rcApplyOneClaim decides whether to post it.
 	statement string

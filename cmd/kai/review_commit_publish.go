@@ -85,7 +85,8 @@ func rcPublishGate(res *rcChallengeResult, repo *rcRepo, corroborate bool) {
 // rcCountVotes sets each allegation's Votes: how many allegations the check's
 // duplicates and the selection's repeats link to it, itself included. It also
 // widens each allegation's Proposers to every finder behind its group
-// (review_commit_finders.go); the gate does not decide on them.
+// (review_commit_finders.go), and sets OriginStage from the stages behind
+// the group; the gate does not decide on either.
 func rcCountVotes(res *rcChallengeResult) {
 	byID := map[int]int{}
 	parent := make([]int, len(res.Allegations))
@@ -114,6 +115,7 @@ func rcCountVotes(res *rcChallengeResult) {
 	}
 	size := map[int]int{}
 	finders := map[int]map[string]bool{}
+	stages := map[int]map[string]bool{}
 	for i, a := range res.Allegations {
 		r := find(i)
 		size[r]++
@@ -123,11 +125,23 @@ func rcCountVotes(res *rcChallengeResult) {
 			}
 			finders[r][f] = true
 		}
+		for _, s := range a.stages {
+			if stages[r] == nil {
+				stages[r] = map[string]bool{}
+			}
+			stages[r][s] = true
+		}
 	}
 	for i := range res.Allegations {
 		r := find(i)
-		res.Allegations[i].Votes = size[r]
-		res.Allegations[i].Proposers = rcSortedFinders(finders[r])
+		a := &res.Allegations[i]
+		a.Votes = size[r]
+		a.Proposers = rcSortedFinders(finders[r])
+		a.stages = rcOriginSorted(stages[r])
+		a.OriginStage = ""
+		if len(a.stages) > 0 {
+			a.OriginStage = a.stages[0]
+		}
 	}
 }
 

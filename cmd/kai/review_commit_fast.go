@@ -211,6 +211,10 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	if err != nil {
 		return "", nil, fmt.Errorf("fast review challenge incomplete (unchecked draft withheld): %w", err)
 	}
+	// The fast pass has one finder: every allegation is its draft's.
+	for i := range res.Allegations {
+		res.Allegations[i].OriginStage = rcStageQuickDraft
+	}
 	return res.Review, res, nil
 }
 

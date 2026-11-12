@@ -18,6 +18,10 @@ package main
 //     specialists), through the engine's OnModelSwap, OnTurnTiming and
 //     OnSummarize hooks.
 //
+// Each call also records the effort it asked for, the time it was in flight,
+// the engine's retries (OnRetryWait) and any answer cut at the token limit.
+// None of it changes a request: the report only reads what was sent.
+//
 // Both take the stage from the context, set by the cost label each call site
 // already carries (rcCostStage, review_commit_cost_stage.go), so the stage a
 // call is billed to and the stage it is reported under are one name. The
@@ -26,13 +30,16 @@ package main
 
 import (
 	"context"
+	"math"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kaicontext/kai-engine/agent"
+	"github.com/kaicontext/kai-engine/message"
 	"github.com/kaicontext/kai-engine/provider"
 )
 
@@ -62,8 +69,24 @@ type rcRunStage struct {
 	// call per run). Omitted when the stage made none.
 	Calls  int `json:"calls,omitempty"`
 	Errors int `json:"errors,omitempty"`
+	// Effort is the reasoning effort the stage's last call asked for, "off"
+	// for none. Omitted when the stage made no call.
+	Effort string `json:"effort,omitempty"`
+	// Seconds is how long the stage had a call in flight, overlapping
+	// calls (the sweep's chunks) counted once, to the tenth of a second.
+	Seconds float64 `json:"seconds,omitempty"`
+	// Retries counts the engine's re-sends inside an agent run after a
+	// transient error or an empty answer (Hooks.OnRetryWait), a failover's
+	// included. A one-shot call's retries happen inside the provider and
+	// are not seen here.
+	Retries int `json:"retries,omitempty"`
+	// Truncations counts answers cut off at the output-token limit
+	// (finish reason max_tokens): one-shot calls and agent turns alike.
+	Truncations int `json:"truncations,omitempty"`
 
-	inflight int
+	inflight  int
+	busy      time.Duration
+	busySince time.Time
 }
 
 // rcRunFailover is one kind of swap the engine made. A swap the engine
@@ -79,6 +102,13 @@ type rcRunFailover struct {
 
 // rcRunReport is the bundle's "run" object.
 type rcRunReport struct {
+	// KaiVersion is this build's version, the one the run-cost reports carry
+	// (setCostClientVersion).
+	KaiVersion string `json:"kai_version"`
+	// Source is what kind of run this is: "benchmark" or "local" when
+	// KAI_RUN_SOURCE says so (provider.RunSource), else "ci" in a CI job
+	// (CI or GITHUB_ACTIONS is "true"), else "local".
+	Source string `json:"source"`
 	// Tier is the depth the server chose (KAI_REVIEW_TIER), "" when unset.
 	Tier string `json:"tier"`
 	// SetVersion is the model set's version (KAI_REVIEW_SET_VERSION), 0 when
@@ -86,11 +116,18 @@ type rcRunReport struct {
 	SetVersion int `json:"set_version"`
 	// Risk is the pre-review risk level (rcPreReviewRisk), "" when unrated.
 	Risk string `json:"risk"`
+	// RiskReasons are why the change rated as it did, in rcPreReviewRisk's
+	// fixed phrases ("touches auth", "changes dependencies", "12 files
+	// depend on it directly"): never a path. Empty when there are none.
+	RiskReasons []string `json:"risk_reasons"`
 	// Profile is which review profile the stages were resolved from:
 	// low_risk, standard (any other profile), or none.
-	Profile   string                 `json:"profile"`
-	Stages    map[string]*rcRunStage `json:"stages"`
-	Failovers []rcRunFailover        `json:"failovers"`
+	Profile string `json:"profile"`
+	// ProfileHash identifies the profile's settings (rcProfileHash), "" for
+	// no profile.
+	ProfileHash string                 `json:"profile_hash"`
+	Stages      map[string]*rcRunStage `json:"stages"`
+	Failovers   []rcRunFailover        `json:"failovers"`
 	// SummaryModel is the model that summarised a conversation that grew too
 	// long, "" when none was summarised.
 	SummaryModel string `json:"summary_model"`
@@ -98,6 +135,51 @@ type rcRunReport struct {
 	// each once. A failed summary summarised nothing, so it never sets
 	// SummaryModel, but the call was still made and is still reported.
 	SummaryFailures []string `json:"summary_failures,omitempty"`
+	// IncompleteStage is the stage an unfinished review stopped in, in the
+	// names Stages uses (rcRunIncompleteStage), "" for a review that
+	// finished.
+	IncompleteStage string `json:"incomplete_stage"`
+}
+
+// rcRunNow is the recorder's clock; tests replace it.
+var rcRunNow = time.Now
+
+// rcRunSource names the kind of run for the report: provider.RunSource
+// when KAI_RUN_SOURCE is set to one it knows, else ci or local by the
+// environment the CI providers set.
+func rcRunSource() string {
+	if s := provider.RunSource(); s != "" {
+		return s
+	}
+	for _, env := range []string{"CI", "GITHUB_ACTIONS"} {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv(env)), "true") {
+			return "ci"
+		}
+	}
+	return "local"
+}
+
+// rcRunIncompleteStage maps an unfinished review's reason to the stage it
+// stopped in, as the run object names stages: the agent run is main (the
+// draft call on the fast pass), the fact-check is factcheck (quick_factcheck
+// on the fast pass), and a failed conclusion is conclusion. "" for nil.
+func rcRunIncompleteStage(r *rcIncompleteReason, fast bool) string {
+	if r == nil {
+		return ""
+	}
+	switch r.Stage {
+	case rcStageNameChallenge:
+		if fast {
+			return rcStageQuickFactcheck
+		}
+		return rcStageFactcheck
+	case rcStageNameConclusion:
+		return rcStageConclusion
+	}
+	if fast {
+		return rcStageQuickDraft
+	}
+	return rcStageMain
 }
 
 const (
@@ -119,14 +201,19 @@ var rcRun = &rcRunRecorder{}
 
 // rcRunStart resets the report for a new review. stageModels is each stage's
 // configured model, as resolved before the review starts; a stage with no
-// model is off, the rest are skipped until they make a call.
-func rcRunStart(risk, profile string, stageModels map[string]string) {
+// model is off, the rest are skipped until they make a call. The profile
+// must already be loaded: its hash is taken here.
+func rcRunStart(risk rcRisk, profile string, stageModels map[string]string) {
 	r := rcRunReport{
-		Tier:      strings.TrimSpace(os.Getenv("KAI_REVIEW_TIER")),
-		Risk:      risk,
-		Profile:   profile,
-		Stages:    map[string]*rcRunStage{},
-		Failovers: []rcRunFailover{},
+		KaiVersion:  Version,
+		Source:      rcRunSource(),
+		Tier:        strings.TrimSpace(os.Getenv("KAI_REVIEW_TIER")),
+		Risk:        risk.Level,
+		RiskReasons: append([]string{}, risk.Reasons...),
+		Profile:     profile,
+		ProfileHash: rcProfileHash(),
+		Stages:      map[string]*rcRunStage{},
+		Failovers:   []rcRunFailover{},
 	}
 	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("KAI_REVIEW_SET_VERSION"))); err == nil {
 		r.SetVersion = v
@@ -203,12 +290,20 @@ func (r *rcRunRecorder) stage(name, model string) *rcRunStage {
 	return st
 }
 
-func (r *rcRunRecorder) begin(stage, model string) {
+// begin opens a call on model at effort ("" for none).
+func (r *rcRunRecorder) begin(stage, model, effort string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	st := r.stage(stage, model)
 	st.Calls++
+	if st.inflight == 0 {
+		st.busySince = rcRunNow()
+	}
 	st.inflight++
+	st.Effort = effort
+	if effort == "" {
+		st.Effort = rcEffortOff
+	}
 }
 
 // end closes a call. answered is the model whose answer was used; "" leaves
@@ -218,11 +313,28 @@ func (r *rcRunRecorder) end(stage, answered string, err error) {
 	defer r.mu.Unlock()
 	st := r.stage(stage, "")
 	st.inflight--
+	if st.inflight == 0 {
+		st.busy += rcRunNow().Sub(st.busySince)
+	}
 	if err != nil {
 		st.Errors++
 	} else if answered != "" {
 		st.Ran = answered
 	}
+}
+
+// retried counts one re-send inside an agent run.
+func (r *rcRunRecorder) retried(stage string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stage(stage, "").Retries++
+}
+
+// truncated counts one answer cut off at the output-token limit.
+func (r *rcRunRecorder) truncated(stage string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stage(stage, "").Truncations++
 }
 
 // answered records the model that answered one agent turn.
@@ -274,9 +386,15 @@ func rcRunSnapshot() *rcRunReport {
 	defer rcRun.mu.Unlock()
 	src := rcRun.report
 	out := src
+	now := rcRunNow()
 	out.Stages = make(map[string]*rcRunStage, len(src.Stages))
 	for name, st := range src.Stages {
 		c := *st
+		busy := c.busy
+		if c.inflight > 0 {
+			busy += now.Sub(c.busySince)
+		}
+		c.Seconds = math.Round(busy.Seconds()*10) / 10
 		if c.Calls > 0 {
 			c.Status = rcRunOK
 			if c.Errors > 0 || c.inflight > 0 {
@@ -287,6 +405,7 @@ func rcRunSnapshot() *rcRunReport {
 	}
 	out.Failovers = append([]rcRunFailover{}, src.Failovers...)
 	out.SummaryFailures = append([]string(nil), src.SummaryFailures...)
+	out.RiskReasons = append([]string{}, src.RiskReasons...)
 	sort.SliceStable(out.Failovers, func(i, j int) bool { return out.Failovers[i].Stage < out.Failovers[j].Stage })
 	return &out
 }
@@ -303,8 +422,11 @@ func rcStageOf(ctx context.Context) string {
 // failover, so the model asked is the model that answered.
 func rcSend(ctx context.Context, prov provider.Provider, req provider.Request) (provider.Response, error) {
 	stage := rcStageOf(ctx)
-	rcRun.begin(stage, req.Model)
+	rcRun.begin(stage, req.Model, req.ReasoningEffort)
 	resp, err := prov.Send(ctx, req)
+	if err == nil && resp.FinishReason == message.FinishReasonMaxTokens {
+		rcRun.truncated(stage)
+	}
 	rcRun.end(stage, req.Model, err)
 	return resp, err
 }
@@ -315,14 +437,14 @@ func rcSend(ctx context.Context, prov provider.Provider, req provider.Request) (
 func rcRunAgent(ctx context.Context, stage string, opts agent.Options) (*agent.Result, error) {
 	ctx = rcCostStage(ctx, stage)
 	opts.Hooks = rcRunHooks(stage, opts.Hooks)
-	rcRun.begin(stage, opts.Model)
+	rcRun.begin(stage, opts.Model, opts.ReasoningEffort)
 	res, err := agent.Run(ctx, opts)
 	rcRun.end(stage, "", err)
 	return res, err
 }
 
 func rcRunHooks(stage string, h agent.Hooks) agent.Hooks {
-	swap, timing, summarize := h.OnModelSwap, h.OnTurnTiming, h.OnSummarize
+	swap, timing, summarize, retry := h.OnModelSwap, h.OnTurnTiming, h.OnSummarize, h.OnRetryWait
 	h.OnModelSwap = func(from, to, reason string) {
 		rcRun.swapped(stage, from, to, reason)
 		if swap != nil {
@@ -335,6 +457,9 @@ func rcRunHooks(stage string, h agent.Hooks) agent.Hooks {
 		if t.FinishReason != "" {
 			rcRun.answered(stage, t.Model)
 		}
+		if t.FinishReason == string(message.FinishReasonMaxTokens) {
+			rcRun.truncated(stage)
+		}
 		if timing != nil {
 			timing(t)
 		}
@@ -343,6 +468,16 @@ func rcRunHooks(stage string, h agent.Hooks) agent.Hooks {
 		rcRun.summarized(model, err)
 		if summarize != nil {
 			summarize(model, err)
+		}
+	}
+	h.OnRetryWait = func(attempt int, delay time.Duration, err error) {
+		// The engine also reports the turn it forces when a run passes its
+		// token budget through this hook; that is a new turn, not a re-send.
+		if err == nil || !strings.HasPrefix(err.Error(), "budget exceeded") {
+			rcRun.retried(stage)
+		}
+		if retry != nil {
+			retry(attempt, delay, err)
 		}
 	}
 	return h

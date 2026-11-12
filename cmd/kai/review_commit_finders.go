@@ -39,6 +39,10 @@ type rcFinderLedger struct {
 	by map[string]map[string]bool
 	// at lists the keys proposed at each "path:line".
 	at map[string][]string
+	// side records the specialists' bullets, which are origins
+	// (rcOriginStage) but not proposers: kept apart so a specialist bullet
+	// never changes which bullet a shared location resolves to in of.
+	side *rcFinderLedger
 }
 
 func newRcFinderLedger() *rcFinderLedger {
@@ -199,8 +203,75 @@ func rcSortedFinders(set map[string]bool) []string {
 	return out
 }
 
+// specialists is the ledger the specialists' bullets are recorded in: a
+// side ledger, nil for a nil l.
+func (l *rcFinderLedger) specialists() *rcFinderLedger {
+	if l == nil {
+		return nil
+	}
+	if l.side == nil {
+		l.side = newRcFinderLedger()
+	}
+	return l.side
+}
+
+// stagesOf is every stage that proposed issue: its finders (of) and the
+// specialists, in rcOriginOrder.
+func (l *rcFinderLedger) stagesOf(issue string) []string {
+	if l == nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, f := range l.of(issue) {
+		set[f] = true
+	}
+	for _, f := range l.side.of(issue) {
+		set[f] = true
+	}
+	return rcOriginSorted(set)
+}
+
+// rcOriginRank orders the stages a finding can come from as the review
+// merges their bullets into the draft: main, finder2, the specialists, then
+// the two sweeps. A stage it does not know sorts last.
+func rcOriginRank(stage string) int {
+	if stage == rcFinderMain || stage == rcFinderSecond {
+		return rcFinderOrder[stage]
+	}
+	for i, s := range rcSpecialistStages {
+		if stage == s {
+			return 2 + i
+		}
+	}
+	if o, ok := rcFinderOrder[stage]; ok {
+		return o + len(rcSpecialistStages)
+	}
+	return 1 << 20
+}
+
+// rcOriginSorted lists a set of stages in rcOriginRank order.
+func rcOriginSorted(set map[string]bool) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for s := range set {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		ri, rj := rcOriginRank(out[i]), rcOriginRank(out[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return out[i] < out[j]
+	})
+	return out
+}
+
 // rcRecordProposers sets each allegation's Proposers from the ledger: the
 // finders of its own bullet. rcCountVotes widens them to the vote group.
+// It also records the stages behind the bullet, specialists included, from
+// which rcCountVotes sets OriginStage.
 // Returns how many allegations the ledger knew.
 func rcRecordProposers(res *rcChallengeResult, l *rcFinderLedger) int {
 	if res == nil || l == nil {
@@ -210,6 +281,7 @@ func rcRecordProposers(res *rcChallengeResult, l *rcFinderLedger) int {
 	for i := range res.Allegations {
 		a := &res.Allegations[i]
 		a.Proposers = l.of(a.Issue)
+		a.stages = l.stagesOf(a.Issue)
 		if len(a.Proposers) > 0 {
 			known++
 		}

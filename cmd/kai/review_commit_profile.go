@@ -21,6 +21,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -88,6 +90,23 @@ type rcStageSetting struct {
 type rcReviewProfile struct {
 	Source string
 	Stages map[string]rcStageSetting
+}
+
+// rcProfileHash identifies the active profile's settings for the bundle's
+// "run" object: the first 16 hex digits of the SHA-256 of its stages as
+// canonical JSON (keys sorted), so two runs on the same models and efforts
+// share a hash however the file was laid out. "" for no profile. It names no
+// path and no repository: the source stays in the log.
+func rcProfileHash() string {
+	if rcActiveProfile == nil {
+		return ""
+	}
+	b, err := json.Marshal(rcActiveProfile.Stages)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
 }
 
 // rcActiveProfile is the profile this review runs under, nil for none. It is
