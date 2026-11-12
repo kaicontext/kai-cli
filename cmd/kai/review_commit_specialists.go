@@ -91,13 +91,13 @@ func rcStartSpecialists(runCtx, concludeCtx context.Context, opts agent.Options,
 		go func(sf *rcSecondFinder, spec agent.Options) {
 			started := time.Now()
 			out := rcFinderResult{Model: spec.Model}
-			res, err := agent.Run(rcCostStage(ctx, label), spec)
+			res, err := rcRunAgent(ctx, label, spec)
 			if err != nil {
 				out.Err = err
 			} else if res != nil {
 				raw := rcRestoreCodaMarker(strings.TrimSpace(res.FinalText))
 				if rcNeedsConclusion(raw) {
-					if c, _ := rcConcludeWithModel(concludeCtx, prov, spec.Model, res.Transcript); c != "" {
+					if c, _ := rcConcludeWithModel(concludeCtx, prov, label+rcConclusionSuffix, spec.Model, res.Transcript); c != "" {
 						raw = rcRestoreCodaMarker(c)
 					}
 				}

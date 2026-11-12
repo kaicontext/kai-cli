@@ -304,7 +304,7 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, stage, i
 				}
 			}
 			b.WriteString(src.String())
-			resp, err := prov.Send(ctx, provider.Request{
+			resp, err := rcSend(ctx, prov, provider.Request{
 				Model:           model,
 				System:          rcSweepSystem,
 				MaxTokens:       rcSweepMaxTokens,
@@ -591,10 +591,16 @@ func rcSweepPaths(issues []string) []string {
 func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, base, ref string, focus []string) <-chan rcSweepResult {
 	ch := make(chan rcSweepResult, 1)
 	if os.Getenv("KAI_REVIEW_SWEEP") == "0" {
+		rcRunMark(rcStageSweep, rcSweepModel(model), rcRunOff)
+		rcRunMark(rcStageSweep2, rcEnsembleModel(rcStageSweep2), rcRunOff)
 		ch <- rcSweepResult{}
 		return ch
 	}
 	model = rcSweepModel(model)
+	if m2 := rcEnsembleModel(rcStageSweep2); m2 != "" && m2 == model {
+		// On the first sweep's own model it would only repeat it.
+		rcRunMark(rcStageSweep2, m2, rcRunOff)
+	}
 	go func() {
 		order, patches := rcSweepPatches(base, ref)
 		order, patches = rcOnlyPatches(order, patches, focus)
