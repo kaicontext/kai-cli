@@ -770,7 +770,7 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 	in.WriteString("\n\nDIFF:\n")
 	in.WriteString(diff)
 
-	resp, err := prov.Send(ctx, provider.Request{
+	resp, err := prov.Send(rcCostStage(ctx, rcStageIntent), provider.Request{
 		Model:           model,
 		System:          rcInferIntentSystem,
 		MaxTokens:       rcTokensFor(600, rcStageEffort(rcStageIntent)),
@@ -1022,7 +1022,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	specialists := rcStartSpecialists(ctx, publicationCtx, opts, prov)
 
 	started := time.Now()
-	res, err := agent.Run(ctx, opts)
+	res, err := agent.Run(rcCostStage(ctx, rcStageMain), opts)
 	if err != nil {
 		// The run itself failed — in practice the model provider failing
 		// every retry. Returning the error emitted NO bundle: the job exited
@@ -1106,7 +1106,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				// not have to answer.
 				gctx, gcancel := context.WithTimeout(context.Background(), left)
 				defer gcancel()
-				return agent.Run(gctx, gate)
+				return agent.Run(rcCostStage(gctx, rcCostStageCoverageGate), gate)
 			}()
 			switch {
 			case err2 != nil:
@@ -1829,7 +1829,7 @@ func rcConcludeWithModel(ctx context.Context, prov provider.Provider, model stri
 	send := func(m []message.Message) (provider.Response, error) {
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
-		return prov.Send(cctx, provider.Request{
+		return prov.Send(rcCostStage(cctx, rcStageConclusion), provider.Request{
 			Model:           model,
 			System:          rcReviewSystem,
 			MaxTokens:       rcTokensFor(2500, rcStageEffort(rcStageConclusion)),

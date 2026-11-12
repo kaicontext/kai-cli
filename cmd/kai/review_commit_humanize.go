@@ -106,7 +106,7 @@ func rcHumanize(ctx context.Context, prov provider.Provider, intent string, res 
 	effort := rcStageEffort(rcStageHumanize)
 	cctx, cancel := context.WithTimeout(ctx, rcHumanizeTimeout)
 	defer cancel()
-	resp, err := prov.Send(cctx, provider.Request{
+	resp, err := prov.Send(rcCostStage(cctx, rcStageHumanize), provider.Request{
 		Model:           model,
 		System:          rcHumanizeSystem,
 		MaxTokens:       rcTokensFor(600+400*len(picked), effort),

@@ -370,8 +370,14 @@ func rcReasoningEffort() string {
 // apart; it shares a 100-second budget with its draft, so it keeps no effort
 // unless a review profile sets one (rcStageEffort).
 func rcGateEffort(ctx context.Context) string {
+	return rcStageEffort(rcGateStage(ctx))
+}
+
+// rcGateStage is the stage a publication-gate call belongs to: the fast
+// pass's fact-check, or the grounded review's.
+func rcGateStage(ctx context.Context) string {
 	if rcRepoFrom(ctx) == nil {
-		return rcStageEffort(rcStageQuickFactcheck)
+		return rcStageQuickFactcheck
 	}
-	return rcStageEffort(rcStageFactcheck)
+	return rcStageFactcheck
 }

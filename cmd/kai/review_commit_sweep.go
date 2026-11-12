@@ -246,12 +246,15 @@ func rcLooksLikeTest(path string) bool { return rcTestPath.MatchString(path) }
 // it proposes, each grounded to a changed path. Chunks run in parallel; a
 // chunk that errors or times out is counted and skipped.
 func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent string, order []string, patches map[string]string) rcSweepResult {
-	return rcRunSweepWith(ctx, prov, model, rcStageEffort(rcStageSweep), intent, order, patches)
+	return rcRunSweepWith(ctx, prov, model, rcStageSweep, intent, order, patches)
 }
 
-// rcRunSweepWith is rcRunSweep with the reasoning effort given, for a sweep
-// on a model other than the sweep stage's (the second sweep).
-func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, effort, intent string, order []string, patches map[string]string) rcSweepResult {
+// rcRunSweepWith is rcRunSweep for the stage given, for a sweep on a model
+// other than the sweep stage's (the second sweep). The stage sets the
+// reasoning effort and labels the calls' cost.
+func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, stage, intent string, order []string, patches map[string]string) rcSweepResult {
+	effort := rcStageEffort(stage)
+	ctx = rcCostStage(ctx, stage)
 	chunks := rcSweepChunks(order, patches)
 	res := rcSweepResult{Chunks: len(chunks)}
 	if len(chunks) == 0 {
@@ -603,7 +606,7 @@ func rcStartSweep(ctx context.Context, prov provider.Provider, model, intent, ba
 			second = make(chan rcSweepResult, 1)
 			go func() {
 				s := time.Now()
-				r := rcRunSweepWith(ctx, prov, m2, rcStageEffort(rcStageSweep2), intent, order, patches)
+				r := rcRunSweepWith(ctx, prov, m2, rcStageSweep2, intent, order, patches)
 				r.By = rcFindersOf(r.Issues, rcFinderSweep2)
 				fmt.Fprintf(os.Stderr, "  second sweep (%s): %d chunk(s) read in %s, %d failed, %d defect(s) proposed\n",
 					m2, r.Chunks, time.Since(s).Round(time.Second), r.Failed, len(r.Issues))

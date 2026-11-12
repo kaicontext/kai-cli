@@ -189,7 +189,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	cctx, cancel := context.WithTimeout(ctx, rcFastHardDeadline)
 	defer cancel()
 
-	resp, err := prov.Send(cctx, provider.Request{
+	resp, err := prov.Send(rcCostStage(cctx, rcStageQuickDraft), provider.Request{
 		Model:           model,
 		System:          rcFastReviewSystem,
 		MaxTokens:       rcTokensFor(rcFastMaxTokens, rcStageEffort(rcStageQuickDraft)),
