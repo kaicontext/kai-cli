@@ -647,6 +647,8 @@ func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft 
 	if len(issues) == 0 && len(decisions) == 0 {
 		return &rcChallengeResult{Review: draft}, nil
 	}
+	// Every gate call below, corrections included, is the fact-check's cost.
+	ctx = rcCostStage(ctx, rcGateStage(ctx))
 	// This is a publication gate: failure must not fall back to the unchecked
 	// draft. Bound the extra call, and propagate cancellation from the caller.
 	repo := rcRepoFrom(ctx)

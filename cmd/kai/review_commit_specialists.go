@@ -91,7 +91,7 @@ func rcStartSpecialists(runCtx, concludeCtx context.Context, opts agent.Options,
 		go func(sf *rcSecondFinder, spec agent.Options) {
 			started := time.Now()
 			out := rcFinderResult{Model: spec.Model}
-			res, err := agent.Run(ctx, spec)
+			res, err := agent.Run(rcCostStage(ctx, label), spec)
 			if err != nil {
 				out.Err = err
 			} else if res != nil {

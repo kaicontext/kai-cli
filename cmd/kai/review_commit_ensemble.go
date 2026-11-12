@@ -136,7 +136,7 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 	go func() {
 		started := time.Now()
 		out := rcFinderResult{Model: model}
-		res, err := agent.Run(runCtx, second)
+		res, err := agent.Run(rcCostStage(runCtx, rcStageFinder2), second)
 		if err != nil {
 			out.Err = err
 		} else if res != nil {
@@ -306,7 +306,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	cctx, cancel := context.WithTimeout(ctx, rcRankTimeout)
 	defer cancel()
 	started := time.Now()
-	resp, err := prov.Send(cctx, provider.Request{
+	resp, err := prov.Send(rcCostStage(cctx, rcStageRank), provider.Request{
 		Model:           model,
 		System:          rcRankSystem,
 		MaxTokens:       rcTokensFor(2000, effort),

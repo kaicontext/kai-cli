@@ -4805,6 +4805,7 @@ func init() {
 }
 
 func main() {
+	setCostClientVersion()
 	// Clone-gap tripwire: a repo with the tracked .kai.yaml marker but no
 	// local kai state is registered but not syncing. Warn on every command
 	// except init itself (which is the fix) so the gap can't stay silent.
