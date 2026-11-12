@@ -30,7 +30,7 @@ func TestSweepChunksSkipGeneratedFilesAndPutTestsLast(t *testing.T) {
 	for _, p := range order {
 		patches[p] = strings.Repeat("x", 100)
 	}
-	chunks := rcSweepChunks(order, patches)
+	chunks, _ := rcSweepChunks(order, patches)
 	var flat []string
 	for _, c := range chunks {
 		flat = append(flat, c...)

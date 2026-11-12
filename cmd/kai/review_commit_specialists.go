@@ -137,19 +137,16 @@ func rcAwaitSpecialists(runs []rcSpecialistRun) (kept []string, by map[string][]
 		return nil, nil
 	}
 	deadline := time.After(rcSecondFinderGrace)
-	for _, run := range runs {
-		var r rcFinderResult
-		select {
-		case r = <-run.sf.ch:
-		case <-deadline:
-			fmt.Fprintf(os.Stderr, "  specialist %s still running %s after the main finder — continuing without it\n", run.stage, rcSecondFinderGrace)
-			rcStopSpecialists(runs)
-			return kept, by
-		}
+	take := func(run rcSpecialistRun, r rcFinderResult) {
 		run.sf.cancel()
 		if r.Err != nil {
 			fmt.Fprintf(os.Stderr, "  specialist %s failed after %s: %v\n", run.stage, r.Elapsed.Round(time.Second), r.Err)
-			continue
+			rcNotePartial(rcFinderFailed(run.stage))
+			return
+		}
+		if r.Raw == "" {
+			// Ended without a review, even after its own conclusion call.
+			rcNotePartial(rcFinderFailed(run.stage))
 		}
 		good, dropped := rcSpecialistContractFilter(r.Issues)
 		fmt.Fprintf(os.Stderr, "  specialist %s: %d issue(s), %d kept, %d without trigger/evidence dropped, in %s\n",
@@ -162,6 +159,30 @@ func rcAwaitSpecialists(runs []rcSpecialistRun) (kept []string, by map[string][]
 			key := rcFinderKeyOnly(g)
 			by[key] = append(by[key], run.stage)
 			fmt.Fprintf(os.Stderr, "  specialist %s proposed: %s\n", run.stage, rcOneLine(g, 160))
+		}
+	}
+	for i, run := range runs {
+		select {
+		case r := <-run.sf.ch:
+			take(run, r)
+		case <-deadline:
+			fmt.Fprintf(os.Stderr, "  specialist %s still running %s after the main finder — continuing without it\n", run.stage, rcSecondFinderGrace)
+			if rcPartialOn() {
+				// A specialist that finished in time while an earlier one
+				// was still running has its answer waiting: take it, and
+				// count only the ones still running as timed out. Off, the
+				// review drops them all, as it always has.
+				for _, late := range runs[i:] {
+					select {
+					case r := <-late.sf.ch:
+						take(late, r)
+					default:
+						rcNotePartial(rcFinderFailed(late.stage))
+					}
+				}
+			}
+			rcStopSpecialists(runs)
+			return kept, by
 		}
 	}
 	return kept, by

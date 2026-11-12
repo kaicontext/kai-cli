@@ -485,6 +485,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		if ierr != nil {
 			return fmt.Errorf("infer intent: %w", ierr)
 		}
+		if strings.TrimSpace(intent) == "" {
+			rcNotePartial(rcPartialIntentEmpty)
+		}
 		fmt.Fprintf(os.Stderr, "  timing: intent=%s\n", time.Since(phase).Round(time.Second))
 
 		fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
@@ -536,7 +539,15 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// THEN fail. A reader gets "did not finish, here is how far it got"
 	// instead of silence.
 	incomplete := false
-	if strings.TrimSpace(prose) == "" && len(risks) == 0 && len(decisions) == 0 && match == finding.MatchUnknown {
+	if inc != nil && inc.SweepOnly {
+		// No finder wrote a review, but the sweep's proposals were checked and
+		// some held up. They are published under the account of what did not
+		// happen, with no verdict: nothing assessed the change as a whole.
+		prose = rcIncompleteProse(inc) + "\n\n" + strings.TrimSpace(prose)
+		match, readiness, note = finding.MatchUnknown, finding.ReadinessUnknown, ""
+		incomplete = true
+		fmt.Fprintf(os.Stderr, "  no finder wrote a review — emitting %d checked sweep finding(s) as an incomplete review, then failing\n", len(risks))
+	} else if strings.TrimSpace(prose) == "" && len(risks) == 0 && len(decisions) == 0 && match == finding.MatchUnknown {
 		salvaged := rcIncompleteProse(inc)
 		if salvaged == "" {
 			return fmt.Errorf("review produced no content (no prose, no risks, intent unknown) — failing instead of posting an empty finding")
@@ -649,6 +660,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			}
 			description = collectDescription(wait)
 		}
+		if rcDescriptionFailed(collectDescription != nil, incomplete, fast, description) {
+			rcNotePartial(rcPartialDescriptionFailed)
+		}
+		run := rcRunSnapshot()
+		run.IncompleteStage = rcRunIncompleteStage(reason, fast)
+		partial, partialReasons := rcPartialFields(run)
 		// incomplete rides along because the counts cannot carry it: a run
 		// that stopped before its conclusion emits no risks, no decisions and
 		// an unknown intent, which is arithmetically identical to a review
@@ -656,8 +673,6 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// has only the prose to go on, and it opened two timed-out reviews
 		// with "Nothing jumped out" directly above their own "This review did
 		// not finish" (kai-desktop#304, kai-server#186, 2026-09-08).
-		run := rcRunSnapshot()
-		run.IncompleteStage = rcRunIncompleteStage(reason, fast)
 		out, err := json.MarshalIndent(struct {
 			finding.Finding
 			Review     string      `json:"review,omitempty"`
@@ -692,7 +707,14 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// stage an unfinished review stopped in (review_commit_run.go).
 			// Taken after the description, the last model call.
 			Run *rcRunReport `json:"run,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail(), run}, "", "  ")
+			// Partial says part of the review failed (review_commit_partial.go),
+			// and PartialReasons says which parts, in fixed labels. Both are
+			// present only when KAI_REVIEW_PARTIAL is record or show; the
+			// server decides what readers see. Distinct from Incomplete,
+			// which means there is no review at all.
+			Partial        *bool     `json:"partial,omitempty"`
+			PartialReasons *[]string `json:"partialReasons,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail(), run, partial, partialReasons}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -1023,7 +1045,22 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			OnToolCall: func(name, inputJSON string) {
 				fmt.Fprintf(os.Stderr, "  → %s %s\n", name, rcOneLine(inputJSON, 90))
 			},
+			OnRetryWait: func(attempt int, delay time.Duration, err error) {
+				fmt.Fprintf(os.Stderr, "  model call %d: %v (waiting %s)\n", attempt, err, delay.Round(time.Millisecond))
+			},
 		},
+	}
+	// The set's backups and summarising model, when the server sends them
+	// (review_commit_backups.go): the engine then fails over only inside the
+	// set. Every copy of these options — the coverage gate's, the second
+	// finder's and the specialists' — inherits both. Unsent, the engine keeps
+	// its own chains and default summariser, as before.
+	backups, backupsSent := rcSetBackups()
+	if backupsSent {
+		opts.FallbackModels = backups
+	}
+	if m := rcSummaryModel(); m != "" {
+		opts.CompactionModel = m
 	}
 	// Effort tier LAST, after every deliberate field above — ApplyEffort only
 	// tightens. Zero-value Speed resolves KAI_SPEED → thorough (a no-op).
@@ -1037,7 +1074,19 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	specialists := rcStartSpecialists(ctx, publicationCtx, opts, prov)
 
 	started := time.Now()
-	res, err := rcRunAgent(ctx, rcStageMain, opts)
+	runMain := func(ctx context.Context, o agent.Options) (*agent.Result, error) {
+		return rcRunAgent(ctx, rcStageMain, o)
+	}
+	var res *agent.Result
+	var err error
+	active := model
+	if backupsSent {
+		// A run that ends with no answer is resumed on the same model, then
+		// on the set's backups (review_commit_retry.go).
+		res, active, err = rcRunWithRetries(ctx, opts, started, backups, runMain)
+	} else {
+		res, err = runMain(ctx, opts)
+	}
 	if err != nil {
 		// The run itself failed — in practice the model provider failing
 		// every retry. Returning the error emitted NO bundle: the job exited
@@ -1054,12 +1103,15 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		return "", rcRunFailure(model, res, err, time.Since(started), primary.Path), nil
 	}
 	fmt.Fprintln(os.Stderr)
+	// A failover holds for the rest of this run: the coverage gate and the
+	// conclusion below go to the model that is answering.
+	opts.Model = active
 
 	// Facts about how the run ENDED, gathered whether or not it wrote itself
 	// down. When the write-down is missing these are the whole report the PR
 	// gets, so they are collected unconditionally and cost nothing.
 	inc := &rcIncomplete{
-		Model:        model,
+		Model:        active,
 		FinishReason: string(res.FinishReason),
 		Elapsed:      time.Since(started),
 		Turns:        rcTurns(res.Transcript),
@@ -1176,11 +1228,17 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// was there for, without covering the one it should not.
 	if rcNeedsConclusion(raw) {
 		fmt.Fprintf(os.Stderr, "  review ended without a conclusion (finish=%s) — requesting one from the transcript…\n", inc.FinishReason)
-		concluded, category := rcConcludeFromTranscript(publicationCtx, prov, model, transcript)
+		concluded, category := rcConcludeFromTranscript(publicationCtx, prov, active, transcript)
 		if concluded != "" {
 			raw = rcRestoreCodaMarker(concluded)
+			// A conclusion over a run that barely started is not a review of
+			// the change. Running out of time alone is not this: a run that
+			// read the code and timed out concludes from real evidence.
+			if inc.Turns < rcPartialMinTurns || len(inc.FilesRead) == 0 {
+				rcNotePartial(rcPartialThinConclusion)
+			}
 		} else {
-			inc.ConclusionCategory, inc.ConclusionModel = category, rcStageModel(rcStageConclusion, model)
+			inc.ConclusionCategory, inc.ConclusionModel = category, rcStageModel(rcStageConclusion, active)
 		}
 	}
 	// Findings written as prose bullets with no ISSUES section in the coda
@@ -1210,8 +1268,29 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	// (review_commit_status.go): read now, because the published review is
 	// reassembled from the fact-check and carries no EARLIER list.
 	raw, earlierClaims := rcTakeEarlierSection(raw)
-	if rcUsableCoda(raw) {
-		sw := rcAwaitSweep(sweep)
+	// With KAI_REVIEW_PARTIAL off this is the review as it was: a draft with
+	// no usable coda skips the sweep, the check, rank and humanize, and its
+	// text is returned as it is. On, a draft with no coda is never published:
+	// the sweep's proposals go to the check instead (rcDraftForCheck), and
+	// the review is marked partial.
+	partialOn := rcPartialOn()
+	var sw rcSweepResult
+	sweepOnly, reviewable := false, rcUsableCoda(raw)
+	if partialOn {
+		sw = rcAwaitSweep(sweep)
+		rcNoteSweepGaps(sw)
+		if !reviewable {
+			rcNotePartial(rcPartialNoCoda)
+		}
+		raw, sweepOnly, reviewable = rcDraftForCheck(raw, sw.Issues)
+		if sweepOnly {
+			fmt.Fprintf(os.Stderr, "  no finder wrote a review — sending the sweep's %d proposal(s) to the check\n", len(sw.Issues))
+		}
+	} else if reviewable {
+		sw = rcAwaitSweep(sweep)
+		rcNoteSweepGaps(sw)
+	}
+	if reviewable {
 		if len(sw.Issues) > 0 {
 			before := len(rcIssuesOf(raw))
 			// The sweep's bullets carry their own severity tags. They come
@@ -1288,6 +1367,14 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			raw = grouped
 		}
 	}
+	// No review, and no checked sweep finding to publish under its account.
+	// A sweep whose proposals all failed says nothing about the change, because
+	// nothing else read it: the run is unfinished either way.
+	if partialOn && (!reviewable || (sweepOnly && len(rcIssuesOf(raw)) == 0)) {
+		fmt.Fprintln(os.Stderr, "  no finder wrote a review and no sweep finding held up — reporting an incomplete review")
+		return "", inc, nil
+	}
+	inc.SweepOnly = sweepOnly
 	final := rcPutEarlierTags(raw, earlier)
 	if prior != nil {
 		inc.Earlier = rcEarlierStatuses(prior, earlierClaims, final, inc.Challenge, earlier, priorChanged, priorKnown)
@@ -1651,6 +1738,10 @@ type rcIncomplete struct {
 	// Earlier is what became of each point of the previous review
 	// (review_commit_status.go); nil when there was none.
 	Earlier []rcEarlierStatus
+	// SweepOnly marks a run where no finder wrote a review but the sweep's
+	// proposals were checked and some held up: its findings are real, and the
+	// review is still unfinished.
+	SweepOnly bool
 }
 
 // rcEarlierOf is the earlier-point statuses a bundle carries: none from a
@@ -1801,18 +1892,102 @@ func rcIncompleteProse(inc *rcIncomplete) string {
 	} else {
 		b.WriteString("It had not opened any files before it stopped.\n\n")
 	}
+	if inc.SweepOnly {
+		b.WriteString("The line-by-line sweep of the diff did finish, and the findings below are the proposals from it " +
+			"that held up when checked. Nothing else is a verdict on the change: nothing followed its callers or " +
+			"assessed it as a whole, so apart from these findings treat it as \"not reviewed\" rather than " +
+			"\"reviewed and clean\". Re-run the review.")
+		return b.String()
+	}
 	b.WriteString("Nothing here is a verdict on the change: no claim was checked to completion, " +
 		"so treat this as \"not reviewed\" rather than \"reviewed and clean\". Re-run the review, " +
 		"or split the change into smaller pieces if it keeps exhausting the budget.")
 	return b.String()
 }
 
-// rcConcludeFromTranscript makes one non-tool completion over the review
-// run's message history, demanding the final write-up. Best-effort: any
-// failure returns "" and the caller keeps whatever the run produced. The
-// second result is rcFailureCategory's label for why it returned "".
+// rcConcludeFromTranscript asks for the final write-up over the review run's
+// message history. Best-effort: any failure returns "" and the caller keeps
+// whatever the run produced. The second result is rcFailureCategory's label
+// for why it returned "".
+//
+// With KAI_REVIEW_PARTIAL off it is one call, as it always was, and any text
+// is adopted. On, only a reply that carries a usable coda is returned, with
+// stray tool-call text removed: anything less is no review, and adopting it
+// published text like "<tool_call>kai_code_read add.go" under "Nothing jumped
+// out". A reply with nothing usable is asked for once more on the same model,
+// then — when the server sent the set's backups — on each backup in order.
 func rcConcludeFromTranscript(ctx context.Context, prov provider.Provider, model string, transcript []message.Message) (string, string) {
-	return rcConcludeWithModel(ctx, prov, rcStageConclusion, rcStageModel(rcStageConclusion, model), transcript)
+	first := rcStageModel(rcStageConclusion, model)
+	if !rcPartialOn() {
+		return rcConcludeWithModel(ctx, prov, rcStageConclusion, first, transcript)
+	}
+	// This walks the backups itself, so each call is a plain one.
+	ctx = rcWithoutSendBackups(ctx)
+	attempt := func(m string) (string, string) {
+		text, category := rcConcludeWithModel(ctx, prov, rcStageConclusion, m, transcript)
+		if text == "" {
+			return "", category
+		}
+		if text = rcRestoreCodaMarker(rcWithoutStrayToolCalls(text)); rcUsableCoda(text) {
+			return text, ""
+		}
+		fmt.Fprintf(os.Stderr, "  conclusion from %s carried no review; rejecting it\n", m)
+		return "", rcConclusionCategoryNoCoda
+	}
+	text, category := attempt(first)
+	retry, sameModel := rcConcludeRetryable(category)
+	if text == "" && retry && sameModel {
+		text, category = attempt(first)
+		retry, _ = rcConcludeRetryable(category)
+	}
+	if text != "" || !retry {
+		return text, category
+	}
+	backups, _ := rcSetBackups()
+	reason := rcSwapTransient
+	switch category {
+	case "empty":
+		reason = rcSwapEmpty
+	case rcConclusionCategoryNoCoda:
+		reason = rcSwapNoCoda
+	}
+	for _, b := range backups {
+		if ctx.Err() != nil {
+			break
+		}
+		if strings.EqualFold(b, first) {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  conclusion: failing over from %s to the set's backup %s\n", first, b)
+		rcRun.swapped(rcStageConclusion, first, b, reason)
+		t, c := attempt(b)
+		if t != "" {
+			return t, ""
+		}
+		if c == "usage_limit" {
+			// The budget is spent for every model, as in rcSendOnSet: no
+			// further backup can answer, and this, not the first failure,
+			// says why the conclusion failed. Other failures can be one
+			// model's own, so the next backup is still worth asking.
+			return "", c
+		}
+	}
+	return text, category
+}
+
+// rcConclusionPrompt asks a finder to write its review down from what it has
+// already seen. With KAI_REVIEW_PARTIAL on it also says no tools are left,
+// because a model that carries on as if it had them writes tool-call syntax
+// as its answer; off, the request is exactly as it was.
+func rcConclusionPrompt(partialOn bool) string {
+	noTools := ""
+	if partialOn {
+		noTools = "You have no tools now, so do not write a tool call. "
+	}
+	return "Finish the review using only the evidence already present. " + noTools +
+		"Do not invent runtime behavior or promote a suspicion into a defect to finish the task. " +
+		"State unresolved questions as limitations. Output the human review and a complete " +
+		rcReviewDataMarker + " coda with INTENT_MATCH, MERGE_READY, SUMMARY, ISSUES and DECISIONS."
 }
 
 // rcConcludeWithModel is rcConcludeFromTranscript on exactly the model given,
@@ -1833,11 +2008,8 @@ func rcConcludeWithModel(ctx context.Context, prov provider.Provider, stage, mod
 		return "", "evidence_too_large"
 	}
 	msgs := append(append([]message.Message(nil), transcript...), message.Message{
-		Role: message.RoleUser,
-		Parts: []message.ContentPart{message.TextContent{Text: "Finish the review using only the evidence already present. " +
-			"Do not invent runtime behavior or promote a suspicion into a defect to finish the task. " +
-			"State unresolved questions as limitations. Output the human review and a complete " +
-			rcReviewDataMarker + " coda with INTENT_MATCH, MERGE_READY, SUMMARY, ISSUES and DECISIONS."}},
+		Role:  message.RoleUser,
+		Parts: []message.ContentPart{message.TextContent{Text: rcConclusionPrompt(rcPartialOn())}},
 	})
 	// The conclusion is a deliberate grace period BEYOND the run, so it gets
 	// a FRESH deadline — hanging it off the run's context handed it whatever

@@ -1,0 +1,1127 @@
+{
+  "empty_main_model": {
+    "calls": [
+      {
+        "step": "agent",
+        "model": "claude-opus-4-8",
+        "tools": 17,
+        "messages": 3,
+        "prompt": "[runner: You are working in the \"001\" directory.\n\nProject overview (auto-injected by kai from the workspace).\nThis is authoritative for high-level questions like \"what does this project do\", \"how is it structured\", \"how do I run it\". Do NOT re-discover any of it with bash/find/view — answer directly from the block below. Only reach for view/bash when the user asks for code-level detail this overview doesn't cover.\n\nYour cwd: \u003cROOT\u003e\nAll paths in this overview are RELATIVE to that cwd. When the user mentions an absolute path or a workspace path like \"kai-server/foo/bar.go\", treat it as a path relative to your cwd. Bash and file tools both run with that cwd; do not cd into different absolute paths.\n\nTop-level tree:\n  calc/\n\n[runner] These notes steer your next action. They are not part of the conversation and need no reply.]"
+      },
+      {
+        "step": "agent",
+        "model": "claude-opus-4-8",
+        "tools": 17,
+        "messages": 4,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "claude-opus-4-8",
+        "tools": 17,
+        "messages": 6,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 3,
+        "prompt": "[runner: You are working in the \"001\" directory.\n\nProject overview (auto-injected by kai from the workspace).\nThis is authoritative for high-level questions like \"what does this project do\", \"how is it structured\", \"how do I run it\". Do NOT re-discover any of it with bash/find/view — answer directly from the block below. Only reach for view/bash when the user asks for code-level detail this overview doesn't cover.\n\nYour cwd: \u003cROOT\u003e\nAll paths in this overview are RELATIVE to that cwd. When the user mentions an absolute path or a workspace path like \"kai-server/foo/bar.go\", treat it as a path relative to your cwd. Bash and file tools both run with that cwd; do not cd into different absolute paths.\n\nTop-level tree:\n  calc/\n\n[runner] These notes steer your next action. They are not part of the conversation and need no reply.]"
+      },
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 4,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 6,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "z-ai/glm-5.2",
+        "tools": 17,
+        "messages": 3,
+        "fault": "empty",
+        "prompt": "[runner: You are working in the \"001\" directory.\n\nProject overview (auto-injected by kai from the workspace).\nThis is authoritative for high-level questions like \"what does this project do\", \"how is it structured\", \"how do I run it\". Do NOT re-discover any of it with bash/find/view — answer directly from the block below. Only reach for view/bash when the user asks for code-level detail this overview doesn't cover.\n\nYour cwd: \u003cROOT\u003e\nAll paths in this overview are RELATIVE to that cwd. When the user mentions an absolute path or a workspace path like \"kai-server/foo/bar.go\", treat it as a path relative to your cwd. Bash and file tools both run with that cwd; do not cd into different absolute paths.\n\nTop-level tree:\n  calc/\n\n[runner] These notes steer your next action. They are not part of the conversation and need no reply.]"
+      },
+      {
+        "step": "description",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "COMMITS AND THE AUTHOR'S DESCRIPTION:\nSimplify Add\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n"
+      },
+      {
+        "step": "factcheck",
+        "model": "z-ai/glm-5.2",
+        "tools": 3,
+        "messages": 2,
+        "prompt": "SOURCES (the evidence; cite by source number and line range):\n\nSOURCE 1 (32 rows; cite the ROW numbers printed at the left):\n    1| AUTHOR CONTEXT (the change author's own description):\n    2| Simplify Add\n    3| \n    4| INTENT:\n    5| Adds two numbers for the calculator's totals.\n    6| \n    7| DIFF:\n    8| diff --git a/calc/calc.go b/calc/calc.go\n    9| index 24559ba..b9edc8b 100644\n   10| --- a/calc/calc.go\n   11| +++ b/calc/calc.go\n   12| @@ -2,5 +2,5 @@ package calc\n   13|  \n   14|  // Add returns the sum of a and b.\n   15|  func Add(a, b int) int {\n   16| -\treturn a + b\n   17| +\treturn a - b\n   18|  }\n   19| diff --git a/calc/total.go b/calc/total.go\n   20| index 9adb235..863bf73 100644\n   21| --- a/calc/total.go\n   22| +++ b/calc/total.go\n   23| @@ -3,7 +3,7 @@ package calc\n   24|  // Total adds up xs.\n   25|  func Total(xs []int) int {\n   26|  \tt := 0\n   27| -\tfor _, x := range xs {\n   28| +\tfor _, x := range xs[1:] {\n   29|  \t\tt = Add(t, x)\n   30|  \t}\n   31|  \treturn t\n   32| \n\nSOURCE 2 (kai_view calc/calc.go — file lines 1-7 returned; cite FILE line numbers exactly as printed below):\nkai_view {\"file_path\":\"calc/calc.go\"}\n[git: clean · last commit 05fc702 27 years ago]\n1: package calc\n2: \n3: // Add returns the sum of a and b.\n4: func Add(a, b int) int {\n5: \treturn a - b\n6: }\n7: \n\n\n[turn 1/36 · edits: 0 · reads: 1]\n\nSOURCE 3 (kai_view calc/total.go — file lines 1-11 returned; cite FILE line numbers exactly as printed below):\nkai_view {\"file_path\":\"calc/total.go\"}\n[git: clean · last commit 05fc702 27 years ago]\n1: package calc\n2: \n3: // Total adds up xs.\n4: func Total(xs []int) int {\n5: \tt := 0\n6: \tfor _, x := range xs[1:] {\n7: \t\tt = Add(t, x)\n8: \t}\n9: \treturn t\n10: }\n11: \n\n\n[turn 2/36 · edits: 0 · reads: 2]\n\nSOURCE 4 (28 rows; cite the ROW numbers printed at the left):\n    1| diff --git a/calc/calc.go b/calc/calc.go\n    2| index 24559ba..b9edc8b 100644\n    3| --- a/calc/calc.go\n    4| +++ b/calc/calc.go\n    5| @@ -1,6 +1,6 @@\n    6|  package calc\n    7|  \n    8|  // Add returns the sum of a and b.\n    9|  func Add(a, b int) int {\n   10| -\treturn a + b\n   11| +\treturn a - b\n   12|  }\n   13| diff --git a/calc/total.go b/calc/total.go\n   14| index 9adb235..863bf73 100644\n   15| --- a/calc/total.go\n   16| +++ b/calc/total.go\n   17| @@ -1,10 +1,10 @@\n   18|  package calc\n   19|  \n   20|  // Total adds up xs.\n   21|  func Total(xs []int) int {\n   22|  \tt := 0\n   23| -\tfor _, x := range xs {\n   24| +\tfor _, x := range xs[1:] {\n   25|  \t\tt = Add(t, x)\n   26|  \t}\n   27|  \treturn t\n   28|  }\n\n\nDRAFT (claims to challenge):\nAdd now subtracts its second argument, so every total is wrong.\n\n===REVIEW-DATA===\nINTENT_MATCH: partial\nMERGE_READY: 2\nSUMMARY: Add subtracts and Total skips an element.\nISSUES:\n- calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong\n- calc/total.go:6 — Total ranges over xs[1:], so the first element is never added\nDECISIONS:\n\nISSUES TO CHECK:\n- calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong\n- calc/total.go:6 — Total ranges over xs[1:], so the first element is never added\n"
+      },
+      {
+        "step": "group",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "1. calc/calc.go:5 — The changed line breaks the arithmetic.\n2. calc/total.go:6 — The changed line breaks the arithmetic.\n"
+      },
+      {
+        "step": "humanize",
+        "model": "anthropic/claude-sonnet-5.5",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "WHAT THE CHANGE IS FOR:\nAdds two numbers for the calculator's totals.\n\nFINDINGS:\n\n[1]\nreported: calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong\nexplanation: The changed line computes the wrong value.\ncheck's reasoning: The changed line shows it.\nproposed fix: Restore the original line.\n\n[2]\nreported: calc/total.go:6 — Total ranges over xs[1:], so the first element is never added\nexplanation: The changed line computes the wrong value.\ncheck's reasoning: The changed line shows it.\nproposed fix: Restore the original line.\n"
+      },
+      {
+        "step": "intent",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "COMMIT MESSAGE:\nSimplify Add\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n"
+      },
+      {
+        "step": "rank",
+        "model": "anthropic/claude-opus-5.5",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "WHAT THE CHANGE IS FOR:\nAdds two numbers for the calculator's totals.\n\nCONFIRMED DEFECTS:\n\n[1] calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong\n    what the check found: The changed line computes the wrong value.\n    why it is confirmed: The changed line shows it.\n\n[2] calc/total.go:6 — Total ranges over xs[1:], so the first element is never added\n    what the check found: The changed line computes the wrong value.\n    why it is confirmed: The changed line shows it.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n"
+      },
+      {
+        "step": "sweep",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "WHAT THE CHANGE IS FOR (context, not a claim to verify):\nAdds two numbers for the calculator's totals.\n\nFILES IN THIS PART (every ISSUES bullet must begin with one of these paths, verbatim, then :line):\n  calc/calc.go\n  calc/total.go\n\nDIFF (wide context):\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -1,6 +1,6 @@\n package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -1,10 +1,10 @@\n package calc\n \n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n }\n"
+      }
+    ],
+    "err": "",
+    "bundle": {
+      "added": 2,
+      "author": "Test",
+      "blast": {
+        "nodes": [
+          {
+            "category": "changed",
+            "file": "calc/calc.go",
+            "hops": 0
+          },
+          {
+            "category": "changed",
+            "file": "calc/total.go",
+            "hops": 0
+          }
+        ],
+        "reaches": 0,
+        "shouldTouch": []
+      },
+      "branch": "master",
+      "challenge": {
+        "allegations": [
+          {
+            "evidence": [
+              {
+                "coord": "rows",
+                "lineEnd": 17,
+                "lineStart": 17,
+                "source": 1
+              }
+            ],
+            "finding": "The result is wrong.",
+            "id": 1,
+            "issue": "calc/calc.go:5 — The changed line breaks the arithmetic.",
+            "origin_stage": "main",
+            "original": {
+              "finding": "The changed line computes the wrong value.",
+              "issue": "calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong",
+              "remedy": "Restore the original line."
+            },
+            "plain": "The result is wrong.",
+            "proposers": [
+              "main",
+              "finder2",
+              "sweep"
+            ],
+            "reason": "The changed line shows it.",
+            "remedy": "Restore the original line.",
+            "status": "supported",
+            "title": "Arithmetic is wrong",
+            "votes": 1
+          },
+          {
+            "evidence": [
+              {
+                "coord": "rows",
+                "lineEnd": 28,
+                "lineStart": 28,
+                "source": 1
+              }
+            ],
+            "finding": "The result is wrong.",
+            "id": 2,
+            "issue": "calc/total.go:6 — The changed line breaks the arithmetic.",
+            "origin_stage": "main",
+            "original": {
+              "finding": "The changed line computes the wrong value.",
+              "issue": "calc/total.go:6 — Total ranges over xs[1:], so the first element is never added",
+              "remedy": "Restore the original line."
+            },
+            "plain": "The result is wrong.",
+            "proposers": [
+              "main",
+              "finder2",
+              "sweep"
+            ],
+            "reason": "The changed line shows it.",
+            "remedy": "Restore the original line.",
+            "status": "supported",
+            "title": "Arithmetic is wrong",
+            "votes": 1
+          }
+        ]
+      },
+      "claims": [
+        {
+          "lookup": "calc/calc.go:5 @ 05fc7020bdb3 → return a - b",
+          "resolved": true,
+          "statement": "calc/calc.go:5 — The changed line breaks the arithmetic. (severity: high)",
+          "tag": "risk",
+          "verified": true
+        },
+        {
+          "lookup": "calc/total.go:6 @ 05fc7020bdb3 → for _, x := range xs[1:] {",
+          "resolved": true,
+          "statement": "calc/total.go:6 — The changed line breaks the arithmetic. (severity: high)",
+          "tag": "risk",
+          "verified": true
+        }
+      ],
+      "coverage": {
+        "filesRead": [
+          "calc/calc.go",
+          "calc/total.go"
+        ],
+        "seconds": 1,
+        "turns": 3
+      },
+      "depth": "grounded",
+      "description": "Changes how Add combines its two arguments.",
+      "diff": {
+        "files": [
+          {
+            "action": "modified",
+            "added": 1,
+            "patch": "@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }",
+            "path": "calc/calc.go",
+            "removed": 1
+          },
+          {
+            "action": "modified",
+            "added": 1,
+            "patch": "@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t",
+            "path": "calc/total.go",
+            "removed": 1
+          }
+        ]
+      },
+      "files": 2,
+      "from": "88bec86fec87",
+      "id": "rc-05fc7020bdb33a75",
+      "intent": {
+        "match": "partial",
+        "note": "2 confirmed findings. Intent partial.",
+        "risks": [
+          "calc/calc.go:5 — The changed line breaks the arithmetic. (severity: high)",
+          "calc/total.go:6 — The changed line breaks the arithmetic. (severity: high)"
+        ],
+        "stated": "Simplify Add"
+      },
+      "readiness": 2,
+      "removed": 2,
+      "review": "## Scope\n- the supplied sources\n\n## Findings\n\n### calc/calc.go:5 — The changed line breaks the arithmetic.\nThe result is wrong.\n\n**Remedy:** Restore the original line.\n\n### calc/total.go:6 — The changed line breaks the arithmetic.\nThe result is wrong.\n\n**Remedy:** Restore the original line.\n",
+      "run": {
+        "failovers": [
+          {
+            "count": 1,
+            "from": "z-ai/glm-5.2",
+            "reason": "reasoning_empty",
+            "stage": "main",
+            "to": "claude-opus-4-8"
+          },
+          {
+            "count": 2,
+            "from": "z-ai/glm-5.2",
+            "reason": "remembered",
+            "stage": "main",
+            "to": "claude-opus-4-8"
+          }
+        ],
+        "incomplete_stage": "",
+        "kai_version": "0.34.5",
+        "profile": "none",
+        "profile_hash": "",
+        "risk": "S",
+        "risk_reasons": [],
+        "set_version": 0,
+        "source": "local",
+        "stages": {
+          "conclusion": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "coverage_gate": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "description": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "factcheck": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "finder2": {
+            "calls": 1,
+            "effort": "low",
+            "failovers": 0,
+            "model": "openai/gpt-5.6-sol",
+            "ran": "openai/gpt-5.6-sol",
+            "status": "ok"
+          },
+          "finder2_conclusion": {
+            "failovers": 0,
+            "model": "openai/gpt-5.6-sol",
+            "ran": "",
+            "status": "skipped"
+          },
+          "group": {
+            "calls": 1,
+            "effort": "low",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "humanize": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "anthropic/claude-sonnet-5.5",
+            "ran": "anthropic/claude-sonnet-5.5",
+            "status": "ok"
+          },
+          "intent": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "main": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 3,
+            "model": "z-ai/glm-5.2",
+            "ran": "claude-opus-4-8",
+            "retries": 1,
+            "status": "ok"
+          },
+          "quick_draft": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "quick_factcheck": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "rank": {
+            "calls": 1,
+            "effort": "medium",
+            "failovers": 0,
+            "model": "anthropic/claude-opus-5.5",
+            "ran": "anthropic/claude-opus-5.5",
+            "status": "ok"
+          },
+          "spec_contracts": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_contracts_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_logic": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_logic_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_security": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_security_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "sweep": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "sweep2": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "off"
+          }
+        },
+        "summary_model": "",
+        "tier": ""
+      },
+      "title": "Simplify Add",
+      "to": "05fc7020bdb3",
+      "verdict": "awaiting"
+    }
+  },
+  "healthy": {
+    "calls": [
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 3,
+        "prompt": "[runner: You are working in the \"001\" directory.\n\nProject overview (auto-injected by kai from the workspace).\nThis is authoritative for high-level questions like \"what does this project do\", \"how is it structured\", \"how do I run it\". Do NOT re-discover any of it with bash/find/view — answer directly from the block below. Only reach for view/bash when the user asks for code-level detail this overview doesn't cover.\n\nYour cwd: \u003cROOT\u003e\nAll paths in this overview are RELATIVE to that cwd. When the user mentions an absolute path or a workspace path like \"kai-server/foo/bar.go\", treat it as a path relative to your cwd. Bash and file tools both run with that cwd; do not cd into different absolute paths.\n\nTop-level tree:\n  calc/\n\n[runner] These notes steer your next action. They are not part of the conversation and need no reply.]"
+      },
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 4,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 6,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "z-ai/glm-5.2",
+        "tools": 17,
+        "messages": 3,
+        "prompt": "[runner: You are working in the \"001\" directory.\n\nProject overview (auto-injected by kai from the workspace).\nThis is authoritative for high-level questions like \"what does this project do\", \"how is it structured\", \"how do I run it\". Do NOT re-discover any of it with bash/find/view — answer directly from the block below. Only reach for view/bash when the user asks for code-level detail this overview doesn't cover.\n\nYour cwd: \u003cROOT\u003e\nAll paths in this overview are RELATIVE to that cwd. When the user mentions an absolute path or a workspace path like \"kai-server/foo/bar.go\", treat it as a path relative to your cwd. Bash and file tools both run with that cwd; do not cd into different absolute paths.\n\nTop-level tree:\n  calc/\n\n[runner] These notes steer your next action. They are not part of the conversation and need no reply.]"
+      },
+      {
+        "step": "agent",
+        "model": "z-ai/glm-5.2",
+        "tools": 17,
+        "messages": 4,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "z-ai/glm-5.2",
+        "tools": 17,
+        "messages": 6,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "description",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "COMMITS AND THE AUTHOR'S DESCRIPTION:\nSimplify Add\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n"
+      },
+      {
+        "step": "factcheck",
+        "model": "z-ai/glm-5.2",
+        "tools": 3,
+        "messages": 2,
+        "prompt": "SOURCES (the evidence; cite by source number and line range):\n\nSOURCE 1 (32 rows; cite the ROW numbers printed at the left):\n    1| AUTHOR CONTEXT (the change author's own description):\n    2| Simplify Add\n    3| \n    4| INTENT:\n    5| Adds two numbers for the calculator's totals.\n    6| \n    7| DIFF:\n    8| diff --git a/calc/calc.go b/calc/calc.go\n    9| index 24559ba..b9edc8b 100644\n   10| --- a/calc/calc.go\n   11| +++ b/calc/calc.go\n   12| @@ -2,5 +2,5 @@ package calc\n   13|  \n   14|  // Add returns the sum of a and b.\n   15|  func Add(a, b int) int {\n   16| -\treturn a + b\n   17| +\treturn a - b\n   18|  }\n   19| diff --git a/calc/total.go b/calc/total.go\n   20| index 9adb235..863bf73 100644\n   21| --- a/calc/total.go\n   22| +++ b/calc/total.go\n   23| @@ -3,7 +3,7 @@ package calc\n   24|  // Total adds up xs.\n   25|  func Total(xs []int) int {\n   26|  \tt := 0\n   27| -\tfor _, x := range xs {\n   28| +\tfor _, x := range xs[1:] {\n   29|  \t\tt = Add(t, x)\n   30|  \t}\n   31|  \treturn t\n   32| \n\nSOURCE 2 (kai_view calc/calc.go — file lines 1-7 returned; cite FILE line numbers exactly as printed below):\nkai_view {\"file_path\":\"calc/calc.go\"}\n[git: clean · last commit 05fc702 27 years ago]\n1: package calc\n2: \n3: // Add returns the sum of a and b.\n4: func Add(a, b int) int {\n5: \treturn a - b\n6: }\n7: \n\n\n[turn 1/36 · edits: 0 · reads: 1]\n\nSOURCE 3 (kai_view calc/total.go — file lines 1-11 returned; cite FILE line numbers exactly as printed below):\nkai_view {\"file_path\":\"calc/total.go\"}\n[git: clean · last commit 05fc702 27 years ago]\n1: package calc\n2: \n3: // Total adds up xs.\n4: func Total(xs []int) int {\n5: \tt := 0\n6: \tfor _, x := range xs[1:] {\n7: \t\tt = Add(t, x)\n8: \t}\n9: \treturn t\n10: }\n11: \n\n\n[turn 2/36 · edits: 0 · reads: 2]\n\nSOURCE 4 (28 rows; cite the ROW numbers printed at the left):\n    1| diff --git a/calc/calc.go b/calc/calc.go\n    2| index 24559ba..b9edc8b 100644\n    3| --- a/calc/calc.go\n    4| +++ b/calc/calc.go\n    5| @@ -1,6 +1,6 @@\n    6|  package calc\n    7|  \n    8|  // Add returns the sum of a and b.\n    9|  func Add(a, b int) int {\n   10| -\treturn a + b\n   11| +\treturn a - b\n   12|  }\n   13| diff --git a/calc/total.go b/calc/total.go\n   14| index 9adb235..863bf73 100644\n   15| --- a/calc/total.go\n   16| +++ b/calc/total.go\n   17| @@ -1,10 +1,10 @@\n   18|  package calc\n   19|  \n   20|  // Total adds up xs.\n   21|  func Total(xs []int) int {\n   22|  \tt := 0\n   23| -\tfor _, x := range xs {\n   24| +\tfor _, x := range xs[1:] {\n   25|  \t\tt = Add(t, x)\n   26|  \t}\n   27|  \treturn t\n   28|  }\n\n\nDRAFT (claims to challenge):\nAdd now subtracts its second argument, so every total is wrong.\n\n===REVIEW-DATA===\nINTENT_MATCH: partial\nMERGE_READY: 2\nSUMMARY: Add subtracts and Total skips an element.\nISSUES:\n- calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong\n- calc/total.go:6 — Total ranges over xs[1:], so the first element is never added\nDECISIONS:\n\nISSUES TO CHECK:\n- calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong\n- calc/total.go:6 — Total ranges over xs[1:], so the first element is never added\n"
+      },
+      {
+        "step": "group",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "1. calc/calc.go:5 — The changed line breaks the arithmetic.\n2. calc/total.go:6 — The changed line breaks the arithmetic.\n"
+      },
+      {
+        "step": "humanize",
+        "model": "anthropic/claude-sonnet-5.5",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "WHAT THE CHANGE IS FOR:\nAdds two numbers for the calculator's totals.\n\nFINDINGS:\n\n[1]\nreported: calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong\nexplanation: The changed line computes the wrong value.\ncheck's reasoning: The changed line shows it.\nproposed fix: Restore the original line.\n\n[2]\nreported: calc/total.go:6 — Total ranges over xs[1:], so the first element is never added\nexplanation: The changed line computes the wrong value.\ncheck's reasoning: The changed line shows it.\nproposed fix: Restore the original line.\n"
+      },
+      {
+        "step": "intent",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "COMMIT MESSAGE:\nSimplify Add\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n"
+      },
+      {
+        "step": "rank",
+        "model": "anthropic/claude-opus-5.5",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "WHAT THE CHANGE IS FOR:\nAdds two numbers for the calculator's totals.\n\nCONFIRMED DEFECTS:\n\n[1] calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong\n    what the check found: The changed line computes the wrong value.\n    why it is confirmed: The changed line shows it.\n\n[2] calc/total.go:6 — Total ranges over xs[1:], so the first element is never added\n    what the check found: The changed line computes the wrong value.\n    why it is confirmed: The changed line shows it.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n"
+      },
+      {
+        "step": "sweep",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "WHAT THE CHANGE IS FOR (context, not a claim to verify):\nAdds two numbers for the calculator's totals.\n\nFILES IN THIS PART (every ISSUES bullet must begin with one of these paths, verbatim, then :line):\n  calc/calc.go\n  calc/total.go\n\nDIFF (wide context):\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -1,6 +1,6 @@\n package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -1,10 +1,10 @@\n package calc\n \n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n }\n"
+      }
+    ],
+    "err": "",
+    "bundle": {
+      "added": 2,
+      "author": "Test",
+      "blast": {
+        "nodes": [
+          {
+            "category": "changed",
+            "file": "calc/calc.go",
+            "hops": 0
+          },
+          {
+            "category": "changed",
+            "file": "calc/total.go",
+            "hops": 0
+          }
+        ],
+        "reaches": 0,
+        "shouldTouch": []
+      },
+      "branch": "master",
+      "challenge": {
+        "allegations": [
+          {
+            "evidence": [
+              {
+                "coord": "rows",
+                "lineEnd": 17,
+                "lineStart": 17,
+                "source": 1
+              }
+            ],
+            "finding": "The result is wrong.",
+            "id": 1,
+            "issue": "calc/calc.go:5 — The changed line breaks the arithmetic.",
+            "origin_stage": "main",
+            "original": {
+              "finding": "The changed line computes the wrong value.",
+              "issue": "calc/calc.go:5 — Add subtracts b instead of adding it, so every total built on it is wrong",
+              "remedy": "Restore the original line."
+            },
+            "plain": "The result is wrong.",
+            "proposers": [
+              "main",
+              "finder2",
+              "sweep"
+            ],
+            "reason": "The changed line shows it.",
+            "remedy": "Restore the original line.",
+            "status": "supported",
+            "title": "Arithmetic is wrong",
+            "votes": 1
+          },
+          {
+            "evidence": [
+              {
+                "coord": "rows",
+                "lineEnd": 28,
+                "lineStart": 28,
+                "source": 1
+              }
+            ],
+            "finding": "The result is wrong.",
+            "id": 2,
+            "issue": "calc/total.go:6 — The changed line breaks the arithmetic.",
+            "origin_stage": "main",
+            "original": {
+              "finding": "The changed line computes the wrong value.",
+              "issue": "calc/total.go:6 — Total ranges over xs[1:], so the first element is never added",
+              "remedy": "Restore the original line."
+            },
+            "plain": "The result is wrong.",
+            "proposers": [
+              "main",
+              "finder2",
+              "sweep"
+            ],
+            "reason": "The changed line shows it.",
+            "remedy": "Restore the original line.",
+            "status": "supported",
+            "title": "Arithmetic is wrong",
+            "votes": 1
+          }
+        ]
+      },
+      "claims": [
+        {
+          "lookup": "calc/calc.go:5 @ 05fc7020bdb3 → return a - b",
+          "resolved": true,
+          "statement": "calc/calc.go:5 — The changed line breaks the arithmetic. (severity: high)",
+          "tag": "risk",
+          "verified": true
+        },
+        {
+          "lookup": "calc/total.go:6 @ 05fc7020bdb3 → for _, x := range xs[1:] {",
+          "resolved": true,
+          "statement": "calc/total.go:6 — The changed line breaks the arithmetic. (severity: high)",
+          "tag": "risk",
+          "verified": true
+        }
+      ],
+      "coverage": {
+        "filesRead": [
+          "calc/calc.go",
+          "calc/total.go"
+        ],
+        "turns": 3
+      },
+      "depth": "grounded",
+      "description": "Changes how Add combines its two arguments.",
+      "diff": {
+        "files": [
+          {
+            "action": "modified",
+            "added": 1,
+            "patch": "@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }",
+            "path": "calc/calc.go",
+            "removed": 1
+          },
+          {
+            "action": "modified",
+            "added": 1,
+            "patch": "@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t",
+            "path": "calc/total.go",
+            "removed": 1
+          }
+        ]
+      },
+      "files": 2,
+      "from": "88bec86fec87",
+      "id": "rc-05fc7020bdb33a75",
+      "intent": {
+        "match": "partial",
+        "note": "2 confirmed findings. Intent partial.",
+        "risks": [
+          "calc/calc.go:5 — The changed line breaks the arithmetic. (severity: high)",
+          "calc/total.go:6 — The changed line breaks the arithmetic. (severity: high)"
+        ],
+        "stated": "Simplify Add"
+      },
+      "readiness": 2,
+      "removed": 2,
+      "review": "## Scope\n- the supplied sources\n\n## Findings\n\n### calc/calc.go:5 — The changed line breaks the arithmetic.\nThe result is wrong.\n\n**Remedy:** Restore the original line.\n\n### calc/total.go:6 — The changed line breaks the arithmetic.\nThe result is wrong.\n\n**Remedy:** Restore the original line.\n",
+      "run": {
+        "failovers": [],
+        "incomplete_stage": "",
+        "kai_version": "0.34.5",
+        "profile": "none",
+        "profile_hash": "",
+        "risk": "S",
+        "risk_reasons": [],
+        "set_version": 0,
+        "source": "local",
+        "stages": {
+          "conclusion": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "coverage_gate": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "description": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "factcheck": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "finder2": {
+            "calls": 1,
+            "effort": "low",
+            "failovers": 0,
+            "model": "openai/gpt-5.6-sol",
+            "ran": "openai/gpt-5.6-sol",
+            "status": "ok"
+          },
+          "finder2_conclusion": {
+            "failovers": 0,
+            "model": "openai/gpt-5.6-sol",
+            "ran": "",
+            "status": "skipped"
+          },
+          "group": {
+            "calls": 1,
+            "effort": "low",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "humanize": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "anthropic/claude-sonnet-5.5",
+            "ran": "anthropic/claude-sonnet-5.5",
+            "status": "ok"
+          },
+          "intent": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "main": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "quick_draft": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "quick_factcheck": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "rank": {
+            "calls": 1,
+            "effort": "medium",
+            "failovers": 0,
+            "model": "anthropic/claude-opus-5.5",
+            "ran": "anthropic/claude-opus-5.5",
+            "status": "ok"
+          },
+          "spec_contracts": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_contracts_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_logic": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_logic_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_security": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_security_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "sweep": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "sweep2": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "off"
+          }
+        },
+        "summary_model": "",
+        "tier": ""
+      },
+      "title": "Simplify Add",
+      "to": "05fc7020bdb3",
+      "verdict": "awaiting"
+    }
+  },
+  "hollow": {
+    "calls": [
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 3,
+        "prompt": "[runner: You are working in the \"001\" directory.\n\nProject overview (auto-injected by kai from the workspace).\nThis is authoritative for high-level questions like \"what does this project do\", \"how is it structured\", \"how do I run it\". Do NOT re-discover any of it with bash/find/view — answer directly from the block below. Only reach for view/bash when the user asks for code-level detail this overview doesn't cover.\n\nYour cwd: \u003cROOT\u003e\nAll paths in this overview are RELATIVE to that cwd. When the user mentions an absolute path or a workspace path like \"kai-server/foo/bar.go\", treat it as a path relative to your cwd. Bash and file tools both run with that cwd; do not cd into different absolute paths.\n\nTop-level tree:\n  calc/\n\n[runner] These notes steer your next action. They are not part of the conversation and need no reply.]"
+      },
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 4,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 17,
+        "messages": 6,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "z-ai/glm-5.2",
+        "tools": 17,
+        "messages": 3,
+        "prompt": "[runner: You are working in the \"001\" directory.\n\nProject overview (auto-injected by kai from the workspace).\nThis is authoritative for high-level questions like \"what does this project do\", \"how is it structured\", \"how do I run it\". Do NOT re-discover any of it with bash/find/view — answer directly from the block below. Only reach for view/bash when the user asks for code-level detail this overview doesn't cover.\n\nYour cwd: \u003cROOT\u003e\nAll paths in this overview are RELATIVE to that cwd. When the user mentions an absolute path or a workspace path like \"kai-server/foo/bar.go\", treat it as a path relative to your cwd. Bash and file tools both run with that cwd; do not cd into different absolute paths.\n\nTop-level tree:\n  calc/\n\n[runner] These notes steer your next action. They are not part of the conversation and need no reply.]"
+      },
+      {
+        "step": "agent",
+        "model": "z-ai/glm-5.2",
+        "tools": 17,
+        "messages": 4,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "agent",
+        "model": "z-ai/glm-5.2",
+        "tools": 17,
+        "messages": 6,
+        "prompt": "AUTHOR CONTEXT (the change author's own description):\nSimplify Add\n\nINTENT:\nAdds two numbers for the calculator's totals.\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n\n"
+      },
+      {
+        "step": "conclusion",
+        "model": "openai/gpt-5.6-sol",
+        "tools": 0,
+        "messages": 8,
+        "prompt": "Finish the review using only the evidence already present. Do not invent runtime behavior or promote a suspicion into a defect to finish the task. State unresolved questions as limitations. Output the human review and a complete ===REVIEW-DATA=== coda with INTENT_MATCH, MERGE_READY, SUMMARY, ISSUES and DECISIONS."
+      },
+      {
+        "step": "conclusion",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 8,
+        "prompt": "Finish the review using only the evidence already present. Do not invent runtime behavior or promote a suspicion into a defect to finish the task. State unresolved questions as limitations. Output the human review and a complete ===REVIEW-DATA=== coda with INTENT_MATCH, MERGE_READY, SUMMARY, ISSUES and DECISIONS."
+      },
+      {
+        "step": "description",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "COMMITS AND THE AUTHOR'S DESCRIPTION:\nSimplify Add\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n"
+      },
+      {
+        "step": "intent",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "COMMIT MESSAGE:\nSimplify Add\n\nDIFF:\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n"
+      },
+      {
+        "step": "sweep",
+        "model": "z-ai/glm-5.2",
+        "tools": 0,
+        "messages": 2,
+        "prompt": "WHAT THE CHANGE IS FOR (context, not a claim to verify):\nAdds two numbers for the calculator's totals.\n\nFILES IN THIS PART (every ISSUES bullet must begin with one of these paths, verbatim, then :line):\n  calc/calc.go\n  calc/total.go\n\nDIFF (wide context):\ndiff --git a/calc/calc.go b/calc/calc.go\nindex 24559ba..b9edc8b 100644\n--- a/calc/calc.go\n+++ b/calc/calc.go\n@@ -1,6 +1,6 @@\n package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }\ndiff --git a/calc/total.go b/calc/total.go\nindex 9adb235..863bf73 100644\n--- a/calc/total.go\n+++ b/calc/total.go\n@@ -1,10 +1,10 @@\n package calc\n \n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t\n }\n"
+      }
+    ],
+    "err": "",
+    "bundle": {
+      "added": 2,
+      "author": "Test",
+      "blast": {
+        "nodes": [
+          {
+            "category": "changed",
+            "file": "calc/calc.go",
+            "hops": 0
+          },
+          {
+            "category": "changed",
+            "file": "calc/total.go",
+            "hops": 0
+          }
+        ],
+        "reaches": 0,
+        "shouldTouch": []
+      },
+      "branch": "master",
+      "claims": [],
+      "coverage": {
+        "filesRead": [
+          "calc/calc.go",
+          "calc/total.go"
+        ],
+        "turns": 3
+      },
+      "depth": "grounded",
+      "description": "Changes how Add combines its two arguments.",
+      "diff": {
+        "files": [
+          {
+            "action": "modified",
+            "added": 1,
+            "patch": "@@ -2,5 +2,5 @@ package calc\n \n // Add returns the sum of a and b.\n func Add(a, b int) int {\n-\treturn a + b\n+\treturn a - b\n }",
+            "path": "calc/calc.go",
+            "removed": 1
+          },
+          {
+            "action": "modified",
+            "added": 1,
+            "patch": "@@ -3,7 +3,7 @@ package calc\n // Total adds up xs.\n func Total(xs []int) int {\n \tt := 0\n-\tfor _, x := range xs {\n+\tfor _, x := range xs[1:] {\n \t\tt = Add(t, x)\n \t}\n \treturn t",
+            "path": "calc/total.go",
+            "removed": 1
+          }
+        ]
+      },
+      "files": 2,
+      "from": "88bec86fec87",
+      "id": "rc-05fc7020bdb33a75",
+      "intent": {
+        "match": "unknown",
+        "stated": "Simplify Add"
+      },
+      "removed": 2,
+      "review": "\u003ctool_call\u003ekai_view calc/calc.go\u003c/arg_value\u003e\u003c/tool_call\u003e\n",
+      "run": {
+        "failovers": [],
+        "incomplete_stage": "",
+        "kai_version": "0.34.5",
+        "profile": "none",
+        "profile_hash": "",
+        "risk": "S",
+        "risk_reasons": [],
+        "set_version": 0,
+        "source": "local",
+        "stages": {
+          "conclusion": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "coverage_gate": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "description": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "factcheck": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "finder2": {
+            "calls": 1,
+            "effort": "low",
+            "failovers": 0,
+            "model": "openai/gpt-5.6-sol",
+            "ran": "openai/gpt-5.6-sol",
+            "status": "ok"
+          },
+          "finder2_conclusion": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "openai/gpt-5.6-sol",
+            "ran": "openai/gpt-5.6-sol",
+            "status": "ok"
+          },
+          "group": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "humanize": {
+            "failovers": 0,
+            "model": "anthropic/claude-sonnet-5.5",
+            "ran": "",
+            "status": "skipped"
+          },
+          "intent": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "main": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "quick_draft": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "quick_factcheck": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "skipped"
+          },
+          "rank": {
+            "failovers": 0,
+            "model": "anthropic/claude-opus-5.5",
+            "ran": "",
+            "status": "skipped"
+          },
+          "spec_contracts": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_contracts_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_logic": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_logic_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_security": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "spec_security_conclusion": {
+            "failovers": 0,
+            "model": "",
+            "ran": "",
+            "status": "off"
+          },
+          "sweep": {
+            "calls": 1,
+            "effort": "off",
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "z-ai/glm-5.2",
+            "status": "ok"
+          },
+          "sweep2": {
+            "failovers": 0,
+            "model": "z-ai/glm-5.2",
+            "ran": "",
+            "status": "off"
+          }
+        },
+        "summary_model": "",
+        "tier": ""
+      },
+      "title": "Simplify Add",
+      "to": "05fc7020bdb3",
+      "verdict": "awaiting"
+    }
+  }
+}
