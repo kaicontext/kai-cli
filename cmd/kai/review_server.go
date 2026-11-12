@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/kaicontext/kai-engine/clientid"
 )
 
 type serverChangeReview struct {
@@ -76,7 +78,7 @@ func serverCallRaw(baseURL, token, method, path string, body []byte) ([]byte, er
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, err := clientid.Client(&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
 	}
