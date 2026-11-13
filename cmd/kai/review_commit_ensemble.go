@@ -180,14 +180,17 @@ func rcAwaitSecondFinder(sf *rcSecondFinder) rcFinderResult {
 	case <-time.After(rcSecondFinderGrace):
 		sf.cancel()
 		fmt.Fprintf(os.Stderr, "  second finder (%s) still running %s after the main finder — continuing without it\n", sf.model, rcSecondFinderGrace)
+		rcNotePartial(rcFinderFailed(rcStageFinder2))
 		return rcFinderResult{Model: sf.model}
 	}
 	sf.cancel()
 	switch {
 	case r.Err != nil:
 		fmt.Fprintf(os.Stderr, "  second finder (%s) failed after %s: %v\n", r.Model, r.Elapsed.Round(time.Second), r.Err)
+		rcNotePartial(rcFinderFailed(rcStageFinder2))
 	case r.Raw == "":
 		fmt.Fprintf(os.Stderr, "  second finder (%s) ended without a review after %s\n", r.Model, r.Elapsed.Round(time.Second))
+		rcNotePartial(rcFinderFailed(rcStageFinder2))
 	default:
 		fmt.Fprintf(os.Stderr, "  second finder (%s): %d issue(s) in %s\n", r.Model, len(r.Issues), r.Elapsed.Round(time.Second))
 	}
@@ -201,6 +204,7 @@ func rcWithSecondFinder(raw string, r rcFinderResult, finders *rcFinderLedger) s
 	switch {
 	case !rcUsableCoda(raw) && r.Raw != "":
 		fmt.Fprintf(os.Stderr, "  the main finder ended without a review; the second finder's review stands in\n")
+		rcNotePartial(rcPartialFinder2StoodIn)
 		finders.addAll(rcIssuesOf(r.Raw), rcFinderSecond)
 		return r.Raw
 	case len(r.Issues) > 0 && rcUsableCoda(raw):
@@ -318,6 +322,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  selection (%s) failed: %v — publishing every confirmed defect\n", model, err)
+		rcNotePartial(rcPartialRankFailed)
 		return false
 	}
 	var text strings.Builder
@@ -329,6 +334,7 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	ans, perr := rcParseRank(text.String())
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "  selection (%s) answered unusably (%v) — publishing every confirmed defect\n", model, perr)
+		rcNotePartial(rcPartialRankFailed)
 		return false
 	}
 	// The answer itself, by allegation id, so a published defect can be traced

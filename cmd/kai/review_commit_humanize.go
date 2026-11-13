@@ -115,6 +115,7 @@ func rcHumanize(ctx context.Context, prov provider.Provider, intent string, res 
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  humanize (%s) failed: %v — keeping the fact-check's wording\n", model, err)
+		rcNotePartial(rcPartialHumanizeFailed)
 		return
 	}
 	var text strings.Builder
@@ -126,6 +127,7 @@ func rcHumanize(ctx context.Context, prov provider.Provider, intent string, res 
 	got, perr := rcParseHumanize(text.String())
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "  humanize (%s) answered unusably (%v) — keeping the fact-check's wording\n", model, perr)
+		rcNotePartial(rcPartialHumanizeFailed)
 		return
 	}
 	n := rcApplyHumanize(res, picked, got)

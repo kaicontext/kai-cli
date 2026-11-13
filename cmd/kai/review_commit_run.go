@@ -30,6 +30,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"sort"
@@ -77,8 +78,9 @@ type rcRunStage struct {
 	Seconds float64 `json:"seconds,omitempty"`
 	// Retries counts the engine's re-sends inside an agent run after a
 	// transient error or an empty answer (Hooks.OnRetryWait), a failover's
-	// included. A one-shot call's retries happen inside the provider and
-	// are not seen here.
+	// included. A one-shot call's own retries happen inside the provider
+	// and are not seen here; with the set's backups sent, its re-ask after
+	// an empty answer and each backup it moves to are (rcSendOnSet).
 	Retries int `json:"retries,omitempty"`
 	// Truncations counts answers cut off at the output-token limit
 	// (finish reason max_tokens): one-shot calls and agent turns alike.
@@ -87,6 +89,9 @@ type rcRunStage struct {
 	inflight  int
 	busy      time.Duration
 	busySince time.Time
+	// recovered is how many of Errors a later attempt of the same stage
+	// made good (rcRunWithRetries' resume): the stage answered after all.
+	recovered int
 }
 
 // rcRunFailover is one kind of swap the engine made. A swap the engine
@@ -228,6 +233,7 @@ func rcRunStart(risk rcRisk, profile string, stageModels map[string]string) {
 	rcRun.mu.Lock()
 	rcRun.report = r
 	rcRun.mu.Unlock()
+	rcPartialReset()
 }
 
 // rcRunStageModels is every stage a review may call, with its configured
@@ -347,6 +353,15 @@ func (r *rcRunRecorder) answered(stage, model string) {
 	r.stage(stage, "").Ran = model
 }
 
+// recovered marks the stage's failed calls so far as made good by a later
+// attempt that answered. The errors stay counted.
+func (r *rcRunRecorder) recoveredStage(stage string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.stage(stage, "")
+	st.recovered = st.Errors
+}
+
 func (r *rcRunRecorder) swapped(stage, from, to, reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -397,7 +412,7 @@ func rcRunSnapshot() *rcRunReport {
 		c.Seconds = math.Round(busy.Seconds()*10) / 10
 		if c.Calls > 0 {
 			c.Status = rcRunOK
-			if c.Errors > 0 || c.inflight > 0 {
+			if c.Errors > c.recovered || c.inflight > 0 {
 				c.Status = rcRunFailed
 			}
 		}
@@ -418,18 +433,30 @@ func rcStageOf(ctx context.Context) string {
 	return rcStageUnlabelled
 }
 
-// rcSend is prov.Send, recorded under ctx's stage. These calls have no model
-// failover, so the model asked is the model that answered.
+// rcSend is prov.Send, recorded under ctx's stage. With the set's backups
+// sent, a failing model falls back to them (rcSendOnSet), and the model that
+// answered is recorded; without them there is no failover, so the model asked
+// is the model that answered.
 func rcSend(ctx context.Context, prov provider.Provider, req provider.Request) (provider.Response, error) {
 	stage := rcStageOf(ctx)
 	rcRun.begin(stage, req.Model, req.ReasoningEffort)
-	resp, err := prov.Send(ctx, req)
+	resp, answered, err := rcSendOnSet(ctx, prov, req, stage)
 	if err == nil && resp.FinishReason == message.FinishReasonMaxTokens {
 		rcRun.truncated(stage)
 	}
-	rcRun.end(stage, req.Model, err)
+	recorded := err
+	if recorded == nil && answered == "" {
+		// The model and every backup answered nothing: the step did not
+		// run, whatever the caller makes of the empty reply.
+		recorded = errRcNoAnswer
+	}
+	rcRun.end(stage, answered, recorded)
 	return resp, err
 }
+
+// errRcNoAnswer records a one-shot step whose model and backups all
+// answered nothing.
+var errRcNoAnswer = errors.New("no model in the set answered")
 
 // rcRunAgent is agent.Run for a review stage: the calls are labelled with the
 // stage, and the engine's hooks report each swap, each turn's answering model

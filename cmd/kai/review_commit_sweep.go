@@ -113,6 +113,36 @@ type rcSweepResult struct {
 	// By names the sweeps that proposed each issue, keyed by rcFinderKey
 	// (review_commit_finders.go).
 	By map[string][]string
+	// Lost marks, per chunk, one that failed or came back empty. An empty
+	// reply is not a clean one: the prompt asks for "- (none)" when a chunk
+	// has nothing, so empty means the model never answered. After a merge a
+	// chunk is lost only when every sweep lost it.
+	Lost []bool
+	// Unswept counts the files past the chunk cap that no sweep read.
+	Unswept int
+}
+
+// LostChunks is how many chunks no sweep read.
+func (r rcSweepResult) LostChunks() int {
+	n := 0
+	for _, l := range r.Lost {
+		if l {
+			n++
+		}
+	}
+	return n
+}
+
+// rcNoteSweepGaps records the partial reasons a sweep leaves: chunks no sweep
+// read, and files past the chunk cap (review_commit_partial.go).
+func rcNoteSweepGaps(sw rcSweepResult) {
+	if n := sw.LostChunks(); n > 0 {
+		fmt.Fprintf(os.Stderr, "  sweep: %d of %d chunk(s) read by no sweep\n", n, sw.Chunks)
+		rcNotePartial(rcPartialSweepFailed)
+	}
+	if sw.Unswept > 0 {
+		rcNotePartial(rcPartialFilesUnswept)
+	}
 }
 
 // rcSweepPatches returns each changed file's diff with wide context, keyed by
@@ -197,7 +227,9 @@ func rcSplitDiff(diff string) ([]string, map[string]string) {
 // rcSweepChunkBytes, test files last so a cap on the number of chunks drops
 // them before it drops production code, and one oversized file truncated
 // rather than skipped.
-func rcSweepChunks(order []string, patches map[string]string) [][]string {
+//
+// The second result counts the files left past the chunk cap.
+func rcSweepChunks(order []string, patches map[string]string) ([][]string, int) {
 	var code, tests []string
 	for _, p := range order {
 		if rcSweepSkip.MatchString(p) {
@@ -227,15 +259,15 @@ func rcSweepChunks(order []string, patches map[string]string) [][]string {
 	if len(cur) > 0 {
 		chunks = append(chunks, cur)
 	}
+	dropped := 0
 	if len(chunks) > rcSweepMaxChunks {
-		dropped := 0
 		for _, c := range chunks[rcSweepMaxChunks:] {
 			dropped += len(c)
 		}
 		fmt.Fprintf(os.Stderr, "  sweep: %d file(s) past the %d-chunk cap not swept\n", dropped, rcSweepMaxChunks)
 		chunks = chunks[:rcSweepMaxChunks]
 	}
-	return chunks
+	return chunks, dropped
 }
 
 var rcTestPath = regexp.MustCompile(`(?i)(^|/)(tests?|spec|__tests__|testdata|fixtures?)/|(_test\.go|_spec\.rb|\.test\.[jt]sx?|\.spec\.[jt]sx?|Test\.java|Tests?\.cs|_test\.py|test_[^/]*\.py)$`)
@@ -255,8 +287,8 @@ func rcRunSweep(ctx context.Context, prov provider.Provider, model, intent strin
 func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, stage, intent string, order []string, patches map[string]string) rcSweepResult {
 	effort := rcStageEffort(stage)
 	ctx = rcCostStage(ctx, stage)
-	chunks := rcSweepChunks(order, patches)
-	res := rcSweepResult{Chunks: len(chunks)}
+	chunks, unswept := rcSweepChunks(order, patches)
+	res := rcSweepResult{Chunks: len(chunks), Unswept: unswept, Lost: make([]bool, len(chunks))}
 	if len(chunks) == 0 {
 		return res
 	}
@@ -270,6 +302,7 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, stage, i
 		issues []string
 		source string
 		err    error
+		empty  bool
 	}
 	outs := make([]out, len(chunks))
 	sem := make(chan struct{}, rcSweepParallel)
@@ -324,12 +357,13 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, stage, i
 					text.WriteString(t.Text)
 				}
 			}
-			outs[i] = out{issues: rcSweepIssues(text.String(), changed), source: src.String()}
+			outs[i] = out{issues: rcSweepIssues(text.String(), changed), source: src.String(), empty: strings.TrimSpace(text.String()) == ""}
 		}(i, files)
 	}
 	wg.Wait()
 	seen := map[string]bool{}
-	for _, o := range outs {
+	for i, o := range outs {
+		res.Lost[i] = o.err != nil || o.empty
 		if o.err != nil {
 			res.Failed++
 			fmt.Fprintf(os.Stderr, "  sweep: a chunk failed (%v) — the review proceeds without it\n", o.err)
@@ -345,7 +379,16 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, stage, i
 			}
 		}
 	}
-	if res.Failed < res.Chunks {
+	// A pass is a sweep that read the diff. Today a blank reply counts as
+	// read, so a sweep whose every chunk came back empty still counts, and
+	// the publish gate then asks two sweeps to agree when only one read
+	// anything. With partial reviews on, a sweep that read no chunk at all
+	// is no pass; off, the count is as it was.
+	read := res.Chunks - res.Failed
+	if rcPartialOn() {
+		read = res.Chunks - res.LostChunks()
+	}
+	if read > 0 {
 		res.Passes = 1
 	}
 	return res
@@ -684,6 +727,34 @@ func rcMergeSweeps(a, b rcSweepResult) rcSweepResult {
 	// the estimate: a chunk one sweep lost the other may still have read.
 	if a.Failed > 0 && b.Failed < a.Failed {
 		out.Failed = b.Failed
+	}
+	// Here per-chunk loss is tracked: a chunk is unread only when both lost
+	// it. A sweep that read nothing at all (no chunks) lost nothing.
+	out.Lost = rcLostByBoth(a.Lost, b.Lost)
+	// Files past the cap: both sweeps chunk the same hunks, so a sweep that
+	// read any chunk saw the same count. One that never ran says nothing.
+	switch {
+	case a.Chunks == 0:
+		out.Unswept = b.Unswept
+	case b.Chunks > 0 && b.Unswept < a.Unswept:
+		out.Unswept = b.Unswept
+	}
+	return out
+}
+
+// rcLostByBoth is the chunks both sweeps lost. The sweeps chunk the same
+// hunks, so index i is the same chunk in each; one with no chunks (it never
+// ran) leaves the other's losses standing.
+func rcLostByBoth(a, b []bool) []bool {
+	switch {
+	case len(b) == 0:
+		return append([]bool(nil), a...)
+	case len(a) == 0:
+		return append([]bool(nil), b...)
+	}
+	out := make([]bool, len(a))
+	for i := range a {
+		out[i] = a[i] && (i >= len(b) || b[i])
 	}
 	return out
 }

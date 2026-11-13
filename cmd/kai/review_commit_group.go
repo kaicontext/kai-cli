@@ -146,6 +146,7 @@ func rcGroupDuplicateIssuesWith(raw string, refs map[string]string, ask func(use
 	reply, err := ask(user.String())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  grouping: the call failed (%v); findings left as they are\n", err)
+		rcNotePartial(rcPartialGroupFailed)
 		return raw, 0
 	}
 
