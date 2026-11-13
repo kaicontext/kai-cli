@@ -216,19 +216,45 @@ func (l *rcFinderLedger) specialists() *rcFinderLedger {
 	return l.side
 }
 
-// stagesOf is every stage that proposed issue: its finders (of) and the
-// specialists, in rcOriginRank order.
+// stagesOf is every stage that proposed issue, finders and specialists, in
+// rcOriginRank order. It reads both ledgers the way of reads one: the
+// issue's own bullet, plus, at each location it names, the one bullet
+// proposed there when only one was, counting both ledgers' bullets. So a
+// specialist's different bullet on the same line is never taken for this
+// one's origin.
 func (l *rcFinderLedger) stagesOf(issue string) []string {
 	if l == nil {
 		return nil
 	}
+	ledgers := []*rcFinderLedger{l}
+	if l.side != nil {
+		ledgers = append(ledgers, l.side)
+	}
 	set := map[string]bool{}
-	for _, f := range l.of(issue) {
-		set[f] = true
+	take := func(key string) {
+		for _, led := range ledgers {
+			for f := range led.by[key] {
+				set[f] = true
+			}
+		}
 	}
-	for _, f := range l.side.of(issue) {
-		set[f] = true
+	key, _ := rcFinderKey(issue)
+	take(key)
+	for _, loc := range rcIssueLocations(issue) {
+		at := fmt.Sprintf("%s:%d", loc.path, loc.line)
+		keys := map[string]bool{}
+		for _, led := range ledgers {
+			for _, k := range led.at[at] {
+				keys[k] = true
+			}
+		}
+		if len(keys) == 1 {
+			for k := range keys {
+				take(k)
+			}
+		}
 	}
+	delete(set, rcFinderUnknown)
 	return rcOriginSorted(set)
 }
 

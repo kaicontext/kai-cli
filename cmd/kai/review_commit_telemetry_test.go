@@ -359,3 +359,25 @@ func TestOriginStage_PublishGateOff(t *testing.T) {
 		}
 	}
 }
+
+// A sweep bullet and a specialist's different bullet on the same line are two
+// bullets there: neither is the other's origin. The sweep's finding comes
+// from the sweep, not from the specialist that ranks ahead of it.
+func TestOriginStage_SameLineDifferentDefect(t *testing.T) {
+	const sweepIssue = "a.go:10 — the cache key omits the tenant | trigger: two tenants reading one id | evidence: a.go:10 | consequence: one tenant sees another's row"
+	const specIssue = "a.go:10 — the loop index is off by one | trigger: a list of one element | evidence: a.go:10 | consequence: the last item is skipped"
+	l := newRcFinderLedger()
+	l.add(sweepIssue, rcFinderSweep)
+	l.specialists().add(specIssue, rcStageSpecLogic)
+	if got := l.stagesOf(sweepIssue); !reflect.DeepEqual(got, []string{rcFinderSweep}) {
+		t.Errorf("sweep bullet's stages = %q, want sweep only", got)
+	}
+	if got := l.stagesOf(specIssue); !reflect.DeepEqual(got, []string{rcStageSpecLogic}) {
+		t.Errorf("specialist bullet's stages = %q, want spec_logic only", got)
+	}
+	// A rewording at that line names neither bullet: with two there, the
+	// location says nothing about which one it is.
+	if got := l.stagesOf("a.go:10 — a third wording of something"); got != nil {
+		t.Errorf("unmatched wording's stages = %q, want none", got)
+	}
+}
