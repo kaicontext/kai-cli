@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kaicontext/kai-engine/clientid"
 	"github.com/kaicontext/kai-engine/gitio"
 	"github.com/kaicontext/kai-engine/remote"
 	spawnpkg "github.com/kaicontext/kai-engine/spawn"
@@ -360,7 +361,7 @@ func shipServerCall(baseURL, token, method, path string, body []byte) (*shipServ
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+	resp, err := clientid.Client(&http.Client{Timeout: 60 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
 	}
