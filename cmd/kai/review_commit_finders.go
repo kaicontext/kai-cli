@@ -39,9 +39,10 @@ type rcFinderLedger struct {
 	by map[string]map[string]bool
 	// at lists the keys proposed at each "path:line".
 	at map[string][]string
-	// side records the specialists' bullets, which are origins
-	// (rcOriginStage) but not proposers: kept apart so a specialist bullet
-	// never changes which bullet a shared location resolves to in of.
+	// side records the specialists' bullets, which are origins (an
+	// allegation's OriginStage, ordered by rcOriginRank) but not proposers:
+	// kept apart so a specialist bullet never changes which bullet a shared
+	// location resolves to in of.
 	side *rcFinderLedger
 }
 
