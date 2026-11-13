@@ -271,8 +271,8 @@ func rcOriginSorted(set map[string]bool) []string {
 
 // rcRecordProposers sets each allegation's Proposers from the ledger: the
 // finders of its own bullet. rcCountVotes widens them to the vote group.
-// It also records the stages behind the bullet, specialists included, from
-// which rcCountVotes sets OriginStage.
+// It also records the stages behind the bullet, specialists included, and
+// sets OriginStage from them; rcCountVotes widens both to the vote group.
 // Returns how many allegations the ledger knew.
 func rcRecordProposers(res *rcChallengeResult, l *rcFinderLedger) int {
 	if res == nil || l == nil {
@@ -283,6 +283,13 @@ func rcRecordProposers(res *rcChallengeResult, l *rcFinderLedger) int {
 		a := &res.Allegations[i]
 		a.Proposers = l.of(a.Issue)
 		a.stages = l.stagesOf(a.Issue)
+		// Set here as well as in rcCountVotes, which the publish gate skips
+		// when it is off (KAI_REVIEW_PUBLISH_GATE=0): the bullet's own
+		// origin then stands, as its own Proposers do.
+		a.OriginStage = ""
+		if len(a.stages) > 0 {
+			a.OriginStage = a.stages[0]
+		}
 		if len(a.Proposers) > 0 {
 			known++
 		}

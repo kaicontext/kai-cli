@@ -340,3 +340,22 @@ func TestRunTelemetry_JSONShape(t *testing.T) {
 		}
 	}
 }
+
+// With the publish gate off, rcCountVotes never runs: each finding keeps the
+// origin of its own bullet, as it keeps its own Proposers.
+func TestOriginStage_PublishGateOff(t *testing.T) {
+	t.Setenv("KAI_REVIEW_PUBLISH_GATE", "0")
+	res := gateFixture()
+	l := newRcFinderLedger()
+	l.add("a.go:11 — raised three times", rcFinderSweep2)
+	l.add("a.go:11 — the same, reworded", rcFinderSecond)
+	l.specialists().add("a.go:12 — raised once", rcStageSpecContracts)
+	rcRecordProposers(res, l)
+	rcPublishGate(res, gateRepo(), true)
+	want := map[int]string{1: rcFinderSweep2, 2: rcFinderSecond, 3: "", 4: rcStageSpecContracts, 5: "", 6: ""}
+	for _, a := range res.Allegations {
+		if a.OriginStage != want[a.ID] {
+			t.Errorf("allegation %d origin_stage = %q, want %q", a.ID, a.OriginStage, want[a.ID])
+		}
+	}
+}
