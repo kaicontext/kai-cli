@@ -130,13 +130,13 @@ func rcStopSpecialists(runs []rcSpecialistRun) {
 
 // rcAwaitSpecialists waits for every specialist under one shared deadline
 // (rcSecondFinderGrace past the main finder) and returns the bullets that keep
-// the output contract.
-func rcAwaitSpecialists(runs []rcSpecialistRun) []string {
+// the output contract, and which specialists proposed each (keyed by
+// rcFinderKeyOnly), for the finding's origin stage.
+func rcAwaitSpecialists(runs []rcSpecialistRun) (kept []string, by map[string][]string) {
 	if len(runs) == 0 {
-		return nil
+		return nil, nil
 	}
 	deadline := time.After(rcSecondFinderGrace)
-	var kept []string
 	for _, run := range runs {
 		var r rcFinderResult
 		select {
@@ -144,7 +144,7 @@ func rcAwaitSpecialists(runs []rcSpecialistRun) []string {
 		case <-deadline:
 			fmt.Fprintf(os.Stderr, "  specialist %s still running %s after the main finder — continuing without it\n", run.stage, rcSecondFinderGrace)
 			rcStopSpecialists(runs)
-			return kept
+			return kept, by
 		}
 		run.sf.cancel()
 		if r.Err != nil {
@@ -156,10 +156,15 @@ func rcAwaitSpecialists(runs []rcSpecialistRun) []string {
 			run.stage, len(r.Issues), len(good), dropped, r.Elapsed.Round(time.Second))
 		for _, g := range good {
 			kept = append(kept, g)
+			if by == nil {
+				by = map[string][]string{}
+			}
+			key := rcFinderKeyOnly(g)
+			by[key] = append(by[key], run.stage)
 			fmt.Fprintf(os.Stderr, "  specialist %s proposed: %s\n", run.stage, rcOneLine(g, 160))
 		}
 	}
-	return kept
+	return kept, by
 }
 
 // rcSpecialistContractFilter keeps the bullets that name a trigger and cite
@@ -177,12 +182,15 @@ func rcSpecialistContractFilter(issues []string) (kept []string, dropped int) {
 
 // rcWithSpecialists merges the specialists' bullets into the draft the way the
 // second finder's are merged.
-func rcWithSpecialists(raw string, issues []string) string {
+func rcWithSpecialists(raw string, issues []string, by map[string][]string, finders *rcFinderLedger) string {
 	if len(issues) == 0 || !rcUsableCoda(raw) {
 		return raw
 	}
 	before := len(rcIssuesOf(raw))
-	merged := rcDraftWithSweep(raw, issues)
+	merged, matched := rcDraftWithSweepMatched(raw, issues)
+	// Specialists are origins, not proposers: their own ledger, so
+	// Proposers stays the four finders (review_commit_finders.go).
+	finders.specialists().merged(issues, matched, by, rcFinderUnknown)
 	fmt.Fprintf(os.Stderr, "  specialists: %d added to the draft's %d\n", len(rcIssuesOf(merged))-before, before)
 	return merged
 }

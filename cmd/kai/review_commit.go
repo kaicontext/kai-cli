@@ -441,7 +441,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// (review_commit_run.go): what each stage was set to, what answered, and
 	// every failover. The low-risk test is rcLoadProfileForRisk's own.
 	lowRisk := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")) != "" && rcLowRiskLevel(risk.Level)
-	rcRunStart(risk.Level, rcRunProfile(lowRisk), rcRunStageModels(stageModels, reviewCommitFormat == "json"))
+	rcRunStart(risk, rcRunProfile(lowRisk), rcRunStageModels(stageModels, reviewCommitFormat == "json"))
 
 	// The pull request description a person would write, asked for beside the
 	// review (review_commit_description.go); only a bundle carries it.
@@ -656,6 +656,8 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// has only the prose to go on, and it opened two timed-out reviews
 		// with "Nothing jumped out" directly above their own "This review did
 		// not finish" (kai-desktop#304, kai-server#186, 2026-09-08).
+		run := rcRunSnapshot()
+		run.IncompleteStage = rcRunIncompleteStage(reason, fast)
 		out, err := json.MarshalIndent(struct {
 			finding.Finding
 			Review     string      `json:"review,omitempty"`
@@ -682,13 +684,15 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// .kai-review.yaml (score, short or full); kai-server prefers it
 			// to the Atlas setting. Omitted when the file sets none.
 			Detail string `json:"detail,omitempty"`
-			// Run is what the review really ran on: the depth and model set
-			// the server chose, the risk level, each stage's configured and
-			// answering model, every failover and the summarising model
-			// (review_commit_run.go). Taken after the description, the last
-			// model call.
+			// Run is what the review really ran on: the kai version and
+			// run source, the depth and model set the server chose, the risk
+			// level and its reasons, the profile's hash, each stage's
+			// configured and answering model, effort, time, retries and
+			// truncations, every failover, the summarising model, and the
+			// stage an unfinished review stopped in (review_commit_run.go).
+			// Taken after the description, the last model call.
 			Run *rcRunReport `json:"run,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail(), rcRunSnapshot()}, "", "  ")
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail(), run}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}
@@ -1197,7 +1201,8 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		finders.addAll(rcIssuesOf(raw), rcFinderMain)
 	}
 	raw = rcWithSecondFinder(raw, rcAwaitSecondFinder(second), finders)
-	raw = rcWithSpecialists(raw, rcAwaitSpecialists(specialists))
+	specIssues, specBy := rcAwaitSpecialists(specialists)
+	raw = rcWithSpecialists(raw, specIssues, specBy, finders)
 	// Which ISSUES are earlier points is set aside while the bullets are
 	// merged, folded and challenged by their wording (review_commit_earlier.go).
 	raw, earlier := rcTakeEarlierTags(raw)

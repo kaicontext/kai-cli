@@ -92,6 +92,7 @@ func TestReviewRunReport_ReviewAgainstFakeModelServer(t *testing.T) {
 	t.Setenv("KAI_REVIEW_PROFILE", "")
 	t.Setenv("KAI_REVIEW_PROFILE_LOW_RISK", "")
 	t.Setenv("GITHUB_REPOSITORY_FULLNAME", "")
+	t.Setenv(provider.RunSourceEnv, "benchmark")
 	oldKaiDir, oldFormat := kaiDir, reviewCommitFormat
 	kaiDir, reviewCommitFormat = t.TempDir(), "json"
 	t.Cleanup(func() { kaiDir, reviewCommitFormat = oldKaiDir, oldFormat })
@@ -114,6 +115,13 @@ func TestReviewRunReport_ReviewAgainstFakeModelServer(t *testing.T) {
 	}
 	if run.Tier != "standard" || run.SetVersion != 3 || run.Profile != rcProfileNone {
 		t.Errorf("tier=%q set_version=%d profile=%q, want standard, 3, none", run.Tier, run.SetVersion, run.Profile)
+	}
+	if run.KaiVersion != Version || run.Source != "benchmark" || run.ProfileHash != "" || run.IncompleteStage != "" {
+		t.Errorf("kai_version=%q source=%q profile_hash=%q incomplete_stage=%q, want %q, benchmark, none, none",
+			run.KaiVersion, run.Source, run.ProfileHash, run.IncompleteStage, Version)
+	}
+	if st := run.Stages[rcStageQuickDraft]; st == nil || st.Effort != rcEffortOff {
+		t.Errorf("quick_draft = %+v, want effort off (the fast pass asks for none)", st)
 	}
 	for _, stage := range []string{rcStageQuickDraft, rcCostStageDescription} {
 		st := run.Stages[stage]
@@ -175,7 +183,7 @@ func TestReviewRunReport_AgentStageFailoverAndSummary(t *testing.T) {
 	if !provider.IsReasoningModel(reviewModel) {
 		t.Skipf("%s is no longer a reasoning model; the engine's rescue path would not run", reviewModel)
 	}
-	rcRunStart("M", rcProfileStandard, map[string]string{rcStageMain: reviewModel, rcStageFinder2: ""})
+	rcRunStart(rcRisk{Level: "M"}, rcProfileStandard, map[string]string{rcStageMain: reviewModel, rcStageFinder2: ""})
 
 	emptied := false
 	tools := 0
@@ -251,7 +259,7 @@ func TestReviewRunReport_AgentStageFailoverAndSummary(t *testing.T) {
 // A failed call fails its stage, and a stage still running when the review
 // is written did not finish in time for it.
 func TestReviewRunReport_FailedAndUnfinishedStages(t *testing.T) {
-	rcRunStart("", rcProfileNone, map[string]string{rcStageSweep: "m/sweep", rcStageRank: "m/rank", rcStageHumanize: "m/h"})
+	rcRunStart(rcRisk{Level: ""}, rcProfileNone, map[string]string{rcStageSweep: "m/sweep", rcStageRank: "m/rank", rcStageHumanize: "m/h"})
 	f := &fakeModels{reply: func(req provider.Request, _ int) (provider.Response, error) {
 		if req.Model == "m/rank" {
 			return provider.Response{}, errors.New("upstream 500")
@@ -265,7 +273,7 @@ func TestReviewRunReport_FailedAndUnfinishedStages(t *testing.T) {
 	if _, err := rcSend(rcCostStage(context.Background(), rcStageRank), f, provider.Request{Model: "m/rank"}); err == nil {
 		t.Fatal("want the rank call to fail")
 	}
-	rcRun.begin(rcStageHumanize, "m/h") // still running
+	rcRun.begin(rcStageHumanize, "m/h", "") // still running
 
 	run := rcRunSnapshot()
 	want := map[string]string{rcStageSweep: rcRunOK, rcStageRank: rcRunFailed, rcStageHumanize: rcRunFailed}
@@ -288,7 +296,7 @@ func TestReviewRunReport_FailedAndUnfinishedStages(t *testing.T) {
 // A remembered failover repeats on every turn; the report keeps one entry
 // per swap with a count, and the stage counts every call.
 func TestReviewRunReport_RepeatedSwapIsOneEntry(t *testing.T) {
-	rcRunStart("", rcProfileNone, nil)
+	rcRunStart(rcRisk{Level: ""}, rcProfileNone, nil)
 	h := rcRunHooks(rcStageFinder2, agent.Hooks{})
 	h.OnModelSwap("a", "b", agent.ModelSwapEmpty)
 	for i := 0; i < 3; i++ {
@@ -308,7 +316,7 @@ func TestReviewRunReport_RepeatedSwapIsOneEntry(t *testing.T) {
 // The bundle field is additive: an older reader that knows none of it still
 // decodes the rest.
 func TestReviewRunReport_JSONShape(t *testing.T) {
-	rcRunStart("S", rcProfileLowRisk, map[string]string{rcStageMain: "m"})
+	rcRunStart(rcRisk{Level: "S"}, rcProfileLowRisk, map[string]string{rcStageMain: "m"})
 	b, err := json.Marshal(rcRunSnapshot())
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +332,7 @@ func TestReviewRunReport_JSONShape(t *testing.T) {
 // finder's: it runs on that finder's model, so one shared label would mix
 // models in both the cost rows and the report.
 func TestReviewRunReport_FinderConclusionHasItsOwnStage(t *testing.T) {
-	rcRunStart("", rcProfileNone, map[string]string{rcStageConclusion: "m/main", rcStageFinder2 + rcConclusionSuffix: "m/f2"})
+	rcRunStart(rcRisk{Level: ""}, rcProfileNone, map[string]string{rcStageConclusion: "m/main", rcStageFinder2 + rcConclusionSuffix: "m/f2"})
 	f := &fakeModels{reply: func(provider.Request, int) (provider.Response, error) { return rcTextReply("review"), nil }}
 	transcript := []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: "diff"}}}}
 	// A stage set by the caller is replaced by the one the call names.
@@ -348,7 +356,7 @@ func TestReviewRunReport_FinderConclusionHasItsOwnStage(t *testing.T) {
 // and the model asked is reported as a failure instead, so the call is still
 // accounted for. A later summary that works sets summary_model.
 func TestReviewRunReport_FailedSummaryIsNotTheSummaryModel(t *testing.T) {
-	rcRunStart("", rcProfileNone, nil)
+	rcRunStart(rcRisk{Level: ""}, rcProfileNone, nil)
 	var callerSaw []error
 	h := rcRunHooks(rcStageMain, agent.Hooks{OnSummarize: func(_ string, err error) { callerSaw = append(callerSaw, err) }})
 	h.OnSummarize("vendor/summarizer", errors.New("upstream 500"))
