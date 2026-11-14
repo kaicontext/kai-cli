@@ -1879,7 +1879,9 @@ var authStatusCmd = &cobra.Command{
 var usageCmd = &cobra.Command{
 	Use:   "usage",
 	Short: "Show billing usage for the current period",
-	Long: `Show commit usage and billing information for your organization.
+	Long: `Show LLM usage and billing information for your organization, and,
+where the server sends it, what each review depth and the busiest repos
+used of this month's allowance (shares only, never amounts).
 
 Examples:
   kai usage                  # Show usage for current org`,
@@ -19510,18 +19512,22 @@ func runUsage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no remote configured (use 'kai remote set origin <url>')")
 	}
 
-	usage, err := client.GetUsage(client.Tenant)
+	usage, err := fetchUsage(client, client.Tenant)
 	if err != nil {
 		return fmt.Errorf("getting usage: %w", err)
 	}
+	printUsage(os.Stdout, client.Tenant, usage)
+	return nil
+}
 
-	fmt.Println()
-	fmt.Printf("  Org:     %s\n", client.Tenant)
-	fmt.Printf("  Plan:    %s\n", usage.Tier)
-	if usage.Tier == "pro" {
-		fmt.Printf("  Seats:   %d / %d assigned\n", usage.SeatsAssigned, usage.SeatsPurchased)
+func printUsage(w io.Writer, org string, usage *usageView) {
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  Org:     %s\n", org)
+	fmt.Fprintf(w, "  Plan:    %s\n", planLabel(usage))
+	if paidPlan(usage.Tier) || usage.SeatsPurchased > 0 {
+		fmt.Fprintf(w, "  Seats:   %d / %d assigned\n", usage.SeatsAssigned, usage.SeatsPurchased)
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 
 	// The metered resource is the per-user LLM spend cap — both a daily
 	// and a monthly limit; a request is blocked when either is reached.
@@ -19531,9 +19537,9 @@ func runUsage(cmd *cobra.Command, args []string) error {
 	}
 	seatNote := "free limit"
 	if usage.HasSeat {
-		seatNote = "Pro seat"
+		seatNote = seatLabel(usage.Tier)
 	}
-	fmt.Printf("  Today:   $%.2f / $%.2f  %s  %d%%  (%s, resets midnight UTC)\n",
+	fmt.Fprintf(w, "  Today:   $%.2f / $%.2f  %s  %d%%  (%s, resets midnight UTC)\n",
 		float64(usage.DailyCostCents)/100, float64(usage.DailyCapCents)/100,
 		renderUsageBar(dPct, 30), dPct, seatNote)
 
@@ -19541,17 +19547,19 @@ func runUsage(cmd *cobra.Command, args []string) error {
 	if usage.MonthlyCapCents > 0 {
 		mPct = usage.MonthlyCostCents * 100 / usage.MonthlyCapCents
 	}
-	fmt.Printf("  Month:   $%.2f / $%.2f  %s  %d%%  (resets 1st UTC)\n",
+	fmt.Fprintf(w, "  Month:   $%.2f / $%.2f  %s  %d%%  (resets 1st UTC)\n",
 		float64(usage.MonthlyCostCents)/100, float64(usage.MonthlyCapCents)/100,
 		renderUsageBar(mPct, 30), mPct)
 
+	printFreeLines(w, org, usage)
+	printReviewUsage(w, usage)
+
 	if usage.UpgradeURL != nil {
-		fmt.Println()
-		fmt.Printf("  Manage billing & seats: %s\n", *usage.UpgradeURL)
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  Manage billing & seats: %s\n", *usage.UpgradeURL)
 	}
 
-	fmt.Println()
-	return nil
+	fmt.Fprintln(w)
 }
 
 func renderUsageBar(pct, width int) string {
