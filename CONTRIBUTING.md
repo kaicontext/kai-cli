@@ -6,7 +6,7 @@ Have questions? Join us on [Slack](https://join.slack.com/t/kailayer/shared_invi
 
 ## Scope
 
-The Kai CLI is open source under Apache 2.0. This repo (`kaicontext/kai-cli`) contains the CLI. The agent engine ships as two prebuilt private module dependencies (`kai-core` primitives and `kai-engine` agent loop/tools/providers), and the server components live in their own repos. The single `kai` binary you download statically links the CLI and the engine together. The dependency boundary between this repo and the engine modules is checked automatically — see [Engine module boundary](#engine-module-boundary).
+The Kai CLI is licensed under the Business Source License 1.1; see [LICENSE](LICENSE) for the terms. This repo (`kaicontext/kai-cli`) contains the CLI. The agent engine ships as two prebuilt private module dependencies (`kai-core` primitives and `kai-engine` agent loop/tools/providers), and the server components live in their own repos. The single `kai` binary you download statically links the CLI and the engine together. The dependency boundary between this repo and the engine modules is checked automatically — see [Engine module boundary](#engine-module-boundary).
 
 ### What we accept
 
@@ -200,7 +200,7 @@ Added export_statement case with parseReexportSource helper.
 
 ## Developer Certificate of Origin (DCO)
 
-All contributions must be signed off under the [Developer Certificate of Origin](https://developercertificate.org/). This certifies that you have the right to submit the code and that it can be distributed under the Apache 2.0 license.
+All contributions must be signed off under the [Developer Certificate of Origin](https://developercertificate.org/). The sign-off certifies the statements in the DCO text itself. The repository's license is in [LICENSE](LICENSE).
 
 Add a `Signed-off-by` line to your commits:
 

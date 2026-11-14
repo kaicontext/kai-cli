@@ -238,7 +238,8 @@ Each language is validated with end-to-end tests against real open-source projec
 
 ## Architecture
 
-The Kai CLI is open source under Apache 2.0. The core engine (`kai-core`) ships
+The Kai CLI is licensed under the Business Source License 1.1 (see
+[License](#license)). The core engine (`kai-core`) ships
 as a prebuilt module statically linked into the `kai` binary you download; the
 server components are distributed separately. Kai Cloud is the hosted version —
 managed infrastructure on top of the same engine.
@@ -256,9 +257,16 @@ kai push    → atlas.kaicontext.com (Postgres + GCS)
 
 ## License
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+This repository is licensed under the Business Source License 1.1. The
+[LICENSE](LICENSE) file sets these parameters:
 
-See [LICENSE](LICENSE).
+- Licensor: KaiContext, Inc.
+- Additional Use Grant: None.
+- Change Date: 2030-04-21
+- Change License: Apache License, Version 2.0
+
+The LICENSE file notes that the Business Source License "is not an Open Source
+license". Read [LICENSE](LICENSE) for the full terms.
 
 ---
 
