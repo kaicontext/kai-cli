@@ -60,6 +60,7 @@ var (
 	shipServer   bool
 	shipLocal    bool
 	shipClean    bool
+	shipReview   string
 )
 
 var shipCmd = &cobra.Command{
@@ -78,6 +79,10 @@ why, the changes by area, and how it was verified. Without one, the
 description is assembled from the title and the session's commits, and
 lists the changed files with their line counts either way. Re-running on the ship branch commits
 and pushes again; the existing PR updates via GitHub's synchronize.
+
+Review depth: --review <tier> adds a "Kai review: <tier>" line to the
+description, which tells Kai how deep to review this PR (light, standard,
+deep, auto, or skip). Kai's first review reads it when the PR opens.
 
 Branch name: --branch wins. Otherwise the branch is named for the change,
 kai/<slug>-<id>: the slug from --slug, else --title, else the session's
@@ -109,6 +114,7 @@ func init() {
 	shipCmd.Flags().StringVar(&shipBody, "body", "", "PR description, markdown: what the change does and why, the changes by area, how it was verified")
 	shipCmd.Flags().StringVar(&shipBodyFile, "body-file", "", "read the PR description from a file (- for stdin); see --body")
 	shipCmd.Flags().BoolVar(&shipReady, "ready", false, "open the PR ready-for-review (default: draft)")
+	shipCmd.Flags().StringVar(&shipReview, "review", "", "how deep Kai reviews this PR; `tier` is light, standard, deep, auto or skip (writes a \"Kai review: <tier>\" line in the description)")
 	shipCmd.Flags().BoolVar(&shipPush, "push", true, "push the branch (set false to stop after the local commit)")
 	shipCmd.Flags().BoolVar(&shipPR, "pr", true, "open a pull request after pushing")
 	shipCmd.Flags().BoolVar(&shipDryRun, "dry-run", false, "print the plan without changing anything")
@@ -127,6 +133,9 @@ func runShip(cmd *cobra.Command, args []string) error {
 
 	if shipPromote && shipServer {
 		return fmt.Errorf("--promote and --server are mutually exclusive")
+	}
+	if shipReview, err = shipReviewTier(shipReview); err != nil {
+		return err
 	}
 
 	if shipPromote {
@@ -310,7 +319,7 @@ func runShip(cmd *cobra.Command, args []string) error {
 		Body: shipPRBody(shipBodyInput{
 			Branch: branch, SessionID: sessionID, SnapHex: snapHex,
 			Title: title, Authored: authored, Files: stats,
-			KnownIssues: ledgerKnownIssues(),
+			KnownIssues: ledgerKnownIssues(), Review: shipReview,
 		}),
 		Draft: !shipReady,
 	})

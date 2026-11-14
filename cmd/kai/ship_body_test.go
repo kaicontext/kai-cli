@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -310,6 +311,39 @@ func TestShipCommitProse_KeepsHyphenatedProse(t *testing.T) {
 	} {
 		if got := shipCommitProse(body); got != want {
 			t.Errorf("shipCommitProse(%q) = %q, want %q", body, got, want)
+		}
+	}
+}
+
+// --review writes one `Kai review: <tier>` line, on its own line, before the
+// kai-ship marker, in the body both ship paths send. The pattern below is
+// the one kai-server reads it with (task 14).
+func TestShipPRBody_ReviewLine(t *testing.T) {
+	serverLine := regexp.MustCompile(`(?im)^\s*kai review:\s*(light|standard|deep|auto|skip)\s*$`)
+	for _, authored := range []string{"", "## What this does\n\nAdds a thing."} {
+		body := shipPRBody(shipBodyInput{Branch: "kai/x-1", Title: "Add a thing", Authored: authored, Review: "deep"})
+		m := serverLine.FindAllStringSubmatch(body, -1)
+		if len(m) != 1 || m[0][1] != "deep" {
+			t.Fatalf("authored=%q: want one Deep line the server reads, got %v in:\n%s", authored, m, body)
+		}
+		if !strings.HasSuffix(body, "\nKai review: deep\n\n<!-- kai-ship -->\n") {
+			t.Errorf("the line must sit just before the kai-ship marker:\n%s", body)
+		}
+	}
+	if body := shipPRBody(shipBodyInput{Branch: "kai/x-1", Title: "Add a thing"}); strings.Contains(strings.ToLower(body), "kai review:") {
+		t.Errorf("no --review, no line:\n%s", body)
+	}
+}
+
+func TestShipReviewTier(t *testing.T) {
+	for in, want := range map[string]string{"": "", "deep": "deep", " Standard ": "standard", "LIGHT": "light", "auto": "auto", "skip": "skip"} {
+		if got, err := shipReviewTier(in); err != nil || got != want {
+			t.Errorf("shipReviewTier(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"deeper", "fast", "grounded", "kai review: deep"} {
+		if _, err := shipReviewTier(bad); err == nil || !strings.Contains(err.Error(), "--review") {
+			t.Errorf("shipReviewTier(%q) = %v; want an error naming --review", bad, err)
 		}
 	}
 }
