@@ -15,6 +15,11 @@ neither a pass nor a fail. An alert fires only for a sustained regression: a
 case that passed in at least three of the five runs before, and has now
 failed (not merely been unfinished) twice in a row. A single failure is noise;
 the model varies between runs.
+
+A run that measured nothing is neither: if fewer than half the cases finished,
+the reviewer was unreachable or out of budget, and "0/0 passed, no sustained
+regression" would read as healthy. The report says so loudly and writes the
+reason to --out-broken, which the workflow turns into a failed job.
 """
 import argparse
 import datetime as dt
@@ -86,6 +91,16 @@ def alerts(history, case_ids):
     return out
 
 
+def broken_reason(t):
+    """Why a run measured too little to mean anything, or "" if it did not."""
+    if t["cases"] == 0:
+        return "the corpus has no cases"
+    if t["finished"] * 2 < t["cases"]:
+        return (f"only {t['finished']} of {t['cases']} reviews finished, so this run says nothing "
+                "about the reviewer (out of usage budget, server unreachable, or reviews crashing)")
+    return ""
+
+
 def fmt_totals(t):
     return (f"{t['passed']}/{t['finished']} passed · known bugs {t['found']}/{t['expected']} · "
             f"leaked {t['leaked']}/{t['forbidden']} · {t['published']} published")
@@ -119,6 +134,7 @@ def main():
     ap.add_argument("--out-body", default="")
     ap.add_argument("--out-comment", required=True)
     ap.add_argument("--out-alert", default="")
+    ap.add_argument("--out-broken", default="", help="written when the run measured too little to trust")
     a = ap.parse_args()
 
     cases = json.load(open(a.cases))["cases"]
@@ -144,8 +160,16 @@ def main():
     # The run's own comment: this run in full, and the baseline beside it.
     lines = [f"### Review regressions — {a.ref} @ `{a.sha[:12]}` ({now})", "",
              f"**{fmt_totals(t)}** · [run]({a.run_url}) · per-case reviews and logs are the run's artifact", ""]
-    if a.baseline_run:
-        bt = totals(load_run(a.baseline_run, cases))
+    bt = totals(load_run(a.baseline_run, cases)) if a.baseline_run else None
+    broken = []
+    if broken_reason(t):
+        broken.append(f"{a.ref}: {broken_reason(t)}")
+    if bt and broken_reason(bt):
+        broken.append(f"{a.baseline_ref or 'baseline'}: {broken_reason(bt)}")
+    if broken:
+        lines += ["⚠️ **This run is not a measurement.** " + "; ".join(broken) +
+                  ". Fix that first; the counts below are not evidence either way.", ""]
+    if bt:
         lines += ["| | " + (a.baseline_ref or "baseline") + " | " + a.ref + " |", "|---|---|---|",
                   f"| Cases passed | {bt['passed']}/{bt['finished']} | {t['passed']}/{t['finished']} |",
                   f"| Known bugs found | {bt['found']}/{bt['expected']} | {t['found']}/{t['expected']} |",
@@ -171,7 +195,8 @@ def main():
             "",
             f"**Latest ({history[-1]['date'] if history else now}):** {fmt_totals(last)}",
             "",
-            ("🚨 **Sustained regression:** " + ", ".join(firing)) if firing else "No sustained regression.",
+            ("⚠️ **Latest run is not a measurement:** " + "; ".join(broken)) if broken else
+            (("🚨 **Sustained regression:** " + ", ".join(firing)) if firing else "No sustained regression."),
             "",
             "Case columns, in order: " + ", ".join(f"`{cid}`" for cid in ids) + ". ✅ pass · ❌ fail · ⚪ review did not finish.",
             "",
@@ -185,6 +210,8 @@ def main():
 
     if a.out_alert:
         open(a.out_alert, "w").write(",".join(firing))
+    if a.out_broken:
+        open(a.out_broken, "w").write("; ".join(broken))
     return 0
 
 

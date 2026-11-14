@@ -157,7 +157,7 @@ jobs:
           fi
           args=(--run "$(run_dir "$RUNNER_TEMP/rr")" --cases "$REGRESSION_CASES" --ref "$LABEL" --sha "$SHA"
                 --run-url "$RUN_URL" --out-comment "$RUNNER_TEMP/comment.md"
-                --record --issue-body "$RUNNER_TEMP/old-body.md" --out-body "$RUNNER_TEMP/body.md" --out-alert "$RUNNER_TEMP/alert.txt")
+                --record --issue-body "$RUNNER_TEMP/old-body.md" --out-body "$RUNNER_TEMP/body.md" --out-alert "$RUNNER_TEMP/alert.txt" --out-broken "$RUNNER_TEMP/broken.txt")
           if [ -n "$BASELINE_REF" ]; then
             args+=(--baseline-run "$(run_dir "$RUNNER_TEMP/rr-base")" --baseline-ref "$BASELINE_REF")
           fi
@@ -179,7 +179,7 @@ jobs:
           cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
           # A comment only when there is something to act on, so the issue's
           # notifications stay worth reading.
-          if [ -s "$RUNNER_TEMP/alert.txt" ]; then
+          if [ -s "$RUNNER_TEMP/alert.txt" ] || [ -s "$RUNNER_TEMP/broken.txt" ]; then
             gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/comment.md"
           fi
 
@@ -198,3 +198,15 @@ jobs:
           GH_TOKEN: ${{ steps.server-token.outputs.token }}
           PIN_PR: ${{ inputs.pin_pr }}
         run: gh pr comment "$PIN_PR" --repo kaicontext/kai-server --body-file "$RUNNER_TEMP/comment.md"
+
+      # Last, so the dashboard and the pin PR still get their comment first. A
+      # run where most reviews never finished (usage budget gone, server down)
+      # measured nothing; it used to end green as "0/0 passed, no sustained
+      # regression" and hid a ten-day outage.
+      - name: Fail when the run measured nothing
+        if: ${{ always() }}
+        run: |
+          if [ -s "$RUNNER_TEMP/broken.txt" ]; then
+            echo "::error::review-regressions measured nothing: $(cat "$RUNNER_TEMP/broken.txt")"
+            exit 1
+          fi
