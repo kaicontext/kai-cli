@@ -183,6 +183,7 @@ func runShipServer(cwd, branch, sessionID, authored string) error {
 			Commits:     shipSessionCommits(cwd),
 			Files:       stats,
 			KnownIssues: ledgerKnownIssues(),
+			Review:      shipReview,
 		}),
 		Ready: shipReady,
 		Files: files,

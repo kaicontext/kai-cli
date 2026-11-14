@@ -62,6 +62,25 @@ type shipBodyInput struct {
 	Files    []shipFileStat
 	// KnownIssues is the review-ledger section, already rendered.
 	KnownIssues string
+	// Review is --review: the depth Kai reviews this PR at ("" for none).
+	Review string
+}
+
+// shipReviewTiers are the depths a `Kai review:` line can name.
+var shipReviewTiers = []string{"light", "standard", "deep", "auto", "skip"}
+
+// shipReviewTier checks --review and returns it in lower case; "" stays "".
+func shipReviewTier(v string) (string, error) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return "", nil
+	}
+	for _, t := range shipReviewTiers {
+		if v == t {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("--review %q: want one of %s", v, strings.Join(shipReviewTiers, ", "))
 }
 
 // shipAuthoredBody reads the description the caller supplied: --body as
@@ -88,7 +107,8 @@ func shipAuthoredBody(body, bodyFile string, stdin io.Reader) (string, error) {
 
 // shipPRBody composes the description. The opening is the authored text or,
 // without one, a summary assembled from the title and commits; then the
-// files with their line counts; then the provenance, collapsed.
+// files with their line counts; then the provenance, collapsed; then the
+// `Kai review:` line when --review was given.
 func shipPRBody(in shipBodyInput) string {
 	var b strings.Builder
 	b.WriteString(shipSummaryMarker + "\n")
@@ -124,6 +144,11 @@ func shipPRBody(in shipBodyInput) string {
 	b.WriteString("\n</details>\n")
 	if in.KnownIssues != "" {
 		b.WriteString(in.KnownIssues)
+	}
+	// Kai's server reads this line when the PR opens and reviews at that
+	// depth; a server that doesn't know it ignores it.
+	if in.Review != "" {
+		fmt.Fprintf(&b, "\nKai review: %s\n", in.Review)
 	}
 	b.WriteString("\n<!-- kai-ship -->\n")
 	return b.String()
