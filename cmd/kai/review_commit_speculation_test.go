@@ -33,6 +33,11 @@ var rcRealBenchmarkIssues = []string{
 }
 
 func TestSpeculativePhraseCatchesTheBenchmarkCases(t *testing.T) {
+	// Default (flag-off) behaviour: the full phrase list drops both benchmark
+	// cases. Pin the flag off so a flag-on A/B run that exports it does not
+	// narrow the list here; the narrowing is covered by
+	// TestSpeculativeDropNarrowsUnderFlag.
+	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "")
 	for _, it := range rcSpeculativeBenchmarkIssues {
 		if _, ok := rcSpeculativePhrase(it); !ok {
 			t.Errorf("not recognised as speculative: %s", it)
@@ -49,6 +54,7 @@ func TestSpeculativePhraseLeavesRealDefectsAlone(t *testing.T) {
 }
 
 func TestSpeculativeIssuesLeaveTheDraftBeforeTheGate(t *testing.T) {
+	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "") // default behaviour; see note above
 	draft := rcTestReview(rcSpeculativeBenchmarkIssues[0], rcRealBenchmarkIssues[0]) +
 		"DECISIONS:\n- a future change to billing is the author's call\n"
 	out, dropped := rcWithoutSpeculativeIssues(draft)
@@ -77,6 +83,7 @@ func TestSpeculativeIssuesLeaveTheDraftBeforeTheGate(t *testing.T) {
 // Speculation never reaches the challenger, and never the published review.
 // A draft whose only issues are speculative has nothing left to challenge.
 func TestSpeculativeIssuesAreNeverPublished(t *testing.T) {
+	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "") // default behaviour; see note above
 	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
 		t.Fatal("the gate was asked to check a speculative allegation")
 		return provider.Response{}, nil
@@ -101,6 +108,7 @@ func TestSpeculativeIssuesAreNeverPublished(t *testing.T) {
 // The draft was written about its speculative issues: prose, SUMMARY and
 // score. Once they are gone none of that may be published.
 func TestAllSpeculativeDraftPublishesNoTraceOfTheRefutedConcerns(t *testing.T) {
+	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "") // default behaviour; see note above
 	p := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
 		t.Fatal("the gate was called")
 		return provider.Response{}, nil
@@ -129,6 +137,7 @@ func TestAllSpeculativeDraftPublishesNoTraceOfTheRefutedConcerns(t *testing.T) {
 // A draft the reviewer scored 5 over speculative concerns is not published
 // as 5 either: nothing re-examined the change once they were gone.
 func TestAllSpeculativeDraftScoredFiveIsPublishedAsFour(t *testing.T) {
+	t.Setenv("KAI_REVIEW_LATENT_DEFECTS", "") // default behaviour; see note above
 	draft := strings.Replace(rcTestReview(rcSpeculativeBenchmarkIssues[0]), "MERGE_READY: 3", "MERGE_READY: 5", 1)
 	out, spec := rcWithoutSpeculativeIssues(draft)
 	review, ok := rcReviewWithoutSpeculation(out, spec)
