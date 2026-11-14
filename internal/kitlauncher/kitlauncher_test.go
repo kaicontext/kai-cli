@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -97,6 +98,15 @@ func TestAssetName(t *testing.T) {
 
 // --- resolveKitPath --------------------------------------------------------
 
+// skipWithoutExecBits skips tests of the not-executable path on Windows,
+// where files have no execute bits to clear (see exec_windows_test.go).
+func skipWithoutExecBits(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no execute bits")
+	}
+}
+
 func writeExecutable(t *testing.T, path string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -157,6 +167,7 @@ func TestResolveKitPath_ManagedTakesPrecedenceOverPath(t *testing.T) {
 }
 
 func TestResolveKitPath_NotExecutable(t *testing.T) {
+	skipWithoutExecBits(t)
 	l := testLauncher(t)
 	managed := filepath.Join(l.BinDir, "kit")
 	if err := os.WriteFile(managed, []byte("kit"), 0o644); err != nil {
@@ -466,6 +477,7 @@ func TestRun_InstallsWhenMissing(t *testing.T) {
 }
 
 func TestRun_NotExecutableSurfaced(t *testing.T) {
+	skipWithoutExecBits(t)
 	l := testLauncher(t)
 	// Present but not executable → needs repair, must not silently reinstall.
 	if err := os.WriteFile(filepath.Join(l.BinDir, "kit"), []byte("kit"), 0o644); err != nil {
