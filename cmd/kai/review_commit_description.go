@@ -29,9 +29,11 @@ import (
 // rcDescriptionMaxBytes bounds the description the bundle carries.
 const rcDescriptionMaxBytes = 4000
 
-// rcDescriptionMaxTokens is the call's output budget: room for a 4000-byte
-// description with margin, since a cut-off one is thrown away.
-const rcDescriptionMaxTokens = 2500
+// rcDescriptionMaxTokens is the call's output budget, thinking included:
+// claude-sonnet-5-5 thinks by default even with no reasoning requested, and
+// on a large diff that alone can pass 2000 tokens (see rcFastMaxTokens). Room
+// for that and a 4000-byte description; a cut-off one is thrown away.
+const rcDescriptionMaxTokens = 8000
 
 const rcDescriptionSystem = `You write the description for a pull request, the way its author would when opening it. You are given the commit messages, whatever description the author already wrote, and the diff.
 
