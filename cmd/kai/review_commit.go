@@ -1342,6 +1342,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// Then only what is in the change and, when both sweeps read the
 		// diff, what more than one proposal raised (review_commit_publish.go).
 		rcRecordProposers(res, finders)
+		rcRecordSeverity(res, earlier)
 		rcPublishGate(res, rcRepoFrom(publicationCtx), ranked && sw.Passes >= 2)
 		// Then the confirmed findings, reworded for the person reading the PR
 		// (review_commit_humanize.go). Wording only: no verdict changes. With

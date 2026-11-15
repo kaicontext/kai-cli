@@ -282,3 +282,31 @@ func TestANamedIssueWithNoDeclarationStaysUnlocated(t *testing.T) {
 		t.Errorf("got %q, want it unchanged", got)
 	}
 }
+
+// The selection records what it did with each confirmed defect, and the
+// finders' severity tags reach the allegations, so a benchmark can slice what
+// the cap and the gate cut by severity.
+func TestSelectionRankAndSeverityAreRecorded(t *testing.T) {
+	res := &rcChallengeResult{Allegations: []rcAllegationResult{
+		{ID: 1, Issue: "a.go:10 — first defect", Status: rcStatusSupported},
+		{ID: 2, Issue: "b.go:20 — second defect", Status: rcStatusSupported},
+		{ID: 3, Issue: "c.go:30 — third defect", Status: rcStatusSupported},
+		{ID: 4, Issue: "nit: d.go:40 — small thing", Status: rcStatusSupported},
+		{ID: 5, Issue: "e.go:50 — never listed", Status: rcStatusSupported},
+	}}
+	rcMarkRank(res, rcRankAnswer{Publish: []int{1, 2}, Minor: []int{3}, Skip: map[int]string{4: "nit"}}, 1)
+	want := map[int]string{1: "publish", 2: "overflow", 3: "minor", 4: "skip", 5: "unlisted"}
+	for _, a := range res.Allegations {
+		if a.Rank != want[a.ID] {
+			t.Errorf("allegation %d rank = %q, want %q", a.ID, a.Rank, want[a.ID])
+		}
+	}
+	tags := map[string]string{}
+	rcRememberTags(tags, "issues", "- a.go:10 — first defect (severity: high)", "(severity: high)")
+	rcRememberTags(tags, "issues", "- b.go:20 — second defect (severity: low)", "(severity: low)")
+	rcRecordSeverity(res, tags)
+	got := []string{res.Allegations[0].Severity, res.Allegations[1].Severity, res.Allegations[2].Severity, res.Allegations[3].Severity}
+	if got[0] != "high" || got[1] != "low" || got[2] != "" || got[3] != "" {
+		t.Errorf("severities = %q, want [high low  ] (none for untagged or nit)", got)
+	}
+}
