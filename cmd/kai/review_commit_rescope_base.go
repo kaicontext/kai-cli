@@ -330,3 +330,12 @@ func rcGitUnquote(p string) string {
 	}
 	return p
 }
+
+// rcPRFileCount is how many files the pull request has, as rcReReviewFocus
+// counts them (rcPRFiles).
+func rcPRFileCount(prior *rcPrior, changed []string) int {
+	if prior == nil {
+		return len(changed)
+	}
+	return len(rcPRFiles(prior.Head, changed))
+}

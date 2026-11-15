@@ -968,7 +968,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 			user.WriteString(rcReCheckBlock(prior, focus, maxTurns))
 			fmt.Fprintf(os.Stderr, "  re-review: nothing the pull request changes differs since %s; re-checking earlier points only (%d turns)\n", rcShort(prior.Head), maxTurns)
 		} else {
-			user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), maxTurns))
+			user.WriteString(rcReReviewFocusBlock(prior, focus, rcPRFileCount(prior, changed), maxTurns))
 		}
 		user.WriteString(rcBaseMovedBlock(prior))
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
