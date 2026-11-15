@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -112,5 +115,44 @@ func TestPublishGateSwitchOff(t *testing.T) {
 		if a.Status != gateFixture().Allegations[i].Status || a.Votes != 0 {
 			t.Errorf("gate off changed %d: %+v", a.ID, a)
 		}
+	}
+}
+
+// The cap runs before the gate, so a defect it cut used to stay cut even when
+// the gate then freed a slot. With the refill on, the cut ones take the freed
+// slots in the selection's order, when they pass the same gate.
+func TestRefillGivesGateFreedSlotsToWhatTheCapCut(t *testing.T) {
+	mk := func() *rcChallengeResult {
+		var al []rcAllegationResult
+		for i := 1; i <= 6; i++ {
+			al = append(al, rcAllegationResult{ID: i, Issue: fmt.Sprintf("a.go:%d — defect %d", i*100, i), Status: rcStatusSupported, Reason: "confirmed"})
+		}
+		res := &rcChallengeResult{Allegations: al}
+		rcMarkRank(res, rcRankAnswer{Publish: []int{1, 2, 3, 4, 5, 6}}, 1)
+		rcApplyRank(res, rcRankAnswer{Publish: []int{1, 2, 3, 4, 5, 6}}, 1)
+		return res
+	}
+	// Defects 2 and 3 sit far from the change; 5 and 6 (cut by the cap) are near it, 4 is near too.
+	repo := &rcRepo{changed: map[string][][2]int{"a.go": {{100, 100}, {400, 400}, {500, 500}, {600, 600}}}}
+	published := func(res *rcChallengeResult) []int {
+		var ids []int
+		for _, a := range res.Allegations {
+			if a.Status == rcStatusSupported {
+				ids = append(ids, a.ID)
+			}
+		}
+		sort.Ints(ids)
+		return ids
+	}
+	res := mk()
+	rcPublishGate(res, repo, false)
+	if got := published(res); !reflect.DeepEqual(got, []int{1, 4}) {
+		t.Fatalf("without the refill, published %v, want [1 4]", got)
+	}
+	t.Setenv("KAI_REVIEW_REFILL", "1")
+	res = mk()
+	rcPublishGate(res, repo, false)
+	if got := published(res); !reflect.DeepEqual(got, []int{1, 4, 5, 6}) {
+		t.Errorf("with the refill, published %v, want [1 4 5 6]: two slots were freed, the two cut defects take them", got)
 	}
 }

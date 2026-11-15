@@ -255,6 +255,12 @@ type rcAllegationResult struct {
 	// benchmark can measure what the cap and the gate cut by severity.
 	Severity string `json:"severity,omitempty"`
 	Rank     string `json:"rank,omitempty"`
+	// rankPos is the allegation's place in the selection's answer (publish
+	// list, then minor list); keptReason is the check's reason, which the
+	// selection's reason replaces when it leaves the allegation out. Both
+	// let the refill (rcRefillFromCap) bring a capped allegation back.
+	rankPos    int
+	keptReason string
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
 	unchecked bool
