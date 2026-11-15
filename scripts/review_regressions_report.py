@@ -184,6 +184,16 @@ def main():
 
     if a.out_body:
         last = history[-1]["totals"] if history else t
+        # Both can hold at once: a run can be too thin to trust while the stored
+        # history still shows a sustained regression, and the dashboard must not
+        # go quiet about that one (the per-run comment already says both).
+        status_lines = []
+        if broken:
+            status_lines.append("⚠️ **Latest run is not a measurement:** " + "; ".join(broken))
+        if firing:
+            status_lines.append("🚨 **Sustained regression:** " + ", ".join(firing))
+        if not status_lines:
+            status_lines.append("No sustained regression.")
         trend = ["| When | Ref | Passed | Known bugs | Leaked | Published | Cases |", "|---|---|---|---|---|---|---|"]
         for h in reversed(history[-14:]):
             ht = h["totals"]
@@ -195,8 +205,7 @@ def main():
             "",
             f"**Latest ({history[-1]['date'] if history else now}):** {fmt_totals(last)}",
             "",
-            ("⚠️ **Latest run is not a measurement:** " + "; ".join(broken)) if broken else
-            (("🚨 **Sustained regression:** " + ", ".join(firing)) if firing else "No sustained regression."),
+            "\n\n".join(status_lines),
             "",
             "Case columns, in order: " + ", ".join(f"`{cid}`" for cid in ids) + ". ✅ pass · ❌ fail · ⚪ review did not finish.",
             "",
