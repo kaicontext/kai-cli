@@ -410,7 +410,7 @@ var rcSinceDiff = func(head string, focus []string) string {
 	if head == "" || len(focus) == 0 {
 		return ""
 	}
-	args := append([]string{"--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", head, "HEAD", "--"}, focus...)
+	args := append([]string{"-c", "core.quotePath=false", "--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", head, "HEAD", "--"}, focus...)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -422,29 +422,43 @@ var rcSinceDiff = func(head string, focus []string) string {
 	if err := cmd.Start(); err != nil {
 		return ""
 	}
-	out, _ := io.ReadAll(io.LimitReader(stdout, 4<<20))
+	out, _ := io.ReadAll(io.LimitReader(stdout, rcSinceDiffLimit))
+	// At the cap git may be blocked writing the rest: stop it rather than
+	// wait for the deadline. What was read is used.
+	cancel()
 	_ = cmd.Wait()
 	return string(out)
 }
+
+// rcSinceDiffLimit caps the since-diff read; tests lower it.
+var rcSinceDiffLimit int64 = 4 << 20
 
 // rcDiffFiles walks a diff and calls fn for each line with the file it belongs
 // to (the new path; the old one for a deleted file).
 func rcDiffFiles(diff string, fn func(file, line string)) {
 	file, oldFile := "", ""
+	// "---"/"+++" are header lines only before a file's first "@@"; in the
+	// body they are a removed "-- x" or an added "++ x".
+	inBody := false
 	for _, line := range strings.Split(diff, "\n") {
-		switch {
-		case strings.HasPrefix(line, "diff --git "):
-			file, oldFile = "", ""
+		if strings.HasPrefix(line, "diff --git ") {
+			file, oldFile, inBody = "", "", false
 			continue
-		case strings.HasPrefix(line, "--- "):
-			oldFile = strings.TrimPrefix(strings.TrimPrefix(line, "--- "), "a/")
-			continue
-		case strings.HasPrefix(line, "+++ "):
-			file = strings.TrimPrefix(strings.TrimPrefix(line, "+++ "), "b/")
-			if file == "/dev/null" {
-				file = oldFile
+		}
+		if !inBody {
+			switch {
+			case strings.HasPrefix(line, "--- "):
+				oldFile = strings.TrimPrefix(strings.TrimPrefix(line, "--- "), "a/")
+				continue
+			case strings.HasPrefix(line, "+++ "):
+				file = strings.TrimPrefix(strings.TrimPrefix(line, "+++ "), "b/")
+				if file == "/dev/null" {
+					file = oldFile
+				}
+				continue
+			case strings.HasPrefix(line, "@@"):
+				inBody = true
 			}
-			continue
 		}
 		if file != "" && file != "/dev/null" {
 			fn(file, line)

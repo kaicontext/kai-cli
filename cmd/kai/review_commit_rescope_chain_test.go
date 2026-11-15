@@ -394,3 +394,65 @@ func TestReReviewChain_OnlyCodeChangesFallBack(t *testing.T) {
 		t.Fatal("a comment-only change counted as code")
 	}
 }
+
+// In a diff body "--- x" is a removed "-- x" and "+++ x" an added "++ x":
+// part of the file's change, not a new file header.
+func TestDiffFiles_HeaderLikeBodyLines(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/q.sql b/q.sql",
+		"--- a/q.sql",
+		"+++ b/q.sql",
+		"@@ -3 +3 @@",
+		"--- old note",
+		"+++ counter",
+		"diff --git a/r.sql b/r.sql",
+		"--- a/r.sql",
+		"+++ b/r.sql",
+		"@@ -1 +1 @@",
+		"+select 1;",
+	}, "\n")
+	got := map[string][]string{}
+	rcDiffFiles(diff, func(file, line string) { got[file] = append(got[file], line) })
+	want := map[string][]string{
+		"q.sql": {"@@ -3 +3 @@", "--- old note", "+++ counter"},
+		"r.sql": {"@@ -1 +1 @@", "+select 1;"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("lines by file = %q\nwant %q", got, want)
+	}
+}
+
+// Over the limit, the since-diff stops git rather than waiting on it.
+func TestSinceDiff_OverLimitReturnsAtOnce(t *testing.T) {
+	run, write := gitRepo(t)
+	write("big.txt", "x\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	write("big.txt", strings.Repeat("a line of the big change\n", 40000))
+	run("commit", "-qam", "big")
+	old := rcSinceDiffLimit
+	defer func() { rcSinceDiffLimit = old }()
+	rcSinceDiffLimit = 1024
+	start := time.Now()
+	if out := rcSinceDiff("HEAD~1", []string{"big.txt"}); len(out) == 0 || len(out) > 1024 {
+		t.Fatalf("got %d bytes, want a capped, non-empty diff", len(out))
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %s: waited on a blocked git", d)
+	}
+}
+
+// A non-ASCII focus file's changed functions are keyed by its real name, so
+// they match the focus.
+func TestSinceDiff_NonASCIIName(t *testing.T) {
+	run, write := gitRepo(t)
+	write("café.go", "package c\n\nfunc Brew() int { return 1 }\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	write("café.go", "package c\n\nfunc Brew() int { return 2 }\n")
+	run("commit", "-qam", "change")
+	syms := rcSinceSymbols(rcSinceDiff("HEAD~1", []string{"café.go"}))
+	if got := syms["café.go"]; len(got) != 1 || got[0].Name != "Brew" {
+		t.Fatalf("symbols = %+v, want Brew under café.go", syms)
+	}
+}
