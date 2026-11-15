@@ -409,7 +409,7 @@ func rcReReviewChainBlock(chain []rcChained) string {
 
 // rcSinceDiff is the zero-context diff of the focus files between the previous
 // review's commit and HEAD; "" when git cannot produce it. Tests replace it.
-var rcSinceDiff = func(head string, focus []string) string {
+var rcSinceDiff = func(head, root string, focus []string) string {
 	if head == "" || len(focus) == 0 {
 		return ""
 	}
@@ -420,7 +420,7 @@ var rcSinceDiff = func(head string, focus []string) string {
 	// them. If the replay is not possible (a conflict, an older git), the
 	// commit-to-commit diff stands.
 	from := head
-	if tree := rcReplayOnNewBase(head); tree != "" {
+	if tree := rcReplayOnNewBase(head, root); tree != "" {
 		from = tree
 	}
 	paths := make([]string, len(focus))
@@ -432,6 +432,11 @@ var rcSinceDiff = func(head string, focus []string) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.WaitDelay = 2 * time.Second
+	// The focus paths are relative to the repository root; as pathspecs they
+	// are read relative to the working directory, which may be below it.
+	if root != "" {
+		cmd.Dir = root
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return ""
@@ -451,7 +456,7 @@ var rcSinceDiff = func(head string, focus []string) string {
 // base HEAD sits on, when the base moved since head; "" when it did not, the
 // base is unknown, or the replay conflicts. git merge-tree --write-tree
 // writes objects only: no ref, index or working-tree change.
-func rcReplayOnNewBase(head string) string {
+func rcReplayOnNewBase(head, root string) string {
 	if strings.TrimSpace(reviewCommitBase) == "" {
 		return ""
 	}
@@ -463,6 +468,9 @@ func rcReplayOnNewBase(head string) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "merge-tree", "--write-tree", "--no-messages", newBase, head)
 	cmd.WaitDelay = 2 * time.Second
+	if root != "" {
+		cmd.Dir = root
+	}
 	out, err := cmd.Output()
 	if err != nil { // exit 1 is a conflict; anything else, no replay
 		return ""
@@ -872,7 +880,7 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 		real[i] = rcGitUnquote(f)
 	}
 	focus = real
-	diff := rcSinceDiff(prior.Head, focus)
+	diff := rcSinceDiff(prior.Head, root, focus)
 	in := rcChainInputs{Symbols: rcSinceSymbols(diff), Keys: rcResolveKeys(rcSinceKeys(diff), root), Code: rcSinceCode(diff)}
 	deadline := time.Now().Add(rcChainBudget)
 	var g rcChainGraph = rcGrepFallback{root: root, deadline: deadline}

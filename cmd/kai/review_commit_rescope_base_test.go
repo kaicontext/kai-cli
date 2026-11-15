@@ -404,3 +404,37 @@ func TestReReviewFocus_QuotedAndRenamedPaths(t *testing.T) {
 		t.Fatalf("focus = %q, want café.go", f)
 	}
 }
+
+// A rename after the previous review shows as two paths (old and new) but is
+// one file of the pull request: it neither fills the focus on its own nor
+// reads as more files than the pull request has.
+func TestReReviewFocus_RenameCountsOnce(t *testing.T) {
+	run, write := gitRepo(t)
+	body := strings.Repeat("line that stays the same\n", 30) // big enough for git to pair a rename
+	for _, f := range []string{"a.go", "b.go"} {
+		write(f, f+"\n"+body)
+	}
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	run("checkout", "-q", "-b", "pr")
+	write("a.go", "a2\n"+body)
+	write("b.go", "b2\n"+body)
+	run("commit", "-qam", "pr")
+	reviewed := run("rev-parse", "HEAD")
+	run("mv", "a.go", "a_renamed.go") // the only edit since the review
+	run("commit", "-qm", "rename")
+	old := reviewCommitBase
+	defer func() { reviewCommitBase = old }()
+	reviewCommitBase = "main"
+	t.Setenv("KAI_REVIEW_RESCOPE", "")
+	_, _, files := rcCommitDiffStat("main", "HEAD")
+	changed := rcPathsOf(files)
+	prior := &rcPrior{Head: reviewed}
+	f := rcReReviewFocus(prior, changed, rcGitPRChangedSince)
+	if f == nil {
+		t.Fatalf("a rename alone made the focus the whole change (changed %q)", changed)
+	}
+	if n := rcPRFileCount(prior, changed); len(f) > n {
+		t.Fatalf("focus %q is more files than the pull request's %d", f, n)
+	}
+}

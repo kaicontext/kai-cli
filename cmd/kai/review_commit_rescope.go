@@ -98,7 +98,9 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 	}
 	// A re-check stays a re-check even when the earlier points name every
 	// file; otherwise a focus that is the whole change is the whole change.
-	if !unchanged && len(focus) >= len(changed) {
+	// Counted like the focus, through spell: a rename is both its paths in
+	// each, where changed (from --numstat) lists it once.
+	if !unchanged && len(focus) >= len(spell) {
 		return nil
 	}
 	out := make([]string, 0, len(focus)) // empty, not nil, when only re-checking

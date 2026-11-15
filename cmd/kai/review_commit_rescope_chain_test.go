@@ -444,7 +444,7 @@ func TestSinceDiff_OverLimitReturnsAtOnce(t *testing.T) {
 	defer func() { rcSinceDiffLimit = old }()
 	rcSinceDiffLimit = 1024
 	start := time.Now()
-	if out := rcSinceDiff("HEAD~1", []string{"big.txt"}); len(out) == 0 || len(out) > 1024 {
+	if out := rcSinceDiff("HEAD~1", "", []string{"big.txt"}); len(out) == 0 || len(out) > 1024 {
 		t.Fatalf("got %d bytes, want a capped, non-empty diff", len(out))
 	}
 	if d := time.Since(start); d > 5*time.Second {
@@ -461,7 +461,7 @@ func TestSinceDiff_NonASCIIName(t *testing.T) {
 	run("commit", "-qm", "base")
 	write("café.go", "package c\n\nfunc Brew() int { return 2 }\n")
 	run("commit", "-qam", "change")
-	syms := rcSinceSymbols(rcSinceDiff("HEAD~1", []string{"café.go"}))
+	syms := rcSinceSymbols(rcSinceDiff("HEAD~1", "", []string{"café.go"}))
 	if got := syms["café.go"]; len(got) != 1 || got[0].Name != "Brew" {
 		t.Fatalf("symbols = %+v, want Brew under café.go", syms)
 	}
@@ -562,7 +562,7 @@ func TestSinceDiff_BaseMovedOwnChangesOnly(t *testing.T) {
 	old := reviewCommitBase
 	defer func() { reviewCommitBase = old }()
 	reviewCommitBase = "main"
-	got := rcSinceSymbols(rcSinceDiff(reviewed, []string{"util.go"}))["util.go"]
+	got := rcSinceSymbols(rcSinceDiff(reviewed, "", []string{"util.go"}))["util.go"]
 	if len(got) != 1 || got[0].Name != "Other" {
 		t.Fatalf("symbols = %+v, want Other only", got)
 	}
@@ -577,7 +577,7 @@ func TestSinceDiff_QuotedFocus(t *testing.T) {
 	run("commit", "-qm", "base")
 	write("café.go", "package c\n\nfunc Brew() int { return 2 }\n")
 	run("commit", "-qam", "change")
-	syms := rcSinceSymbols(rcSinceDiff("HEAD~1", []string{`"caf\303\251.go"`}))
+	syms := rcSinceSymbols(rcSinceDiff("HEAD~1", "", []string{`"caf\303\251.go"`}))
 	if got := syms["café.go"]; len(got) != 1 || got[0].Name != "Brew" {
 		t.Fatalf("symbols = %+v, want Brew under café.go", syms)
 	}
@@ -595,5 +595,25 @@ func TestWordGrep_UnquotedPaths(t *testing.T) {
 	got := rcGrepFallback{root: dir}.SymbolCallers("café.go", "Brew")
 	if want := []rcSite{{"uses.go", 3}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sites = %+v, want %+v", got, want)
+	}
+}
+
+// kai review-commit run from a subdirectory: the focus paths are relative to
+// the repository root, and the since-diff still finds them.
+func TestSinceDiff_FromSubdirectory(t *testing.T) {
+	run, write := gitRepo(t)
+	root, _ := os.Getwd()
+	if err := os.MkdirAll("pkg/sub", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write("pkg/sub/s.go", "package s\n\nfunc Run() int { return 1 }\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	write("pkg/sub/s.go", "package s\n\nfunc Run() int { return 2 }\n")
+	run("commit", "-qam", "change")
+	t.Chdir("pkg")
+	got := rcSinceSymbols(rcSinceDiff("HEAD~1", root, []string{"pkg/sub/s.go"}))["pkg/sub/s.go"]
+	if len(got) != 1 || got[0].Name != "Run" {
+		t.Fatalf("symbols = %+v, want Run", got)
 	}
 }
