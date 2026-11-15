@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Nothing the pull request changes differs since the previous review: the
@@ -278,5 +279,42 @@ func TestPRChangedSince_NonASCIIName(t *testing.T) {
 	reviewCommitBase = "main"
 	if own, ok := rcGitPRChangedSince(reviewed); !ok || !reflect.DeepEqual(own, []string{"café.go"}) {
 		t.Fatalf("own = %q (ok %v), want [café.go]", own, ok)
+	}
+}
+
+// A body line can start like a file header: a removed SQL or Lua comment
+// "-- x" is "--- x" in a diff, an added "++ x" is "+++ x". They are part of
+// the change, and two patches differing only there differ.
+func TestPatchByFile_HeaderLikeBodyLines(t *testing.T) {
+	head := "diff --git a/q.sql b/q.sql\nindex 1..2 100644\n--- a/q.sql\n+++ b/q.sql\n"
+	a := rcPatchByFile(head + "@@ -3 +2,0 @@\n--- old note\n")
+	b := rcPatchByFile(head + "@@ -3 +2,0 @@\n--- other note\n")
+	if a["q.sql"] == "" || a["q.sql"] == b["q.sql"] {
+		t.Fatalf("header-like body lines dropped: %q vs %q", a["q.sql"], b["q.sql"])
+	}
+	c := rcPatchByFile(head + "@@ -0,0 +1 @@\n+++ counter\n")
+	if !strings.Contains(c["q.sql"], "+++ counter") {
+		t.Fatalf("added '++' line dropped: %q", c["q.sql"])
+	}
+}
+
+// A patch over the limit is given up on at once: git, blocked writing the
+// rest, is stopped rather than waited on until the deadline.
+func TestGitPatchByFile_OverLimitReturnsAtOnce(t *testing.T) {
+	run, write := gitRepo(t)
+	write("big.txt", "x\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	write("big.txt", strings.Repeat("a line of the big change\n", 40000)) // ~1 MB, past any pipe buffer
+	run("commit", "-qam", "big")
+	old := rcPatchLimit
+	defer func() { rcPatchLimit = old }()
+	rcPatchLimit = 1024
+	start := time.Now()
+	if _, ok := rcGitPatchByFile("HEAD~1", "HEAD"); ok {
+		t.Fatal("an over-limit patch was used")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %s: waited on a blocked git", d)
 	}
 }
