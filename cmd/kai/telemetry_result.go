@@ -113,6 +113,12 @@ func errorClassOf(err error) string {
 		case code == "401", code == "403":
 			return "auth"
 		case code == "402":
+			// OpenRouter turns a request away with 402 while its in-flight
+			// spend budget is full, even with a positive balance; that clears
+			// by itself and is not a spent account.
+			if rcTemporaryPaymentRequired(err) {
+				return "provider_in_flight"
+			}
 			return "no_credit"
 		case code == "404":
 			return "not_found"

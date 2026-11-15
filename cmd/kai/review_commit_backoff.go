@@ -22,19 +22,30 @@ import (
 // place: in run 50, 243 of 1,223 allegations across 17 PRs were never checked,
 // three of them for the critical cal.com#14740 admin-check bug.
 //
-// The classifier is deliberately conservative: a 402 is temporary only when its
-// message says so and does not also say the account is out of credit. The
-// wording below comes from the recall plan's description of the provider's
-// message; widen it from a real error body, never from a guess.
+// OpenRouter documents the temporary case (openrouter.ai/docs/api-reference/limits):
+// a prepaid account whose balance is low has an in-flight spend budget, and a
+// request that would exceed it is turned away with 402 even though the balance
+// is positive. The message reads "This request would exceed your available
+// credits given your current in-flight requests", the error metadata carries
+// reason "in_flight_budget_exhausted" and limit_source "openrouter_in_flight_budget",
+// and the response has a Retry-After header. The same status also means a
+// request too large for the balance (reason "weight_exceeds_budget") and a
+// balance that is really empty ("insufficient credits"); neither clears by waiting.
+//
+// kai-engine reduces the body to its message sentence before it reaches here
+// and drops the headers, so the message is what we can match, and the metadata
+// strings when the raw body passes through. A 402 is temporary only when that
+// text names the in-flight budget and not a balance or size problem. Anything
+// unrecognised stays permanent, which is the behaviour before this change.
 
 var rcPaymentRequiredRe = regexp.MustCompile(`\b(?:http|status)\s*:?\s*402\b|\b402\b[^\n]{0,20}payment required`)
 
 // rcTemporaryMarkers say the 402 is about requests in flight, not the balance.
-var rcTemporaryMarkers = []string{"in-flight", "in flight", "inflight", "settle", "try again", "retry after"}
+var rcTemporaryMarkers = []string{"in-flight requests", "in_flight_budget_exhausted", "openrouter_in_flight_budget"}
 
-// rcOutOfCreditMarkers say the balance is the problem. They win over any
-// temporary marker in the same message.
-var rcOutOfCreditMarkers = []string{"insufficient credit", "out of credit", "add more credit", "more credits", "no credit", "budget", "cap exceeded", "payment method"}
+// rcOutOfCreditMarkers say the balance or the request size is the problem.
+// They win over any temporary marker in the same message.
+var rcOutOfCreditMarkers = []string{"insufficient credit", "add more credit", "weight_exceeds_budget", "openrouter_credits", "openrouter_key_limit", "reduce max_tokens", "lower max_tokens"}
 
 // rcTemporaryPaymentRequired reports whether err is a 402 the provider says
 // will clear by itself.

@@ -42,6 +42,8 @@ func TestErrorClassOf(t *testing.T) {
 		{errors.New("HTTP 429: slow down"), "rate_limited"},
 		{errors.New("server error: 404 not found"), "not_found"},
 		{errors.New("server error: 402 payment required"), "no_credit"},
+		{errors.New("upstream: HTTP 402 This request would exceed your available credits given your current in-flight requests."), "provider_in_flight"},
+		{errors.New("upstream: HTTP 402 Insufficient credits. Add more using https://openrouter.ai/settings/credits"), "no_credit"},
 		{errors.New("HTTP 409: conflict"), "http_4xx"}, // a refusal that is none of the named ones
 		// Three digits are not a status unless the message says so.
 		{errors.New("shadow run verdict: missed (500 false negatives)"), "other"},

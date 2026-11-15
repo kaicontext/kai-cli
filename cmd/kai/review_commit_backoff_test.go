@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	rcTempPaymentErr  = "upstream: HTTP 402 Request held back while in-flight requests settle; retry after they finish"
+	rcTempPaymentErr  = "upstream: HTTP 402 This request would exceed your available credits given your current in-flight requests."
 	rcRealOutOfCredit = "upstream: HTTP 402 Insufficient credits. Add more using https://openrouter.ai/settings/credits"
 )
 
@@ -28,6 +28,10 @@ func TestTemporaryPaymentRequiredClassifier(t *testing.T) {
 		{rcRealOutOfCredit, false},
 		// A message that names both is out of credit: the balance wins.
 		{"upstream: HTTP 402 insufficient credits while in-flight requests settle", false},
+		// The raw body, when the engine passes it through unreduced.
+		{`upstream: HTTP 402: {"error":{"code":402,"message":"x","metadata":{"reason":"in_flight_budget_exhausted","limit_source":"openrouter_in_flight_budget"}}}`, true},
+		// A request too large for the balance does not clear by waiting.
+		{`upstream: HTTP 402: {"error":{"code":402,"message":"x","metadata":{"reason":"weight_exceeds_budget","limit_source":"openrouter_credits"}}}`, false},
 		{"upstream: HTTP 402", false},
 		{"upstream: HTTP 429 in-flight limit, retry after 3s", false},
 		{"upstream: HTTP 500 in-flight requests settle", false},
