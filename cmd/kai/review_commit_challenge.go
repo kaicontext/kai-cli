@@ -651,7 +651,7 @@ func rcChallengeReviewWith(ctx context.Context, prov provider.Provider, model, d
 
 // rcChallengeDraft is the gate itself, over a draft whose speculative issues
 // are already gone.
-func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
+func rcChallengeDraftOnce(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	_, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
 	if len(issues) == 0 && len(decisions) == 0 {
 		return &rcChallengeResult{Review: draft}, nil

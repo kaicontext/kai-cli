@@ -74,9 +74,14 @@ func rcChallengeBatchesRaw(ctx context.Context, prov provider.Provider, model, d
 // rcRunBatches checks each batch side by side. The batch at decisionsAt (-1
 // for none) also carries the draft's decisions.
 func rcRunBatches(ctx context.Context, prov provider.Provider, model, prose string, decisions []string, decisionsAt int, batches [][]string, sources, extra []rcSource, sandbox *rcShellSandbox) ([]*rcChallengeResult, []error) {
+	return rcRunBatchesN(ctx, prov, model, prose, decisions, decisionsAt, batches, sources, extra, sandbox, rcChallengeBatchParallel)
+}
+
+// rcRunBatchesN is rcRunBatches with at most parallel calls at once.
+func rcRunBatchesN(ctx context.Context, prov provider.Provider, model, prose string, decisions []string, decisionsAt int, batches [][]string, sources, extra []rcSource, sandbox *rcShellSandbox, parallel int) ([]*rcChallengeResult, []error) {
 	results := make([]*rcChallengeResult, len(batches))
 	errs := make([]error, len(batches))
-	sem := make(chan struct{}, rcChallengeBatchParallel)
+	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 	for i, batch := range batches {
 		wg.Add(1)
@@ -123,7 +128,15 @@ func rcRetryFailedBatches(ctx context.Context, prov provider.Provider, model, pr
 	if len(singles) == 0 {
 		return batches, results, errs
 	}
-	sr, se := rcRunBatches(ctx, prov, model, prose, decisions, decisionsAt, singles, sources, extra, sandbox)
+	// The first pass may have failed because the provider asked us to ease off;
+	// re-check at lower concurrency, after a pause when that was the cause.
+	for i, batch := range batches {
+		if errs[i] != nil && len(batch) >= 2 && rcTemporaryPaymentRequired(errs[i]) {
+			_ = rcBackoffSleep(ctx, rcBackoffDelay(0))
+			break
+		}
+	}
+	sr, se := rcRunBatchesN(ctx, prov, model, prose, decisions, decisionsAt, singles, sources, extra, sandbox, rcChallengeRetryParallel)
 	var nb [][]string
 	var nr []*rcChallengeResult
 	var ne []error
