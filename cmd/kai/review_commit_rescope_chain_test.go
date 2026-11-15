@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -534,5 +535,65 @@ func TestSinceSymbols_ProseFilesDeclareNothing(t *testing.T) {
 	diff := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n+class Foo handles retries\n"
 	if got := rcSinceSymbols(diff); len(got["README.md"]) != 0 {
 		t.Fatalf("symbols from prose: %+v", got)
+	}
+}
+
+// After the author merges main in, the since-diff holds the pull request's
+// own new edits only: a function main rewrote is not one of them.
+func TestSinceDiff_BaseMovedOwnChangesOnly(t *testing.T) {
+	run, write := gitRepo(t)
+	src := func(parse, other string) string {
+		return "package u\n\nfunc Parse() int {\n\treturn " + parse + "\n}\n\n\n\n\n\nfunc Other() int {\n\treturn " + other + "\n}\n"
+	}
+	write("util.go", src("1", "1"))
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	run("checkout", "-q", "-b", "pr")
+	write("util.go", src("1", "2"))
+	run("commit", "-qam", "pr")
+	reviewed := run("rev-parse", "HEAD")
+	run("checkout", "-q", "main")
+	write("util.go", src("9", "1")) // main rewrites Parse
+	run("commit", "-qam", "main moves")
+	run("checkout", "-q", "pr")
+	run("merge", "-q", "--no-edit", "main")
+	write("util.go", src("9", "3")) // the author edits Other again
+	run("commit", "-qam", "fix")
+	old := reviewCommitBase
+	defer func() { reviewCommitBase = old }()
+	reviewCommitBase = "main"
+	got := rcSinceSymbols(rcSinceDiff(reviewed, []string{"util.go"}))["util.go"]
+	if len(got) != 1 || got[0].Name != "Other" {
+		t.Fatalf("symbols = %+v, want Other only", got)
+	}
+}
+
+// The review's file list quotes a non-ASCII path; the since-diff and the
+// chain still find the file.
+func TestSinceDiff_QuotedFocus(t *testing.T) {
+	run, write := gitRepo(t)
+	write("café.go", "package c\n\nfunc Brew() int { return 1 }\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	write("café.go", "package c\n\nfunc Brew() int { return 2 }\n")
+	run("commit", "-qam", "change")
+	syms := rcSinceSymbols(rcSinceDiff("HEAD~1", []string{`"caf\303\251.go"`}))
+	if got := syms["café.go"]; len(got) != 1 || got[0].Name != "Brew" {
+		t.Fatalf("symbols = %+v, want Brew under café.go", syms)
+	}
+}
+
+// git grep quotes non-ASCII paths unless told not to; the fallback's sites
+// are real paths, and the focus file's own lines are not its callers.
+func TestWordGrep_UnquotedPaths(t *testing.T) {
+	run, write := gitRepo(t)
+	write("café.go", "package c\n\nfunc Brew() int { return 1 }\n\nvar x = Brew()\n")
+	write("uses.go", "package c\n\nvar y = Brew()\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	dir, _ := os.Getwd()
+	got := rcGrepFallback{root: dir}.SymbolCallers("café.go", "Brew")
+	if want := []rcSite{{"uses.go", 3}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sites = %+v, want %+v", got, want)
 	}
 }

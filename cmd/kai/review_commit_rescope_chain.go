@@ -413,7 +413,21 @@ var rcSinceDiff = func(head string, focus []string) string {
 	if head == "" || len(focus) == 0 {
 		return ""
 	}
-	args := append([]string{"-c", "core.quotePath=false", "--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", head, "HEAD", "--"}, focus...)
+	// The pull request's own new edits: when the base moved, the previously
+	// reviewed commit replayed onto the new base, against HEAD. Commit to
+	// commit, the diff would also hold every base change to these files, and
+	// their functions would be chained as if the pull request had touched
+	// them. If the replay is not possible (a conflict, an older git), the
+	// commit-to-commit diff stands.
+	from := head
+	if tree := rcReplayOnNewBase(head); tree != "" {
+		from = tree
+	}
+	paths := make([]string, len(focus))
+	for i, f := range focus {
+		paths[i] = rcGitUnquote(f) // a pathspec is the real path
+	}
+	args := append([]string{"-c", "core.quotePath=false", "--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", from, "HEAD", "--"}, paths...)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -431,6 +445,33 @@ var rcSinceDiff = func(head string, focus []string) string {
 	cancel()
 	_ = cmd.Wait()
 	return string(out)
+}
+
+// rcReplayOnNewBase is the tree of head's pull request replayed onto the
+// base HEAD sits on, when the base moved since head; "" when it did not, the
+// base is unknown, or the replay conflicts. git merge-tree --write-tree
+// writes objects only: no ref, index or working-tree change.
+func rcReplayOnNewBase(head string) string {
+	if strings.TrimSpace(reviewCommitBase) == "" {
+		return ""
+	}
+	oldBase, newBase := rcMergeBase(head, reviewCommitBase), rcMergeBase("HEAD", reviewCommitBase)
+	if oldBase == "" || newBase == "" || oldBase == newBase {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "merge-tree", "--write-tree", "--no-messages", newBase, head)
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
+	if err != nil { // exit 1 is a conflict; anything else, no replay
+		return ""
+	}
+	tree := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	if len(tree) < 40 {
+		return ""
+	}
+	return tree
 }
 
 // rcSinceDiffLimit caps the since-diff read; tests lower it.
@@ -800,7 +841,7 @@ func rcResolveKeys(keys map[string][]rcChangedKey, root string) map[string][]rcC
 			if i <= 0 {
 				continue
 			}
-			p := s[:i]
+			p := rcGitUnquote(s[:i]) // git grep quotes non-ASCII paths
 			if p == r.file {
 				continue
 			}
@@ -824,6 +865,13 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 	if prior == nil || focus == nil || max <= 0 {
 		return nil
 	}
+	// Chaining works on real paths: the graph's, git grep's (unquoted) and
+	// the since-diff's. The review's list may quote a non-ASCII one.
+	real := make([]string, len(focus))
+	for i, f := range focus {
+		real[i] = rcGitUnquote(f)
+	}
+	focus = real
 	diff := rcSinceDiff(prior.Head, focus)
 	in := rcChainInputs{Symbols: rcSinceSymbols(diff), Keys: rcResolveKeys(rcSinceKeys(diff), root), Code: rcSinceCode(diff)}
 	deadline := time.Now().Add(rcChainBudget)
@@ -916,7 +964,7 @@ func (g rcGrepFallback) Uses(p string) []string {
 var rcWordGrep = func(name, root string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), rcLookupGrepTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "grep", "-n", "--no-color", "-E", `(^|[^A-Za-z0-9_])`+regexp.QuoteMeta(name)+`\(`)
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotePath=false", "grep", "-n", "--no-color", "-E", `(^|[^A-Za-z0-9_])`+regexp.QuoteMeta(name)+`\(`)
 	cmd.WaitDelay = 2 * time.Second
 	if root != "" {
 		cmd.Dir = root
@@ -964,7 +1012,7 @@ type rcGraphChain struct {
 	root  string
 	snap  []byte
 	files map[string]bool // node ids (as strings) of the snapshot's files; lazy
-	paths map[string]bool // their paths
+	paths map[string]bool // path → in the snapshot, as looked up (inSnapshot)
 	text  map[string]string
 }
 
@@ -1023,7 +1071,7 @@ func (g *rcGraphChain) SymbolCallers(path, symbol string) []rcSite {
 		callee, _ := n.Payload["calleeName"].(string)
 		calleeFile, _ := n.Payload["calleeFile"].(string)
 		caller, _ := n.Payload["callerFile"].(string)
-		if rcBareName(callee) != symbol || calleeFile != path || caller == "" || !g.paths[caller] {
+		if rcBareName(callee) != symbol || calleeFile != path || caller == "" || !g.inSnapshot(caller) {
 			continue
 		}
 		if !strings.Contains(g.read(caller), symbol) {
@@ -1105,17 +1153,36 @@ func (g *rcGraphChain) loadSnapshotFiles() bool {
 	if len(g.snap) == 0 {
 		return false
 	}
+	// One query for the snapshot's file ids. Paths are looked up only for
+	// the caller files a lookup meets (inSnapshot), not for every file:
+	// on a large repository that was one query per file up front.
 	edges, err := g.db.GetEdges(g.snap, graph.EdgeHasFile)
 	if err != nil {
 		return false
 	}
 	for _, e := range edges {
 		g.files[string(e.Dst)] = true
-		if p := g.pathOf(e.Dst); p != "" {
-			g.paths[p] = true
-		}
 	}
 	return len(g.files) > 0
+}
+
+// inSnapshot reports whether path is a file of the current snapshot.
+// Remembered per path.
+func (g *rcGraphChain) inSnapshot(path string) bool {
+	if in, ok := g.paths[path]; ok {
+		return in
+	}
+	in := false
+	if nodes, err := g.db.FindNodesByPayloadPath(string(graph.KindFile), path); err == nil {
+		for _, n := range nodes {
+			if g.files[string(n.ID)] {
+				in = true
+				break
+			}
+		}
+	}
+	g.paths[path] = in
+	return in
 }
 
 func (g *rcGraphChain) pathOf(id []byte) string {
