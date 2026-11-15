@@ -148,8 +148,10 @@
               "finder2",
               "sweep"
             ],
+            "rank": "publish",
             "reason": "The changed line shows it.",
             "remedy": "Restore the original line.",
+            "severity": "high",
             "status": "supported",
             "title": "Arithmetic is wrong",
             "votes": 1
@@ -178,13 +180,21 @@
               "finder2",
               "sweep"
             ],
+            "rank": "publish",
             "reason": "The changed line shows it.",
             "remedy": "Restore the original line.",
+            "severity": "high",
             "status": "supported",
             "title": "Arithmetic is wrong",
             "votes": 1
           }
-        ]
+        ],
+        "selection": {
+          "cap": 3,
+          "confirmed": 2,
+          "minorCap": 3,
+          "model": "anthropic/claude-opus-5.5"
+        }
       },
       "claims": [
         {
@@ -566,8 +576,10 @@
               "finder2",
               "sweep"
             ],
+            "rank": "publish",
             "reason": "The changed line shows it.",
             "remedy": "Restore the original line.",
+            "severity": "high",
             "status": "supported",
             "title": "Arithmetic is wrong",
             "votes": 1
@@ -596,13 +608,21 @@
               "finder2",
               "sweep"
             ],
+            "rank": "publish",
             "reason": "The changed line shows it.",
             "remedy": "Restore the original line.",
+            "severity": "high",
             "status": "supported",
             "title": "Arithmetic is wrong",
             "votes": 1
           }
-        ]
+        ],
+        "selection": {
+          "cap": 3,
+          "confirmed": 2,
+          "minorCap": 3,
+          "model": "anthropic/claude-opus-5.5"
+        }
       },
       "claims": [
         {

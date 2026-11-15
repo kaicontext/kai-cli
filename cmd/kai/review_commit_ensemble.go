@@ -341,11 +341,53 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	// to the main list, the minor list or the overflow past the cap: the
 	// bundle keeps only the outcome, which cannot tell them apart.
 	fmt.Fprintf(os.Stderr, "  selection answer: cap=%d publish=%v minor=%v skip=%v\n", limit, ans.Publish, ans.Minor, rcSortedKeys(ans.Skip))
+	rcMarkRank(res, ans, limit)
+	res.Selection = &rcSelectionRecord{Model: model, Cap: limit, MinorCap: rcRankMinorCap, Confirmed: len(supported)}
 	kept, dropped := rcApplyRank(res, ans, limit)
 	fmt.Fprintf(os.Stderr, "  selection (%s, %s): %d of %d confirmed defect(s) published, %d held back\n",
 		model, time.Since(started).Round(time.Second), kept, len(supported), dropped)
 	rcFinalize(res)
 	return true
+}
+
+// rcSelectionRecord is what the selection step saves in the review's record:
+// the cap it applied and how many confirmed defects it chose among.
+type rcSelectionRecord struct {
+	Model     string `json:"model"`
+	Cap       int    `json:"cap"`
+	MinorCap  int    `json:"minorCap"`
+	Confirmed int    `json:"confirmed"`
+}
+
+// rcMarkRank sets each supported allegation's Rank from the selection's
+// answer, before rcApplyRank reorders and refutes them.
+func rcMarkRank(res *rcChallengeResult, ans rcRankAnswer, limit int) {
+	rank := map[int]string{}
+	for n, id := range ans.Publish {
+		rank[id] = "publish"
+		if n >= limit {
+			rank[id] = "overflow" // chosen to publish, past the main cap
+		}
+	}
+	for _, id := range ans.Minor {
+		if rank[id] == "" {
+			rank[id] = "minor"
+		}
+	}
+	for id := range ans.Skip {
+		if rank[id] == "" {
+			rank[id] = "skip"
+		}
+	}
+	for i := range res.Allegations {
+		a := &res.Allegations[i]
+		if a.Status != rcStatusSupported {
+			continue
+		}
+		if a.Rank = rank[a.ID]; a.Rank == "" {
+			a.Rank = "unlisted"
+		}
+	}
 }
 
 // rcRankAnswer is the selection's answer: the defects to publish first, the
