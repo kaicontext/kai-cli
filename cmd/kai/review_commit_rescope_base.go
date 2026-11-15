@@ -261,8 +261,11 @@ func rcPatchByFile(diff string) map[string]string {
 			switch {
 			case strings.HasPrefix(line, "@@"):
 				inBody = true
-			case strings.HasPrefix(line, "new file"), strings.HasPrefix(line, "deleted file"):
-				b.WriteString(strings.Fields(line)[0])
+			// The whole change of a chmod, and the mode a file is added or
+			// deleted with: no hunk carries them. They hold no position.
+			case strings.HasPrefix(line, "new file"), strings.HasPrefix(line, "deleted file"),
+				strings.HasPrefix(line, "old mode "), strings.HasPrefix(line, "new mode "):
+				b.WriteString(line)
 				b.WriteString("\n")
 			case strings.HasPrefix(line, "Binary files "):
 				b.WriteString(line)

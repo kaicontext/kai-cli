@@ -318,3 +318,44 @@ func TestGitPatchByFile_OverLimitReturnsAtOnce(t *testing.T) {
 		t.Fatalf("took %s: waited on a blocked git", d)
 	}
 }
+
+// A mode change has no hunk: "old mode"/"new mode" are the whole change, and
+// a patch that differs only there differs.
+func TestPatchByFile_ModeChange(t *testing.T) {
+	plain := rcPatchByFile("diff --git a/run.sh b/run.sh\nindex 1..2 100644\n--- a/run.sh\n+++ b/run.sh\n@@ -1 +1 @@\n-a\n+b\n")
+	chmod := rcPatchByFile("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\nindex 1..2\n--- a/run.sh\n+++ b/run.sh\n@@ -1 +1 @@\n-a\n+b\n")
+	if plain["run.sh"] == chmod["run.sh"] {
+		t.Fatalf("a mode change compared equal: %q", chmod["run.sh"])
+	}
+	only := rcPatchByFile("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n")
+	if only["run.sh"] == "" {
+		t.Fatal("a mode-only change normalised to nothing")
+	}
+}
+
+// Real git, base moved: after the review the author only makes a script
+// executable. That is the pull request's own change.
+func TestPRChangedSince_ModeOnlyChange(t *testing.T) {
+	run, write := gitRepo(t)
+	write("run.sh", "echo hi\n")
+	write("other.go", "o\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	run("checkout", "-q", "-b", "pr")
+	write("run.sh", "echo hello\n")
+	run("commit", "-qam", "pr")
+	reviewed := run("rev-parse", "HEAD")
+	run("checkout", "-q", "main")
+	write("other.go", "o2\n")
+	run("commit", "-qam", "main moves")
+	run("checkout", "-q", "pr")
+	run("merge", "-q", "--no-edit", "main")
+	run("update-index", "--chmod=+x", "run.sh")
+	run("commit", "-qm", "make executable")
+	old := reviewCommitBase
+	defer func() { reviewCommitBase = old }()
+	reviewCommitBase = "main"
+	if own, ok := rcGitPRChangedSince(reviewed); !ok || !reflect.DeepEqual(own, []string{"run.sh"}) {
+		t.Fatalf("own = %v (ok %v), want [run.sh]", own, ok)
+	}
+}
