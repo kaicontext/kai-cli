@@ -170,3 +170,113 @@ func TestPRChangedSince_MergeAndRebase(t *testing.T) {
 		t.Fatal("rebase without edits not read as unchanged")
 	}
 }
+
+// Nothing changed and the earlier points name every file of a small pull
+// request: still a re-check, not a full review.
+func TestReReviewFocus_UnchangedSmallPR(t *testing.T) {
+	t.Setenv("KAI_REVIEW_RESCOPE", "")
+	prior := &rcPrior{Head: "h1", Points: []rcPriorPoint{{Kind: "defect", Ref: "p", Text: "a.go:3 — x"}}}
+	got := rcReReviewFocus(prior, []string{"a.go"}, sinceFrom(map[string][]string{"h1": nil}))
+	if !reflect.DeepEqual(got, []string{"a.go"}) {
+		t.Fatalf("focus = %v, want [a.go]", got)
+	}
+}
+
+// A change the author took back out of the pull request is a change: the
+// review is not a re-check, and covers what is left in full.
+func TestReReviewFocus_DroppedChange(t *testing.T) {
+	t.Setenv("KAI_REVIEW_RESCOPE", "")
+	old := rcDroppedSinceFn
+	defer func() { rcDroppedSinceFn = old }()
+	rcDroppedSinceFn = func(string, []string) []string { return []string{"b.go"} }
+	prior := &rcPrior{Head: "h1"}
+	since := sinceFrom(map[string][]string{"h1": {"b.go"}})
+	if got := rcReReviewFocus(prior, []string{"a.go", "c.go"}, since); got != nil {
+		t.Fatalf("focus = %v, want nil (the whole change)", got)
+	}
+	if rcReReviewUnchanged(prior, []string{"a.go", "c.go"}, since) {
+		t.Fatal("a dropped change read as unchanged")
+	}
+}
+
+// gitRepo is a throwaway repository the test runs in.
+func gitRepo(t *testing.T) (run func(...string) string, write func(name, body string)) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	t.Chdir(dir)
+	run = func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write = func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	return run, write
+}
+
+// Real git, base unmoved: the author reverts one of the pull request's files.
+func TestDroppedSince_Revert(t *testing.T) {
+	run, write := gitRepo(t)
+	write("a.go", "a\n")
+	write("b.go", "b\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	run("checkout", "-q", "-b", "pr")
+	write("a.go", "a2\n")
+	write("b.go", "b2\n")
+	run("commit", "-qam", "pr")
+	reviewed := run("rev-parse", "HEAD")
+	write("b.go", "b\n") // taken back out
+	run("commit", "-qam", "revert b")
+	old := reviewCommitBase
+	defer func() { reviewCommitBase = old }()
+	reviewCommitBase = "main"
+	changed := []string{"a.go"}
+	if d := rcDroppedSince(reviewed, changed); !reflect.DeepEqual(d, []string{"b.go"}) {
+		t.Fatalf("dropped = %v, want [b.go]", d)
+	}
+	t.Setenv("KAI_REVIEW_RESCOPE", "")
+	if f := rcReReviewFocus(&rcPrior{Head: reviewed}, changed, rcGitPRChangedSince); f != nil {
+		t.Fatalf("focus = %v, want nil", f)
+	}
+}
+
+// Real git, base moved, a non-ASCII file name: git quotes such names unless
+// told not to, and a quoted name would never match the pull request's files.
+func TestPRChangedSince_NonASCIIName(t *testing.T) {
+	run, write := gitRepo(t)
+	write("café.go", "x\n")
+	write("other.go", "o\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	run("checkout", "-q", "-b", "pr")
+	write("café.go", "x2\n")
+	run("commit", "-qam", "pr")
+	reviewed := run("rev-parse", "HEAD")
+	run("checkout", "-q", "main")
+	write("other.go", "o2\n")
+	run("commit", "-qam", "main moves")
+	run("checkout", "-q", "pr")
+	run("merge", "-q", "--no-edit", "main")
+	write("café.go", "x3\n")
+	run("commit", "-qam", "fix")
+	old := reviewCommitBase
+	defer func() { reviewCommitBase = old }()
+	reviewCommitBase = "main"
+	if own, ok := rcGitPRChangedSince(reviewed); !ok || !reflect.DeepEqual(own, []string{"café.go"}) {
+		t.Fatalf("own = %q (ok %v), want [café.go]", own, ok)
+	}
+}
