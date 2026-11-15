@@ -63,6 +63,7 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 			commits = append(commits, s)
 		}
 	}
+	unchanged := false
 	for i, c := range commits {
 		files, ok := since(c)
 		if !ok {
@@ -73,7 +74,13 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 		// re-review re-checks the earlier points in their own files and
 		// nothing else (rcReReviewUnchanged); an older point's own commit
 		// adds nothing, since the previous review already read from there.
+		// A change taken back out of the pull request is a change, though,
+		// and what it leaves behind is reviewed whole.
 		if i == 0 && !rcAnyIn(files, inPR) {
+			if len(rcDroppedSinceFn(c, changed)) > 0 {
+				return nil
+			}
+			unchanged = true
 			break
 		}
 		for _, f := range files {
@@ -87,7 +94,9 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 			add(loc.path)
 		}
 	}
-	if len(focus) >= len(changed) {
+	// A re-check stays a re-check even when the earlier points name every
+	// file; otherwise a focus that is the whole change is the whole change.
+	if !unchanged && len(focus) >= len(changed) {
 		return nil
 	}
 	out := make([]string, 0, len(focus)) // empty, not nil, when only re-checking
@@ -122,7 +131,7 @@ func rcReReviewUnchanged(prior *rcPrior, changed []string, since func(string) ([
 	for _, f := range changed {
 		inPR[f] = true
 	}
-	return !rcAnyIn(files, inPR)
+	return !rcAnyIn(files, inPR) && len(rcDroppedSinceFn(prior.Head, changed)) == 0
 }
 
 // rcReCheckTurns is the budget of a re-review whose code has not changed: a

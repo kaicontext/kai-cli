@@ -99,7 +99,7 @@ func rcGitChangedSince(head string) ([]string, bool) {
 	if !rcHasCommit(head) && !(rcFetchCommit(head) && rcHasCommit(head)) {
 		return nil, false
 	}
-	out, err := exec.Command("git", "--no-pager", "diff", "--name-only", head, "HEAD").Output()
+	out, err := exec.Command("git", "-c", "core.quotePath=false", "--no-pager", "diff", "--name-only", head, "HEAD").Output()
 	if err != nil {
 		return nil, false
 	}

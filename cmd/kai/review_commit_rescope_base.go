@@ -30,35 +30,125 @@ import (
 	"time"
 )
 
+// rcSinceResult is one previous commit's comparison with HEAD, worked out
+// once per review: the focus, the re-check test and the prompt all ask, and
+// with a moved base each answer costs two merge bases and two full diffs.
+type rcSinceResult struct {
+	files    []string
+	ok       bool
+	baseOnly []string // changed only because the base moved
+	prAt     []string // the pull request's files at that commit; nil if unknown
+}
+
 var (
-	rcBaseOnlyMu sync.Mutex
-	// rcBaseOnly remembers, per previous commit, the files that changed
-	// only because the base moved, for the prompt (rcBaseMovedBlock).
-	rcBaseOnly = map[string][]string{}
+	rcSinceMu   sync.Mutex
+	rcSinceMemo = map[string]rcSinceResult{}
 )
 
 // rcGitPRChangedSince is rcChangedSince when the review knows its base: the
 // files whose pull-request change differs between head and HEAD.
 func rcGitPRChangedSince(head string) ([]string, bool) {
+	r := rcSince(head)
+	return r.files, r.ok
+}
+
+func rcSince(head string) rcSinceResult {
+	key := head + "|" + rcRevParse("HEAD") + "|" + reviewCommitBase
+	rcSinceMu.Lock()
+	r, done := rcSinceMemo[key]
+	rcSinceMu.Unlock()
+	if done {
+		return r
+	}
+	r = rcComputeSince(head)
+	// A commit the clone does not have is not remembered: it may be fetched
+	// (rcFetchCommit), and asking again is cheap.
+	if r.ok {
+		rcSinceMu.Lock()
+		rcSinceMemo[key] = r
+		rcSinceMu.Unlock()
+	}
+	return r
+}
+
+func rcComputeSince(head string) rcSinceResult {
 	names, ok := rcGitChangedSince(head)
-	if !ok || len(names) == 0 || strings.TrimSpace(reviewCommitBase) == "" {
-		return names, ok
+	r := rcSinceResult{files: names, ok: ok}
+	if !ok || strings.TrimSpace(reviewCommitBase) == "" {
+		return r
 	}
 	oldBase := rcMergeBase(head, reviewCommitBase)
 	newBase := rcMergeBase("HEAD", reviewCommitBase)
-	if oldBase == "" || newBase == "" || oldBase == newBase {
-		return names, ok
+	if oldBase == "" || newBase == "" {
+		return r
+	}
+	if oldBase == newBase {
+		r.prAt, _ = rcGitNames(oldBase, head)
+		return r
 	}
 	oldP, ok1 := rcGitPatchByFile(oldBase, head)
 	newP, ok2 := rcGitPatchByFile(newBase, "HEAD")
 	if !ok1 || !ok2 {
-		return names, ok
+		return r
 	}
-	own, baseOnly := rcSplitPRChanges(names, oldP, newP)
-	rcBaseOnlyMu.Lock()
-	rcBaseOnly[head] = baseOnly
-	rcBaseOnlyMu.Unlock()
-	return own, true
+	r.files, r.baseOnly = rcSplitPRChanges(names, oldP, newP)
+	r.prAt = make([]string, 0, len(oldP))
+	for f := range oldP {
+		r.prAt = append(r.prAt, f)
+	}
+	sort.Strings(r.prAt)
+	return r
+}
+
+// rcBaseOnlySince is what rcGitPRChangedSince left out for head.
+func rcBaseOnlySince(head string) []string {
+	return rcSince(head).baseOnly
+}
+
+// rcDroppedSince lists the files the pull request changed at head and no
+// longer changes: a change taken back out. Nil when the base is unknown.
+func rcDroppedSince(head string, changed []string) []string {
+	at := rcSince(head).prAt
+	if len(at) == 0 {
+		return nil
+	}
+	now := make(map[string]bool, len(changed))
+	for _, f := range changed {
+		now[f] = true
+	}
+	var out []string
+	for _, f := range at {
+		if !now[f] {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// rcDroppedSinceFn is rcDroppedSince; tests replace it.
+var rcDroppedSinceFn = rcDroppedSince
+
+func rcRevParse(rev string) string {
+	out, err := exec.Command("git", "rev-parse", "--verify", "--quiet", rev).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// rcGitNames is the files changed from..to, unquoted.
+func rcGitNames(from, to string) ([]string, bool) {
+	out, err := exec.Command("git", "-c", "core.quotePath=false", "--no-pager", "diff", "--name-only", "--no-renames", from, to).Output()
+	if err != nil {
+		return nil, false
+	}
+	var files []string
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			files = append(files, l)
+		}
+	}
+	return files, true
 }
 
 // rcSplitPRChanges splits the files that differ between two commits into
@@ -95,13 +185,6 @@ func rcSplitPRChanges(names []string, oldP, newP map[string]string) (own, baseOn
 	return own, baseOnly
 }
 
-// rcBaseOnlySince is what rcGitPRChangedSince left out for head.
-func rcBaseOnlySince(head string) []string {
-	rcBaseOnlyMu.Lock()
-	defer rcBaseOnlyMu.Unlock()
-	return rcBaseOnly[head]
-}
-
 func rcMergeBase(a, b string) string {
 	out, err := exec.Command("git", "merge-base", a, b).Output()
 	if err != nil {
@@ -114,7 +197,7 @@ func rcMergeBase(a, b string) string {
 func rcGitPatchByFile(from, to string) (map[string]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", from, to)
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotePath=false", "--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", from, to)
 	cmd.WaitDelay = 2 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
