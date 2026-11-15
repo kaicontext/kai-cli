@@ -363,6 +363,12 @@ type rcSelectionRecord struct {
 // answer, before rcApplyRank reorders and refutes them.
 func rcMarkRank(res *rcChallengeResult, ans rcRankAnswer, limit int) {
 	rank := map[int]string{}
+	pos := map[int]int{}
+	for n, id := range append(append([]int{}, ans.Publish...), ans.Minor...) {
+		if _, ok := pos[id]; !ok {
+			pos[id] = n + 1
+		}
+	}
 	for n, id := range ans.Publish {
 		rank[id] = "publish"
 		if n >= limit {
@@ -387,6 +393,7 @@ func rcMarkRank(res *rcChallengeResult, ans rcRankAnswer, limit int) {
 		if a.Rank = rank[a.ID]; a.Rank == "" {
 			a.Rank = "unlisted"
 		}
+		a.rankPos = pos[a.ID]
 	}
 }
 
@@ -512,6 +519,7 @@ func rcApplyRank(res *rcChallengeResult, ans rcRankAnswer, limit int) (kept, dro
 			if why == "" {
 				why = fmt.Sprintf("outside the %d most important defects of this change", limit)
 			}
+			a.keptReason = a.Reason
 			a.Status = rcStatusRefuted
 			a.Reason = rcSelectionSkipPrefix + why
 			dropped++
