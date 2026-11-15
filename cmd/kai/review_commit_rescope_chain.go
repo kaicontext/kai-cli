@@ -151,6 +151,12 @@ type rcSite struct {
 type rcChainInputs struct {
 	Symbols map[string][]rcChangedSym
 	Keys    map[string][]rcChangedKey
+	// Code: the focus files whose code changed since the previous review
+	// (not only comments). Whole-file callers, tests and uses are chained
+	// only for these: a file in the focus because an earlier point names it,
+	// or whose change is a comment, has nothing new for them to break. Nil
+	// chains them for every focus file.
+	Code map[string]bool
 }
 
 // rcChainGraph answers the questions chaining asks of the code graph. Each
@@ -249,7 +255,7 @@ func rcReReviewChain(focus []string, in rcChainInputs, g rcChainGraph, max int) 
 			}
 		case rcChainCaller:
 			build(i, rcChainSymbol) // decides symbolsCovered
-			if g == nil {
+			if g == nil || (in.Code != nil && !in.Code[f]) {
 				break
 			}
 			callers := append([]string(nil), g.Callers(f)...)
@@ -263,6 +269,9 @@ func rcReReviewChain(focus []string, in rcChainInputs, g rcChainGraph, max int) 
 			}
 		case rcChainTest:
 			build(i, rcChainCaller) // collects the test files listed as callers
+			if in.Code != nil && !in.Code[f] {
+				break
+			}
 			var tests []string
 			if g != nil {
 				tests = g.Tests(f)
@@ -273,7 +282,7 @@ func rcReReviewChain(focus []string, in rcChainInputs, g rcChainGraph, max int) 
 				q = append(q, rcChained{Path: p, Kind: k, Of: f})
 			}
 		default:
-			if g == nil {
+			if g == nil || (in.Code != nil && !in.Code[f]) {
 				break
 			}
 			uses := append([]string(nil), g.Uses(f)...)
@@ -517,15 +526,23 @@ func rcSinceSymbols(diff string) map[string][]rcChangedSym {
 			a.touched = true
 		}
 	}
+	// The enclosing function a hunk header names counts only if the hunk
+	// changes code: a hunk of comments and blank lines touches nothing a
+	// caller can see.
+	hunkName, hunkTyp := "", false
 	rcDiffFiles(diff, func(file, line string) {
 		switch {
 		case strings.HasPrefix(line, "@@"):
 			// "@@ -10,3 +10,4 @@ func (r *T) Foo(x int) {"
+			hunkName = ""
 			if i := strings.Index(line[2:], "@@"); i >= 0 {
-				name, typ := rcDeclName(line[2+i+2:])
-				note(file, name, typ, ' ')
+				hunkName, hunkTyp = rcDeclName(line[2+i+2:])
 			}
 		case len(line) > 1 && (line[0] == '+' || line[0] == '-'):
+			if hunkName != "" && !rcCommentOrBlank(line[1:]) {
+				note(file, hunkName, hunkTyp, ' ') // its first code line
+				hunkName = ""
+			}
 			name, typ := rcDeclName(line[1:])
 			note(file, name, typ, line[0])
 		}
@@ -538,6 +555,29 @@ func rcSinceSymbols(diff string) map[string][]rcChangedSym {
 		}
 	}
 	return out
+}
+
+// rcSinceCode lists the files whose changed lines include code, not only
+// comments and blank lines.
+func rcSinceCode(diff string) map[string]bool {
+	out := map[string]bool{}
+	rcDiffFiles(diff, func(file, line string) {
+		if len(line) > 1 && (line[0] == '+' || line[0] == '-') && !strings.HasPrefix(line, "+++") && !strings.HasPrefix(line, "---") && !rcCommentOrBlank(line[1:]) {
+			out[file] = true
+		}
+	})
+	return out
+}
+
+// rcCommentOrBlank reports whether a changed line is blank or only a comment.
+func rcCommentOrBlank(l string) bool {
+	t := strings.TrimSpace(l)
+	for _, p := range []string{"//", "#", "/*", "*", "--", "<!--"} {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return t == ""
 }
 
 // rcKeyLitRe matches a quoted string literal short enough to be a key.
@@ -698,7 +738,7 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 		return nil
 	}
 	diff := rcSinceDiff(prior.Head, focus)
-	in := rcChainInputs{Symbols: rcSinceSymbols(diff), Keys: rcResolveKeys(rcSinceKeys(diff), root)}
+	in := rcChainInputs{Symbols: rcSinceSymbols(diff), Keys: rcResolveKeys(rcSinceKeys(diff), root), Code: rcSinceCode(diff)}
 	deadline := time.Now().Add(rcChainBudget)
 	var g rcChainGraph = rcGrepFallback{root: root, deadline: deadline}
 	if gdb != nil {

@@ -356,3 +356,41 @@ func TestGrepFallback_Deadline(t *testing.T) {
 		t.Fatalf("graph asked %d times past the deadline", inner.calls)
 	}
 }
+
+// A hunk of comments and blank lines touches nothing a caller can see, so
+// the function its header names is not chained; a declaration on a changed
+// line still is.
+func TestSinceSymbols_CommentOnlyHunk(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/a.go b/a.go",
+		"--- a/a.go",
+		"+++ b/a.go",
+		"@@ -10 +10,2 @@ func Quiet() {",
+		"+	// explains the loop",
+		"+",
+		"@@ -30 +31 @@ func Loud() {",
+		"-	return 1",
+		"+	return 2",
+	}, "\n")
+	got := rcSinceSymbols(diff)["a.go"]
+	if want := []rcChangedSym{{Name: "Loud"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("symbols = %+v, want %+v", got, want)
+	}
+}
+
+// Whole-file callers, tests and uses are chained only for focus files whose
+// code changed; call sites and key users still are for every focus file.
+func TestReReviewChain_OnlyCodeChangesFallBack(t *testing.T) {
+	g := &fakeChainGraph{
+		callers: map[string][]string{"point.go": {"x.go"}, "edited.go": {"y.go"}},
+		tests:   map[string][]string{"point.go": {"point_test.go"}},
+	}
+	in := rcChainInputs{Code: map[string]bool{"edited.go": true}}
+	got := chainPaths(rcReReviewChain([]string{"edited.go", "point.go"}, in, g, 10))
+	if want := []string{"y.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("chain = %v, want %v", got, want)
+	}
+	if c := rcSinceCode("diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1,2 @@\n+// note\n+\n"); c["a.go"] {
+		t.Fatal("a comment-only change counted as code")
+	}
+}
