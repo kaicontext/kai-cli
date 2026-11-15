@@ -26,6 +26,11 @@ func TestTemporaryPaymentRequiredClassifier(t *testing.T) {
 		{rcTempPaymentErr, true},
 		{"challenge call: " + rcTempPaymentErr, true},
 		{rcRealOutOfCredit, false},
+		// The plain-call shape, kai-engine's "<name> provider: <status>: <raw body>".
+		{`challenge call: kailab provider: 402: {"error":{"code":402,"message":"x","metadata":{"reason":"in_flight_budget_exhausted","limit_source":"openrouter_in_flight_budget"}}}`, true},
+		{`openrouter provider: 402: This request would exceed your available credits given your current in-flight requests.`, true},
+		{`kailab provider: 402: {"error":{"code":402,"message":"Insufficient credits"}}`, false},
+		{`kailab provider: 503: in-flight requests are settling`, false},
 		// A message that names both is out of credit: the balance wins.
 		{"upstream: HTTP 402 insufficient credits while in-flight requests settle", false},
 		// The raw body, when the engine passes it through unreduced.

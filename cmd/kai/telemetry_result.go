@@ -108,17 +108,16 @@ func errorClassOf(err error) string {
 	case strings.Contains(msg, "not configured"):
 		return "no_remote"
 	}
+	// A temporary 402 is named before the status match below: kai-engine's
+	// "<name> provider: 402: ..." form is not one httpStatusRe reads.
+	if rcTemporaryPaymentRequired(err) {
+		return "provider_in_flight"
+	}
 	if m := httpStatusRe.FindStringSubmatch(msg); m != nil {
 		switch code := m[1]; {
 		case code == "401", code == "403":
 			return "auth"
 		case code == "402":
-			// OpenRouter turns a request away with 402 while its in-flight
-			// spend budget is full, even with a positive balance; that clears
-			// by itself and is not a spent account.
-			if rcTemporaryPaymentRequired(err) {
-				return "provider_in_flight"
-			}
 			return "no_credit"
 		case code == "404":
 			return "not_found"

@@ -43,6 +43,7 @@ func TestErrorClassOf(t *testing.T) {
 		{errors.New("server error: 404 not found"), "not_found"},
 		{errors.New("server error: 402 payment required"), "no_credit"},
 		{errors.New("upstream: HTTP 402 This request would exceed your available credits given your current in-flight requests."), "provider_in_flight"},
+		{errors.New(`kailab provider: 402: {"error":{"code":402,"message":"x","metadata":{"reason":"in_flight_budget_exhausted"}}}`), "provider_in_flight"},
 		{errors.New("upstream: HTTP 402 Insufficient credits. Add more using https://openrouter.ai/settings/credits"), "no_credit"},
 		{errors.New("HTTP 409: conflict"), "http_4xx"}, // a refusal that is none of the named ones
 		// Three digits are not a status unless the message says so.

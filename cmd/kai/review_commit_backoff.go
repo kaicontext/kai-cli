@@ -32,13 +32,15 @@ import (
 // request too large for the balance (reason "weight_exceeds_budget") and a
 // balance that is really empty ("insufficient credits"); neither clears by waiting.
 //
-// kai-engine reduces the body to its message sentence before it reaches here
-// and drops the headers, so the message is what we can match, and the metadata
+// kai-engine words the error two ways: a streamed call arrives as
+// "upstream: HTTP 402 <message>" with the body reduced to its message, and a plain
+// call as "<name> provider: 402: <raw body>" (kailab.go, openrouter.go). Headers
+// are dropped either way. So the message is what we can match, and the metadata
 // strings when the raw body passes through. A 402 is temporary only when that
 // text names the in-flight budget and not a balance or size problem. Anything
 // unrecognised stays permanent, which is the behaviour before this change.
 
-var rcPaymentRequiredRe = regexp.MustCompile(`\b(?:http|status)\s*:?\s*402\b|\b402\b[^\n]{0,20}payment required`)
+var rcPaymentRequiredRe = regexp.MustCompile(`\b(?:http|status|provider)\s*:?\s*402\b|\b402\b[^\n]{0,20}payment required`)
 
 // rcTemporaryMarkers say the 402 is about requests in flight, not the balance.
 var rcTemporaryMarkers = []string{"in-flight requests", "in_flight_budget_exhausted", "openrouter_in_flight_budget"}
