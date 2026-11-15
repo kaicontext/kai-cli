@@ -42,14 +42,16 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 	if prior == nil || len(changed) == 0 || rcReScopeOff() {
 		return nil
 	}
-	inPR := make(map[string]bool, len(changed))
-	for _, f := range changed {
+	// Paths are compared unquoted and returned as changed spells them.
+	spell := rcPRFiles(prior.Head, changed)
+	inPR := make(map[string]bool, len(spell))
+	for f := range spell {
 		inPR[f] = true
 	}
 	focus := map[string]bool{}
 	add := func(f string) {
-		if inPR[f] {
-			focus[f] = true
+		if s, ok := spell[rcGitUnquote(f)]; ok {
+			focus[s] = true
 		}
 	}
 
@@ -109,7 +111,7 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 
 func rcAnyIn(files []string, set map[string]bool) bool {
 	for _, f := range files {
-		if set[f] {
+		if set[rcGitUnquote(f)] {
 			return true
 		}
 	}
@@ -127,8 +129,8 @@ func rcReReviewUnchanged(prior *rcPrior, changed []string, since func(string) ([
 	if !ok {
 		return false
 	}
-	inPR := make(map[string]bool, len(changed))
-	for _, f := range changed {
+	inPR := map[string]bool{}
+	for f := range rcPRFiles(prior.Head, changed) {
 		inPR[f] = true
 	}
 	return !rcAnyIn(files, inPR) && len(rcDroppedSinceFn(prior.Head, changed)) == 0
@@ -154,11 +156,15 @@ func rcReCheckBlock(prior *rcPrior, pointFiles []string, turns int) string {
 	if len(pointFiles) > 0 {
 		where = "Open the files the earlier points name (" + strings.Join(pointFiles, ", ") + ")"
 	}
-	return fmt.Sprintf("RE-REVIEW, NOTHING CHANGED: the pull request's own changes are identical to the commit you reviewed last time (%s); "+
-		"only the base it sits on may have moved. You have %d turns. Do not review the change again: it was reviewed at that commit. "+
-		"%s and re-check each earlier point against the code as it is now, stating whether it still holds. "+
-		"Report a new issue only if a base change listed below now meets the pull request's code.\n\n",
-		rcShort(prior.Head), turns, where)
+	// Only point at base changes when BASE MOVED names some (rcBaseMovedBlock).
+	base := "Report no new issue: there is no new code to find one in."
+	if len(rcBaseOnlySince(prior.Head)) > 0 {
+		base = "The base under the pull request moved (BASE MOVED, below): report a new issue only where one of those base changes now meets the pull request's code."
+	}
+	return fmt.Sprintf("RE-REVIEW, NOTHING CHANGED: the pull request's own changes are identical to the commit you reviewed last time (%s). "+
+		"You have %d turns. Do not review the change again: it was reviewed at that commit. "+
+		"%s and re-check each earlier point against the code as it is now, stating whether it still holds. %s\n\n",
+		rcShort(prior.Head), turns, where, base)
 }
 
 // rcBaseMovedBlock names the files of the pull request that changed only
