@@ -63,7 +63,6 @@ func TestReReviewFocus_WholeChange(t *testing.T) {
 		"commit not in clone": {&rcPrior{Head: "gone"}, map[string][]string{}, ""},
 		"older point not in clone": {&rcPrior{Head: "h2", Points: []rcPriorPoint{{Ref: "p", Text: "a.go:1 — x", Since: "gone"}}},
 			map[string][]string{"h2": {"a.go"}}, ""},
-		"nothing changed since": {&rcPrior{Head: "h1"}, map[string][]string{"h1": nil}, ""},
 		"everything changed":    {&rcPrior{Head: "h1"}, map[string][]string{"h1": rescopePR}, ""},
 		"turned off":            {&rcPrior{Head: "h1"}, map[string][]string{"h1": {"a.go"}}, "off"},
 	}

@@ -501,7 +501,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "  re-review: %d of %d changed file(s) to read again; budgets sized to those\n", len(focus), len(files))
 			// And the files the change since then can break
 			// (review_commit_rescope_chain.go).
-			chain = rcReReviewRelated(rcPriorFromEnv(), focus, asGraphDB(set.Primary().DB), set.Primary().Path)
+			// Not when the code has not changed: there is nothing to follow.
+			if !rcReReviewUnchanged(rcPriorFromEnv(), rcPathsOf(files), rcChangedSince) {
+				chain = rcReReviewRelated(rcPriorFromEnv(), focus, asGraphDB(set.Primary().DB), set.Primary().Path)
+			}
 		}
 		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref, rcSweepFocus(focus, chain))
 		// The publication gate reads the reviewed commit to settle what the
@@ -958,20 +961,31 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	prior := rcPriorFromEnv()
 	var priorChanged []string
 	var priorKnown bool
-	// A scoped re-review also reads the files around its focus (chain, from
+	// A re-review of code that has not changed only re-checks the earlier
+	// points, on a small budget (review_commit_rescope.go). Otherwise a scoped
+	// re-review also reads the files around its focus (chain, from
 	// review_commit_rescope_chain.go), at one turn per two.
 	maxTurns := rcReviewMaxTurns(len(scope))
-	if focus != nil {
+	recheck := focus != nil && rcReReviewUnchanged(prior, changed, rcChangedSince)
+	if recheck {
+		maxTurns = rcReCheckTurns(len(focus))
+	} else if focus != nil {
 		maxTurns = rcReReviewTurns(len(scope), len(chain))
 	}
 	if prior != nil {
 		priorChanged, priorKnown = rcChangedSince(prior.Head)
 		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
-		user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), maxTurns))
-		user.WriteString(rcReReviewChainBlock(chain))
-		if len(chain) > 0 {
-			fmt.Fprintf(os.Stderr, "  re-review: %d related file(s) chained from the focus (+%d turn(s))\n", len(chain), maxTurns-rcReviewMaxTurns(len(scope)))
+		if recheck {
+			user.WriteString(rcReCheckBlock(prior, focus, maxTurns))
+			fmt.Fprintf(os.Stderr, "  re-review: nothing the pull request changes differs since %s; re-checking earlier points only (%d turns)\n", rcShort(prior.Head), maxTurns)
+		} else {
+			user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), maxTurns))
+			user.WriteString(rcReReviewChainBlock(chain))
+			if len(chain) > 0 {
+				fmt.Fprintf(os.Stderr, "  re-review: %d related file(s) chained from the focus (+%d turn(s))\n", len(chain), maxTurns-rcReviewMaxTurns(len(scope)))
+			}
 		}
+		user.WriteString(rcBaseMovedBlock(prior))
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
