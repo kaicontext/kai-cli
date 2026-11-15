@@ -954,10 +954,23 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	prior := rcPriorFromEnv()
 	var priorChanged []string
 	var priorKnown bool
+	// A re-review of code that has not changed only re-checks the earlier
+	// points, on a small budget (review_commit_rescope.go).
+	maxTurns := rcReviewMaxTurns(len(scope))
+	recheck := focus != nil && rcReReviewUnchanged(prior, changed, rcChangedSince)
+	if recheck {
+		maxTurns = rcReCheckTurns(len(focus))
+	}
 	if prior != nil {
 		priorChanged, priorKnown = rcChangedSince(prior.Head)
 		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
-		user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), rcReviewMaxTurns(len(scope))))
+		if recheck {
+			user.WriteString(rcReCheckBlock(prior, focus, maxTurns))
+			fmt.Fprintf(os.Stderr, "  re-review: nothing the pull request changes differs since %s; re-checking earlier points only (%d turns)\n", rcShort(prior.Head), maxTurns)
+		} else {
+			user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), maxTurns))
+		}
+		user.WriteString(rcBaseMovedBlock(prior))
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
@@ -1020,7 +1033,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		System:     rcReviewSystem,
 		ReadOnly:   true,
 		EnableBash: false,
-		MaxTurns:   rcReviewMaxTurns(len(scope)),
+		MaxTurns:   maxTurns,
 		Prompt:     user.String(),
 
 		InjectedContext: injected,

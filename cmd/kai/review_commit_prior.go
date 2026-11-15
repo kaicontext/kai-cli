@@ -90,8 +90,10 @@ func rcChangedSince(head string) ([]string, bool) {
 	return rcChangedSinceFn(head)
 }
 
-// rcChangedSinceFn is rcChangedSince's implementation; tests replace it.
-var rcChangedSinceFn = rcGitChangedSince
+// rcChangedSinceFn is rcChangedSince's implementation; tests replace it. It
+// counts the pull request's own changes when the base moved in between
+// (review_commit_rescope_base.go).
+var rcChangedSinceFn = rcGitPRChangedSince
 
 func rcGitChangedSince(head string) ([]string, bool) {
 	if !rcHasCommit(head) && !(rcFetchCommit(head) && rcHasCommit(head)) {
