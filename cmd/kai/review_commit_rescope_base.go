@@ -115,6 +115,7 @@ func rcGitPatchByFile(from, to string) (map[string]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", from, to)
+	cmd.WaitDelay = 2 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, false
