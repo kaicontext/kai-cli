@@ -649,9 +649,10 @@ func rcChallengeReviewWith(ctx context.Context, prov provider.Provider, model, d
 	return res, nil
 }
 
-// rcChallengeDraft is the gate itself, over a draft whose speculative issues
-// are already gone.
-func rcChallengeDraft(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
+// rcChallengeDraftOnce is one attempt of the gate itself, over a draft whose
+// speculative issues are already gone. rcChallengeDraft (review_commit_backoff.go)
+// is what callers use: it repeats this attempt after a temporary 402.
+func rcChallengeDraftOnce(ctx context.Context, prov provider.Provider, model, draft string, sources []rcSource, sandbox *rcShellSandbox) (*rcChallengeResult, error) {
 	_, issues, decisions, _, _, _ := rcParseReviewOutput(draft)
 	if len(issues) == 0 && len(decisions) == 0 {
 		return &rcChallengeResult{Review: draft}, nil
