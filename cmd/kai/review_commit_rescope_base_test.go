@@ -359,3 +359,48 @@ func TestPRChangedSince_ModeOnlyChange(t *testing.T) {
 		t.Fatalf("own = %v (ok %v), want [run.sh]", own, ok)
 	}
 }
+
+// The pull request's file list (rcCommitDiffStat, from --numstat) quotes a
+// non-ASCII path and names a renamed file by its old path. The re-review
+// still finds the edited file, and a rename is not a dropped change.
+func TestReReviewFocus_QuotedAndRenamedPaths(t *testing.T) {
+	run, write := gitRepo(t)
+	write("café.go", "a\n")
+	write("old.go", "package o\n\nfunc F() {}\n")
+	write("x.go", "x\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	run("checkout", "-q", "-b", "pr")
+	write("café.go", "a2\n")
+	write("x.go", "x2\n")
+	run("mv", "old.go", "new.go")
+	run("add", "-A")
+	run("commit", "-qm", "pr")
+	reviewed := run("rev-parse", "HEAD")
+	old := reviewCommitBase
+	defer func() { reviewCommitBase = old }()
+	reviewCommitBase = "main"
+	t.Setenv("KAI_REVIEW_RESCOPE", "")
+	_, _, files := rcCommitDiffStat("main", "HEAD")
+	changed := rcPathsOf(files)
+	prior := &rcPrior{Head: reviewed}
+
+	// Nothing since: a re-check, not a full review (the rename is not a drop).
+	if f := rcReReviewFocus(prior, changed, rcGitPRChangedSince); f == nil || len(f) != 0 {
+		t.Fatalf("unchanged: focus = %#v (changed %q), want empty", f, changed)
+	}
+	if !rcReReviewUnchanged(prior, changed, rcGitPRChangedSince) {
+		t.Fatalf("unchanged not detected (changed %q)", changed)
+	}
+
+	// The author edits café.go only: it is the focus, in the list's spelling.
+	write("café.go", "a3\n")
+	run("commit", "-qam", "fix")
+	if rcReReviewUnchanged(prior, changed, rcGitPRChangedSince) {
+		t.Fatal("an edit to café.go read as unchanged")
+	}
+	f := rcReReviewFocus(prior, changed, rcGitPRChangedSince)
+	if len(f) != 1 || rcGitUnquote(f[0]) != "café.go" {
+		t.Fatalf("focus = %q, want café.go", f)
+	}
+}

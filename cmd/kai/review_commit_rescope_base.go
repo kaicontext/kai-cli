@@ -25,6 +25,7 @@ import (
 	"io"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type rcSinceResult struct {
 	ok       bool
 	baseOnly []string // changed only because the base moved
 	prAt     []string // the pull request's files at that commit; nil if unknown
+	prNow    []string // the pull request's files at HEAD; nil if unknown
 }
 
 var (
@@ -82,6 +84,10 @@ func rcComputeSince(head string) rcSinceResult {
 	if oldBase == "" || newBase == "" {
 		return r
 	}
+	// The pull request's files then and now, spelled and listed the same way
+	// (unquoted, a rename as both its paths), so they compare with the
+	// changed-since list and with each other.
+	r.prNow, _ = rcGitNames(newBase, "HEAD")
 	if oldBase == newBase {
 		r.prAt, _ = rcGitNames(oldBase, head)
 		return r
@@ -107,22 +113,53 @@ func rcBaseOnlySince(head string) []string {
 
 // rcDroppedSince lists the files the pull request changed at head and no
 // longer changes: a change taken back out. Nil when the base is unknown.
+// changed is the pull request's file list as the review has it; the list
+// worked out here (rcSinceResult.prNow) is preferred, since it spells and
+// lists files the way prAt does.
 func rcDroppedSince(head string, changed []string) []string {
-	at := rcSince(head).prAt
-	if len(at) == 0 {
+	r := rcSince(head)
+	if len(r.prAt) == 0 {
 		return nil
 	}
-	now := make(map[string]bool, len(changed))
-	for _, f := range changed {
-		now[f] = true
+	now := map[string]bool{}
+	if r.prNow != nil {
+		for _, f := range r.prNow {
+			now[f] = true
+		}
+	} else {
+		for _, f := range changed {
+			now[rcGitUnquote(f)] = true
+		}
 	}
 	var out []string
-	for _, f := range at {
+	for _, f := range r.prAt {
 		if !now[f] {
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+// rcPRNowFn is the pull request's files at HEAD as rcSince worked them out;
+// tests replace it.
+var rcPRNowFn = func(head string) []string { return rcSince(head).prNow }
+
+// rcPRFiles maps each of the pull request's files, unquoted, to the
+// spelling the review uses for it (changed's, from --numstat, which quotes
+// non-ASCII names and gives a rename its old path only). Files the review's
+// list misses that way (a rename's new path) come from rcPRNowFn, spelled
+// as git checks them out.
+func rcPRFiles(head string, changed []string) map[string]string {
+	spell := make(map[string]string, len(changed))
+	for _, f := range changed {
+		spell[rcGitUnquote(f)] = f
+	}
+	for _, f := range rcPRNowFn(head) {
+		if _, ok := spell[f]; !ok {
+			spell[f] = f
+		}
+	}
+	return spell
 }
 
 // rcDroppedSinceFn is rcDroppedSince; tests replace it.
@@ -280,4 +317,16 @@ func rcPatchByFile(diff string) map[string]string {
 	}
 	flush()
 	return out
+}
+
+// rcGitUnquote undoes git's quoting of a path ("caf\303\251.go"), which
+// --numstat and diff headers apply to non-ASCII names unless core.quotePath
+// is off. A path git did not quote is returned as it is.
+func rcGitUnquote(p string) string {
+	if len(p) >= 2 && p[0] == '"' && p[len(p)-1] == '"' {
+		if u, err := strconv.Unquote(p); err == nil {
+			return u
+		}
+	}
+	return p
 }
