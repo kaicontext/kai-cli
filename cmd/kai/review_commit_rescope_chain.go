@@ -545,6 +545,9 @@ func rcSinceSymbols(diff string) map[string][]rcChangedSym {
 	// caller can see.
 	hunkName, hunkTyp := "", false
 	rcDiffFiles(diff, func(file, line string) {
+		if rcProseFile(file) {
+			return // a README's "class Foo handles…" declares nothing
+		}
 		switch {
 		case strings.HasPrefix(line, "@@"):
 			// "@@ -10,3 +10,4 @@ func (r *T) Foo(x int) {"
@@ -553,7 +556,7 @@ func rcSinceSymbols(diff string) map[string][]rcChangedSym {
 				hunkName, hunkTyp = rcDeclName(line[2+i+2:])
 			}
 		case len(line) > 1 && (line[0] == '+' || line[0] == '-'):
-			if hunkName != "" && !rcCommentOrBlank(line[1:]) {
+			if hunkName != "" && !rcCommentOrBlank(file, line[1:]) {
 				note(file, hunkName, hunkTyp, ' ') // its first code line
 				hunkName = ""
 			}
@@ -576,22 +579,89 @@ func rcSinceSymbols(diff string) map[string][]rcChangedSym {
 func rcSinceCode(diff string) map[string]bool {
 	out := map[string]bool{}
 	rcDiffFiles(diff, func(file, line string) {
-		if len(line) > 1 && (line[0] == '+' || line[0] == '-') && !strings.HasPrefix(line, "+++") && !strings.HasPrefix(line, "---") && !rcCommentOrBlank(line[1:]) {
+		// rcDiffFiles passes body lines only, so "+++i;" here is an added "++i;".
+		if len(line) > 1 && (line[0] == '+' || line[0] == '-') && !rcCommentOrBlank(file, line[1:]) {
 			out[file] = true
 		}
 	})
 	return out
 }
 
-// rcCommentOrBlank reports whether a changed line is blank or only a comment.
-func rcCommentOrBlank(l string) bool {
+// rcCommentOrBlank reports whether a changed line of file is blank or only a
+// comment. Comment syntax is per language: "#" starts a comment in Python
+// and shell but code in C (#include) and Rust (#[derive]); "--" a comment in
+// SQL and Lua but code in C (--i); "*" a block-comment continuation but also
+// a Go or C dereference (*p = v). A language not listed is taken as code, so
+// a change in it still chains its callers.
+func rcCommentOrBlank(file, l string) bool {
 	t := strings.TrimSpace(l)
-	for _, p := range []string{"//", "#", "/*", "*", "--", "<!--"} {
+	if t == "" {
+		return true
+	}
+	for _, p := range rcCommentLeads(file) {
 		if strings.HasPrefix(t, p) {
 			return true
 		}
 	}
-	return t == ""
+	// A block-comment continuation: "* text", a lone "*", or "*/". Not "*p".
+	if rcHasBlockComments(file) && (t == "*" || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "*/")) {
+		return true
+	}
+	return false
+}
+
+// rcProseFile reports whether file is prose, where a line reading like a
+// declaration is a sentence.
+func rcProseFile(file string) bool {
+	switch strings.TrimPrefix(strings.ToLower(filepath.Ext(file)), ".") {
+	case "md", "markdown", "txt", "rst", "adoc":
+		return true
+	}
+	return false
+}
+
+// rcCommentLeads are the line-comment and comment-opening prefixes of
+// file's language; nil when it is not known.
+func rcCommentLeads(file string) []string {
+	base := strings.ToLower(filepath.Base(file))
+	switch base {
+	case "makefile", "dockerfile", "gemfile", "rakefile", "procfile", ".gitignore", ".dockerignore":
+		return []string{"#"}
+	}
+	switch strings.TrimPrefix(strings.ToLower(filepath.Ext(base)), ".") {
+	case "go", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "m", "mm", "java", "kt", "kts", "scala",
+		"swift", "js", "mjs", "cjs", "jsx", "ts", "tsx", "cs", "rs", "dart", "groovy", "gradle", "proto", "zig":
+		return []string{"//", "/*"}
+	case "css", "scss", "less":
+		return []string{"/*", "//"}
+	case "py", "pyi", "rb", "sh", "bash", "zsh", "fish", "pl", "pm", "r", "yaml", "yml", "toml",
+		"ini", "cfg", "conf", "tf", "tfvars", "nix", "cmake", "ps1", "jl", "ex", "exs", "cr", "mk", "dockerfile":
+		return []string{"#"}
+	case "php":
+		return []string{"//", "/*", "# "} // "#[" is an attribute
+	case "sql", "lua", "hs", "elm", "ada", "adb", "ads", "vhd", "vhdl":
+		return []string{"--"}
+	case "html", "htm", "xml", "svg", "md", "markdown", "vue", "svelte":
+		return []string{"<!--"}
+	case "clj", "cljs", "lisp", "el", "scm":
+		return []string{";"}
+	case "erl", "hrl", "tex":
+		return []string{"%"}
+	case "vim":
+		return []string{"\""}
+	}
+	return nil
+}
+
+// rcHasBlockComments reports whether file's language has /* */ comments,
+// whose continuation lines start with "*".
+func rcHasBlockComments(file string) bool {
+	for _, p := range rcCommentLeads(file) {
+		if p == "/*" {
+			return true
+		}
+	}
+	return false
 }
 
 // rcKeyLitRe matches a quoted string literal short enough to be a key.

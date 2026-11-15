@@ -456,3 +456,74 @@ func TestSinceDiff_NonASCIIName(t *testing.T) {
 		t.Fatalf("symbols = %+v, want Brew under café.go", syms)
 	}
 }
+
+// Whether a changed line is a comment depends on the file's language: "#",
+// "*" and "--" begin code in some languages and comments in others.
+func TestCommentOrBlank_ByLanguage(t *testing.T) {
+	cases := []struct {
+		file, line string
+		comment    bool
+	}{
+		{"a.go", "\t// note", true},
+		{"a.go", "\t/* note", true},
+		{"a.go", "\t * continued", true},
+		{"a.go", "\t*/", true},
+		{"a.go", "\t*p = v", false},
+		{"a.go", "", true},
+		{"a.c", "#include <stdio.h>", false},
+		{"a.c", "\t--i;", false},
+		{"a.rs", "#[derive(Debug)]", false},
+		{"a.rs", "/// doc", true},
+		{"a.py", "    # note", true},
+		{"a.py", "    x = 1", false},
+		{"a.sh", "# note", true},
+		{"a.yaml", "# note", true},
+		{"q.sql", "-- note", true},
+		{"q.sql", "select 1;", false},
+		{"a.lua", "-- note", true},
+		{"a.ts", "-- not a comment", false},
+		{"page.html", "<!-- note -->", true},
+		{"Makefile", "# note", true},
+		{"a.unknownext", "# maybe", false}, // unknown: code, so it still chains
+	}
+	for _, c := range cases {
+		if got := rcCommentOrBlank(c.file, c.line); got != c.comment {
+			t.Errorf("rcCommentOrBlank(%q, %q) = %v, want %v", c.file, c.line, got, c.comment)
+		}
+	}
+}
+
+// A Go function changed only by a pointer assignment is touched, and its
+// file's code changed.
+func TestSinceSymbols_PointerAssignmentIsCode(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/a.go b/a.go",
+		"--- a/a.go",
+		"+++ b/a.go",
+		"@@ -10 +10 @@ func (s *S) Set(v int) {",
+		"-	*s.p = 0",
+		"+	*s.p = v",
+	}, "\n")
+	if got := rcSinceSymbols(diff)["a.go"]; len(got) != 1 || got[0].Name != "Set" {
+		t.Fatalf("symbols = %+v, want Set", got)
+	}
+	if !rcSinceCode(diff)["a.go"] {
+		t.Fatal("a pointer assignment did not count as code")
+	}
+}
+
+// An added "++i;" is "+++i;" in a diff body: code, not a header.
+func TestSinceCode_HeaderLikeCodeLine(t *testing.T) {
+	diff := "diff --git a/a.c b/a.c\n--- a/a.c\n+++ b/a.c\n@@ -4 +4 @@ int next(void) {\n+++i;\n"
+	if !rcSinceCode(diff)["a.c"] {
+		t.Fatal(`"++i;" did not count as code`)
+	}
+}
+
+// Prose is not code: "class Foo handles…" in a README declares nothing.
+func TestSinceSymbols_ProseFilesDeclareNothing(t *testing.T) {
+	diff := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n+class Foo handles retries\n"
+	if got := rcSinceSymbols(diff); len(got["README.md"]) != 0 {
+		t.Fatalf("symbols from prose: %+v", got)
+	}
+}
