@@ -375,7 +375,10 @@ func rcSweepFocus(focus []string, chain []rcChained) []string {
 	if focus == nil {
 		return nil
 	}
-	out := append([]string(nil), focus...)
+	// make, not append onto nil: an empty focus (a re-check with no file to
+	// read) must stay non-nil, or the sweeps would read the whole change.
+	out := make([]string, len(focus), len(focus)+len(chain))
+	copy(out, focus)
 	for _, c := range chain {
 		out = append(out, c.Path)
 	}

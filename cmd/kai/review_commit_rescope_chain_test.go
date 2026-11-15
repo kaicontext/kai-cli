@@ -257,6 +257,15 @@ func TestSweepFocus(t *testing.T) {
 	if f := rcSweepFocus(nil, []rcChained{{Path: "x.go"}}); f != nil {
 		t.Fatalf("full review: %v", f)
 	}
+	// A re-check with no file to read: the sweeps read nothing, not the
+	// whole pull request.
+	if f := rcSweepFocus([]string{}, nil); f == nil || len(f) != 0 {
+		t.Fatalf("re-check: sweep focus = %#v, want empty and non-nil", f)
+	}
+	order, patches := rcOnlyPatches([]string{"a.go"}, map[string]string{"a.go": "+x"}, rcSweepFocus([]string{}, nil))
+	if len(order) != 0 || len(patches) != 0 {
+		t.Fatalf("re-check sweeps %v", order)
+	}
 	got := rcSweepFocus([]string{"a.go"}, []rcChained{{Path: "b.go"}})
 	if want := []string{"a.go", "b.go"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sweep focus = %v, want %v", got, want)
