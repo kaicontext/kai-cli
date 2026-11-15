@@ -496,14 +496,18 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		// A re-review is sized to what changed since the previous review
 		// (review_commit_rescope.go); nil covers the whole change.
 		focus := rcReReviewFocus(rcPriorFromEnv(), rcPathsOf(files), rcChangedSince)
+		var chain []rcChained
 		if focus != nil {
 			fmt.Fprintf(os.Stderr, "  re-review: %d of %d changed file(s) to read again; budgets sized to those\n", len(focus), len(files))
+			// And the files the change since then can break
+			// (review_commit_rescope_chain.go).
+			chain = rcReReviewRelated(rcPriorFromEnv(), focus, asGraphDB(set.Primary().DB), set.Primary().Path)
 		}
-		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref, focus)
+		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref, rcSweepFocus(focus, chain))
 		// The publication gate reads the reviewed commit to settle what the
 		// reviewer's own tool results do not show (review_commit_repo.go).
 		gateCtx := rcWithRepo(ctx, rcNewRepo(reviewCommitBase, ref, hash))
-		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, hash, authorContext, intent, hosts, diff, rcPathsOf(files), focus, sweep)
+		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, hash, authorContext, intent, hosts, diff, rcPathsOf(files), focus, chain, sweep)
 		if err != nil {
 			return err
 		}
@@ -887,7 +891,7 @@ func rcRepoHeader(repo string) string {
 // focus, when not nil, is a re-review's files to read again
 // (review_commit_rescope.go): the turn budget and the coverage gate are sized
 // to it rather than to every changed file.
-func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, hash, sourceContext, intent, hosts, diff string, changed, focus []string, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
+func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, hash, sourceContext, intent, hosts, diff string, changed, focus []string, chain []rcChained, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
 	scope := rcReviewScope(changed, focus)
 	publicationCtx := ctx
 	primary := set.Primary()
@@ -954,10 +958,20 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	prior := rcPriorFromEnv()
 	var priorChanged []string
 	var priorKnown bool
+	// A scoped re-review also reads the files around its focus (chain, from
+	// review_commit_rescope_chain.go), at one turn per two.
+	maxTurns := rcReviewMaxTurns(len(scope))
+	if focus != nil {
+		maxTurns = rcReReviewTurns(len(scope), len(chain))
+	}
 	if prior != nil {
 		priorChanged, priorKnown = rcChangedSince(prior.Head)
 		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
-		user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), rcReviewMaxTurns(len(scope))))
+		user.WriteString(rcReReviewFocusBlock(prior, focus, len(changed), maxTurns))
+		user.WriteString(rcReReviewChainBlock(chain))
+		if len(chain) > 0 {
+			fmt.Fprintf(os.Stderr, "  re-review: %d related file(s) chained from the focus (+%d turn(s))\n", len(chain), maxTurns-rcReviewMaxTurns(len(scope)))
+		}
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
@@ -1020,7 +1034,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		System:     rcReviewSystem,
 		ReadOnly:   true,
 		EnableBash: false,
-		MaxTurns:   rcReviewMaxTurns(len(scope)),
+		MaxTurns:   maxTurns,
 		Prompt:     user.String(),
 
 		InjectedContext: injected,
