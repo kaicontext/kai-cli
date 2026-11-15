@@ -206,13 +206,23 @@ func rcGitPatchByFile(from, to string) (map[string]string, bool) {
 	if err := cmd.Start(); err != nil {
 		return nil, false
 	}
-	const limit = 32 << 20
+	limit := rcPatchLimit
 	out, _ := io.ReadAll(io.LimitReader(stdout, limit+1))
-	if err := cmd.Wait(); err != nil || len(out) > limit {
+	if int64(len(out)) > limit {
+		// Too big to compare. Stop git now: it is blocked writing the rest,
+		// and waiting would hold the review until the deadline.
+		cancel()
+		_ = cmd.Wait()
 		return nil, false // a truncated patch would compare wrong
+	}
+	if err := cmd.Wait(); err != nil {
+		return nil, false
 	}
 	return rcPatchByFile(string(out)), true
 }
+
+// rcPatchLimit is the largest pull-request patch compared; tests lower it.
+var rcPatchLimit int64 = 32 << 20
 
 // rcPatchByFile splits a diff per file and keeps what the change IS: its
 // added and removed lines and whether the file is new or deleted. Hunk
@@ -222,30 +232,45 @@ func rcPatchByFile(diff string) map[string]string {
 	out := map[string]string{}
 	var b strings.Builder
 	file := ""
+	// inBody: past the file's first "@@". From there every line is part of
+	// the change, including "--- x" (a removed "-- x") and "+++ x" (an added
+	// "++ x"), which before it would be the file's own header lines. A line
+	// at column 0 starting "diff --git " is always a new file: body lines
+	// start with "+", "-", " " or "\".
+	inBody := false
 	flush := func() {
 		if file != "" {
 			out[file] = b.String()
 		}
 		b.Reset()
-		file = ""
+		file, inBody = "", false
 	}
 	for _, line := range strings.Split(diff, "\n") {
-		switch {
-		case strings.HasPrefix(line, "diff --git "):
+		if strings.HasPrefix(line, "diff --git ") {
 			flush()
 			// "diff --git a/x b/x" (no renames, so both sides name it)
 			if i := strings.LastIndex(line, " b/"); i >= 0 {
 				file = line[i+3:]
 			}
-		case file == "":
-		case strings.HasPrefix(line, "new file"), strings.HasPrefix(line, "deleted file"):
-			b.WriteString(strings.Fields(line)[0])
-			b.WriteString("\n")
-		case strings.HasPrefix(line, "+++ "), strings.HasPrefix(line, "--- "):
-		case strings.HasPrefix(line, "Binary files "):
-			b.WriteString(line)
-			b.WriteString("\n")
-		case len(line) > 0 && (line[0] == '+' || line[0] == '-'):
+			continue
+		}
+		if file == "" {
+			continue
+		}
+		if !inBody {
+			switch {
+			case strings.HasPrefix(line, "@@"):
+				inBody = true
+			case strings.HasPrefix(line, "new file"), strings.HasPrefix(line, "deleted file"):
+				b.WriteString(strings.Fields(line)[0])
+				b.WriteString("\n")
+			case strings.HasPrefix(line, "Binary files "):
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+			continue // index, mode, "---"/"+++" header lines
+		}
+		if len(line) > 0 && (line[0] == '+' || line[0] == '-') {
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
