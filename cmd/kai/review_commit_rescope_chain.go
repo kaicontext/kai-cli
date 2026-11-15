@@ -699,12 +699,26 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 	}
 	diff := rcSinceDiff(prior.Head, focus)
 	in := rcChainInputs{Symbols: rcSinceSymbols(diff), Keys: rcResolveKeys(rcSinceKeys(diff), root)}
-	var g rcChainGraph = rcGrepFallback{root: root}
+	deadline := time.Now().Add(rcChainBudget)
+	var g rcChainGraph = rcGrepFallback{root: root, deadline: deadline}
 	if gdb != nil {
-		g = rcGrepFallback{rcChainGraph: newRCGraphChain(gdb, root), root: root}
+		g = rcGrepFallback{rcChainGraph: newRCGraphChain(gdb, root), root: root, deadline: deadline}
 	}
-	return rcReReviewChain(focus, in, g, max)
+	started := time.Now()
+	chain := rcReReviewChain(focus, in, g, max)
+	if time.Now().After(deadline) {
+		fmt.Fprintf(os.Stderr, "  re-review: related-file lookups stopped at their %s budget; %d found\n", rcChainBudget, len(chain))
+	} else {
+		fmt.Fprintf(os.Stderr, "  re-review: related files worked out in %s\n", time.Since(started).Round(time.Millisecond))
+	}
+	return chain
 }
+
+// rcChainBudget bounds the related-file lookups as a whole. Each callee-name
+// lookup scans the graph's call-site nodes; on a very large graph a long list
+// of changed symbols must not hold the review up. Lookups that would start
+// past it answer nothing, so the list is whatever was found in time.
+var rcChainBudget = 20 * time.Second
 
 // rcGrepFallback answers SymbolCallers with a word search when the graph has
 // no call site for the symbol. The graph records none for a file its parser
@@ -714,9 +728,17 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 type rcGrepFallback struct {
 	rcChainGraph // nil: grep only
 	root         string
+	deadline     time.Time // zero: none
+}
+
+func (g rcGrepFallback) late() bool {
+	return !g.deadline.IsZero() && time.Now().After(g.deadline)
 }
 
 func (g rcGrepFallback) SymbolCallers(path, symbol string) []rcSite {
+	if g.late() {
+		return nil
+	}
 	if g.rcChainGraph != nil {
 		if s := g.rcChainGraph.SymbolCallers(path, symbol); len(s) > 0 {
 			return s
@@ -741,21 +763,21 @@ func (g rcGrepFallback) SymbolCallers(path, symbol string) []rcSite {
 }
 
 func (g rcGrepFallback) Callers(p string) []string {
-	if g.rcChainGraph == nil {
+	if g.rcChainGraph == nil || g.late() {
 		return nil
 	}
 	return g.rcChainGraph.Callers(p)
 }
 
 func (g rcGrepFallback) Tests(p string) []string {
-	if g.rcChainGraph == nil {
+	if g.rcChainGraph == nil || g.late() {
 		return nil
 	}
 	return g.rcChainGraph.Tests(p)
 }
 
 func (g rcGrepFallback) Uses(p string) []string {
-	if g.rcChainGraph == nil {
+	if g.rcChainGraph == nil || g.late() {
 		return nil
 	}
 	return g.rcChainGraph.Uses(p)

@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeChainGraph answers rcChainGraph from tables and counts the lookups.
@@ -341,5 +342,17 @@ func TestReReviewChain_ProductionCallSitesFirst(t *testing.T) {
 	got := chainPaths(rcReReviewChain([]string{"a.go"}, syms("a.go", rcChangedSym{Name: "F"}), g, 2))
 	if want := []string{"z.go", "a_test.go"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("chain = %v, want %v", got, want)
+	}
+}
+
+// Past the lookup budget nothing more is asked of the graph.
+func TestGrepFallback_Deadline(t *testing.T) {
+	inner := &fakeChainGraph{callers: map[string][]string{"a.go": {"x.go"}}}
+	g := rcGrepFallback{rcChainGraph: inner, deadline: time.Now().Add(-time.Second)}
+	if g.Callers("a.go") != nil || g.SymbolCallers("a.go", "Name") != nil || g.Tests("a.go") != nil || g.Uses("a.go") != nil {
+		t.Fatal("answered past the deadline")
+	}
+	if inner.calls != 0 {
+		t.Fatalf("graph asked %d times past the deadline", inner.calls)
 	}
 }
