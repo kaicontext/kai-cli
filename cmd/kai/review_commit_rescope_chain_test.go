@@ -467,6 +467,25 @@ func TestSinceDiff_NonASCIIName(t *testing.T) {
 	}
 }
 
+// git appends a tab to the ---/+++ path when it holds a space; the since-diff
+// must still key the file by the untabbed path, or chaining finds nothing for a
+// file whose name has a space. Removing rcDiffFiles' TrimSuffix fails this.
+func TestSinceDiff_SpacedName(t *testing.T) {
+	run, write := gitRepo(t)
+	write("my file.go", "package c\n\nfunc Brew() int { return 1 }\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	write("my file.go", "package c\n\nfunc Brew() int { return 2 }\n")
+	run("commit", "-qam", "change")
+	diff := rcSinceDiff("HEAD~1", "", []string{"my file.go"})
+	if syms := rcSinceSymbols(diff); len(syms["my file.go"]) != 1 || syms["my file.go"][0].Name != "Brew" {
+		t.Fatalf("symbols = %+v, want Brew under \"my file.go\"", syms)
+	}
+	if !rcSinceCode(diff)["my file.go"] {
+		t.Errorf("code change not reported under \"my file.go\"")
+	}
+}
+
 // Whether a changed line is a comment depends on the file's language: "#",
 // "*" and "--" begin code in some languages and comments in others.
 func TestCommentOrBlank_ByLanguage(t *testing.T) {
