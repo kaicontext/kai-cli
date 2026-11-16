@@ -165,7 +165,9 @@ func TestRefillGivesGateFreedSlotsToWhatTheCapCut(t *testing.T) {
 		{"standard", "", []int{1, 4, 5, 6}},
 		{"deep", "", []int{1, 4, 5, 6}},
 		{"light", "", []int{1, 4}},
-		{"auto", "", []int{1, 4}},
+		{"auto", "", []int{1, 4, 5, 6}},
+		{"auto", "0", []int{1, 4}},
+		{"AUTO", "", []int{1, 4, 5, 6}},
 		{"free", "", []int{1, 4}},
 		{"baseline", "", []int{1, 4}},
 		{"", "", []int{1, 4}},
@@ -224,6 +226,8 @@ func TestRefillPublishesTwoVoteDefectTheCapCut(t *testing.T) {
 		{"light", "", []int{1}},
 		{"standard", "", []int{1, 5}},
 		{"deep", "", []int{1, 5}},
+		{"auto", "", []int{1, 5}},
+		{"auto", "0", []int{1}},
 		{"standard", "0", []int{1}},
 	} {
 		t.Setenv("KAI_REVIEW_TIER", tc.tier)
@@ -239,7 +243,7 @@ func TestRefillPublishesTwoVoteDefectTheCapCut(t *testing.T) {
 // The "never publish nothing" fallback holds in every depth: when the gate
 // would withhold everything, the selection's first stays and nothing refills.
 func TestPublishGateFallbackHoldsWithRefillOn(t *testing.T) {
-	for _, tier := range []string{"standard", "deep"} {
+	for _, tier := range []string{"standard", "deep", "auto"} {
 		t.Setenv("KAI_REVIEW_TIER", tier)
 		res := &rcChallengeResult{match: finding.MatchPartial, proposed: finding.ReadinessSmallFixes, Allegations: []rcAllegationResult{
 			{ID: 1, Issue: "a.go:90 — first", Status: rcStatusSupported, Reason: "kept reason"},
