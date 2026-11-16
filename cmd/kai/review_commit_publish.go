@@ -102,9 +102,24 @@ func rcGateWhy(a *rcAllegationResult, repo *rcRepo, ranged, corroborate bool) st
 	return ""
 }
 
-// rcRefillOn reports whether the refill is on. Off by default until a replay
-// has measured it (KAI_REVIEW_REFILL=1).
-func rcRefillOn() bool { return os.Getenv("KAI_REVIEW_REFILL") == "1" }
+// rcRefillOn reports whether the refill is on. It follows the review depth
+// the server chose (KAI_REVIEW_TIER): on for standard and deep, off for light
+// and for every other value, including unset (auto, free, baseline, or a repo
+// running its own workflow). KAI_REVIEW_REFILL=0 turns it off in every depth
+// and KAI_REVIEW_REFILL=1 forces it on.
+func rcRefillOn() bool {
+	switch strings.TrimSpace(os.Getenv("KAI_REVIEW_REFILL")) {
+	case "0":
+		return false
+	case "1":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("KAI_REVIEW_TIER"))) {
+	case "standard", "deep":
+		return true
+	}
+	return false
+}
 
 // rcRefillFromCap gives the slots the gate freed back to the allegations the
 // cap left out. The cap runs before the gate, so a defect it cut never came

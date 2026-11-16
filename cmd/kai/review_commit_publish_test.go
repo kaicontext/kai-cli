@@ -155,4 +155,99 @@ func TestRefillGivesGateFreedSlotsToWhatTheCapCut(t *testing.T) {
 	if got := published(res); !reflect.DeepEqual(got, []int{1, 4, 5, 6}) {
 		t.Errorf("with the refill, published %v, want [1 4 5 6]: two slots were freed, the two cut defects take them", got)
 	}
+
+	// By depth: on for standard and deep, off for light and for the values that
+	// name no depth, and KAI_REVIEW_REFILL=0 wins over the depth.
+	for _, tc := range []struct {
+		tier, refill string
+		want         []int
+	}{
+		{"standard", "", []int{1, 4, 5, 6}},
+		{"deep", "", []int{1, 4, 5, 6}},
+		{"light", "", []int{1, 4}},
+		{"auto", "", []int{1, 4}},
+		{"free", "", []int{1, 4}},
+		{"baseline", "", []int{1, 4}},
+		{"", "", []int{1, 4}},
+		{"standard", "0", []int{1, 4}},
+		{"deep", "0", []int{1, 4}},
+		{"light", "1", []int{1, 4, 5, 6}},
+	} {
+		t.Setenv("KAI_REVIEW_TIER", tc.tier)
+		t.Setenv("KAI_REVIEW_REFILL", tc.refill)
+		res := mk()
+		rcPublishGate(res, repo, false)
+		if got := published(res); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("tier %q refill %q: published %v, want %v", tc.tier, tc.refill, got, tc.want)
+		}
+	}
+}
+
+// In standard and deep, a defect two proposals raised that the cap cut takes
+// the slot the gate frees by withholding a single-proposal one.
+func TestRefillPublishesTwoVoteDefectTheCapCut(t *testing.T) {
+	t.Setenv("KAI_REVIEW_REFILL", "")
+	mk := func() *rcChallengeResult {
+		var al []rcAllegationResult
+		for i := 1; i <= 6; i++ {
+			al = append(al, rcAllegationResult{ID: i, Issue: fmt.Sprintf("a.go:%d — defect %d", 100+i, i), Status: rcStatusSupported, Reason: "confirmed"})
+		}
+		// Votes count the allegations of a duplicate group: 1 and 5 each have a
+		// second proposal's copy (7, 8), so they carry two votes.
+		al = append(al,
+			rcAllegationResult{ID: 7, Issue: "a.go:101 — copy of 1", Status: rcStatusRefuted, DuplicateOf: 1},
+			rcAllegationResult{ID: 8, Issue: "a.go:105 — copy of 5", Status: rcStatusRefuted, DuplicateOf: 5})
+		// One main slot and three minor ones: 1-4 are published, 5 (two
+		// proposals) and 6 (one) are cut. The gate withholds the single-proposal
+		// 2-4, freeing three slots; only 5 passes the gate to take one.
+		ans := rcRankAnswer{Publish: []int{1, 2, 3, 4, 5, 6}}
+		res := &rcChallengeResult{Allegations: al}
+		rcMarkRank(res, ans, 1)
+		rcApplyRank(res, ans, 1)
+		return res
+	}
+	repo := &rcRepo{changed: map[string][][2]int{"a.go": {{100, 110}}}}
+	published := func(res *rcChallengeResult) []int {
+		var ids []int
+		for _, a := range res.Allegations {
+			if a.Status == rcStatusSupported {
+				ids = append(ids, a.ID)
+			}
+		}
+		sort.Ints(ids)
+		return ids
+	}
+	for _, tc := range []struct {
+		tier, refill string
+		want         []int
+	}{
+		{"light", "", []int{1}},
+		{"standard", "", []int{1, 5}},
+		{"deep", "", []int{1, 5}},
+		{"standard", "0", []int{1}},
+	} {
+		t.Setenv("KAI_REVIEW_TIER", tc.tier)
+		t.Setenv("KAI_REVIEW_REFILL", tc.refill)
+		res := mk()
+		rcPublishGate(res, repo, true)
+		if got := published(res); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("tier %q refill %q: published %v, want %v", tc.tier, tc.refill, got, tc.want)
+		}
+	}
+}
+
+// The "never publish nothing" fallback holds in every depth: when the gate
+// would withhold everything, the selection's first stays and nothing refills.
+func TestPublishGateFallbackHoldsWithRefillOn(t *testing.T) {
+	for _, tier := range []string{"standard", "deep"} {
+		t.Setenv("KAI_REVIEW_TIER", tier)
+		res := &rcChallengeResult{match: finding.MatchPartial, proposed: finding.ReadinessSmallFixes, Allegations: []rcAllegationResult{
+			{ID: 1, Issue: "a.go:90 — first", Status: rcStatusSupported, Reason: "kept reason"},
+			{ID: 2, Issue: "a.go:95 — second", Status: rcStatusSupported},
+		}}
+		rcPublishGate(res, gateRepo(), true)
+		if res.Allegations[0].Status != rcStatusSupported || res.Allegations[1].Status != rcStatusRefuted {
+			t.Errorf("%s: fallback broke: %+v", tier, res.Allegations)
+		}
+	}
 }
