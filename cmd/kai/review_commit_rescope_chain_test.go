@@ -316,6 +316,50 @@ func TestReReviewChainBlock(t *testing.T) {
 	}
 }
 
+// A base change to a pull-request file the focus uses is surfaced, named by the
+// focus file that calls it; a base change nothing in the focus uses is not.
+func TestBaseChain_SurfacesWhenFocusUsesIt(t *testing.T) {
+	g := &fakeChainGraph{sym: map[string][]rcSite{
+		"moved.go|Charge": {{"pr.go", 10}},
+		"moved.go|Other":  {{"outside.go", 3}},
+	}}
+	base := map[string][]rcChangedSym{"moved.go": {{Name: "Charge"}}}
+	got := rcBaseChain([]string{"pr.go"}, base, g)
+	want := []rcChained{{Path: "moved.go", Kind: rcChainBase, Of: "pr.go", What: "Charge"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("base chain = %+v, want %+v", got, want)
+	}
+	if r := got[0].reason(); r != "the base changed Charge here since your last review; pr.go uses it" {
+		t.Errorf("reason = %q", r)
+	}
+	if c := rcBaseChain([]string{"pr.go"}, map[string][]rcChangedSym{"moved.go": {{Name: "Other"}}}, g); c != nil {
+		t.Errorf("unused base change surfaced: %+v", c)
+	}
+	if c := rcBaseChain([]string{"pr.go"}, base, nil); c != nil {
+		t.Errorf("no graph: %+v", c)
+	}
+}
+
+// A removed base symbol reads "removed", a base-changed type has no call sites,
+// and rcMergeChains ranks base entries first, each path once, up to the cap.
+func TestBaseChain_RemovedTypeAndMerge(t *testing.T) {
+	g := &fakeChainGraph{sym: map[string][]rcSite{"moved.go|Gone": {{"pr.go", 5}}}}
+	base := map[string][]rcChangedSym{"moved.go": {{Name: "T", Type: true}, {Name: "Gone", Removed: true}}}
+	got := rcBaseChain([]string{"pr.go"}, base, g)
+	want := []rcChained{{Path: "moved.go", Kind: rcChainBase, Of: "pr.go", What: "Gone", Removed: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if r := got[0].reason(); r != "the base removed Gone here since your last review; pr.go uses it" {
+		t.Errorf("reason = %q", r)
+	}
+	b := []rcChained{{Path: "moved.go", Kind: rcChainBase}}
+	c := []rcChained{{Path: "moved.go", Kind: rcChainSymbol}, {Path: "x.go"}, {Path: "y.go"}}
+	if got, want := chainPaths(rcMergeChains(b, c, 2)), []string{"moved.go", "x.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("merge = %v, want %v", got, want)
+	}
+}
+
 // With no call site in the graph (a file its parser skipped), a word search
 // stands in; a name used everywhere is not listed.
 func TestGrepFallback(t *testing.T) {

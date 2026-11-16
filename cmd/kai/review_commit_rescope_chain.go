@@ -78,6 +78,10 @@ const (
 	rcChainTest
 	rcChainUse
 	rcChainKinds
+	// rcChainBase is a pull-request file the base changed under unchanged
+	// pull-request edits, whose change a focus file uses. It is produced by
+	// rcBaseChain and ranked ahead of the round-robin kinds, not among them.
+	rcChainBase
 )
 
 // rcChained is one related file and why it is read.
@@ -111,6 +115,8 @@ func (c rcChained) reason() string {
 		}
 	}
 	switch c.Kind {
+	case rcChainBase:
+		return fmt.Sprintf("the base %s %s here since your last review; %s uses it", gone, c.What, c.Of)
 	case rcChainSymbol:
 		return fmt.Sprintf("calls %s (%s in %s)%s", c.What, gone, c.Of, at)
 	case rcChainKey:
@@ -396,7 +402,8 @@ func rcReReviewChainBlock(chain []rcChained) string {
 	b.WriteString("call sites of the functions it changed or removed, users of the string keys it changed, then tests and dependencies; one hop). ")
 	b.WriteString("After the focus files, open each of these at the lines given and check it against what changed: ")
 	b.WriteString("a caller still passing old arguments or relying on an old return, error or nil case; ")
-	b.WriteString("a key read or written under a name that no longer matches; a test asserting the old behaviour. ")
+	b.WriteString("a key read or written under a name that no longer matches; a test asserting the old behaviour; ")
+	b.WriteString("a base change to a file this pull request did not re-edit, now meeting the pull request's code. ")
 	b.WriteString("They are read for impact, not reviewed line by line, and some are outside this pull request:\n")
 	for _, c := range chain {
 		fmt.Fprintf(&b, "- %s — %s\n", c.Path, c.reason())
@@ -423,17 +430,35 @@ var rcSinceDiff = func(head, root string, focus []string) string {
 	if tree := rcReplayOnNewBase(head, root); tree != "" {
 		from = tree
 	}
-	paths := make([]string, len(focus))
-	for i, f := range focus {
+	return rcGitZeroCtxDiff(from, "HEAD", root, focus)
+}
+
+// rcBaseDiff is the base's own change to the given pull-request files: the
+// zero-context diff from the previous review's commit to HEAD with no replay.
+// Their pull-request edits did not change since that commit (they are base-only
+// files), so this delta is the base's. "" when there is none. Tests replace it.
+var rcBaseDiff = func(head, root string, files []string) string {
+	if head == "" || len(files) == 0 {
+		return ""
+	}
+	return rcGitZeroCtxDiff(head, "HEAD", root, files)
+}
+
+// rcGitZeroCtxDiff is the zero-context diff from..to restricted to the given
+// paths; "" when git cannot produce it. The read is size-capped and git is
+// stopped at the cap rather than waited on.
+func rcGitZeroCtxDiff(from, to, root string, files []string) string {
+	paths := make([]string, len(files))
+	for i, f := range files {
 		paths[i] = rcGitUnquote(f) // a pathspec is the real path
 	}
-	args := append([]string{"-c", "core.quotePath=false", "--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", from, "HEAD", "--"}, paths...)
+	args := append([]string{"-c", "core.quotePath=false", "--no-pager", "diff", "-U0", "--no-color", "--no-ext-diff", from, to, "--"}, paths...)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.WaitDelay = 2 * time.Second
-	// The focus paths are relative to the repository root; as pathspecs they
-	// are read relative to the working directory, which may be below it.
+	// The paths are relative to the repository root; as pathspecs they are read
+	// relative to the working directory, which may be below it.
 	if root != "" {
 		cmd.Dir = root
 	}
@@ -445,8 +470,6 @@ var rcSinceDiff = func(head, root string, focus []string) string {
 		return ""
 	}
 	out, _ := io.ReadAll(io.LimitReader(stdout, rcSinceDiffLimit))
-	// At the cap git may be blocked writing the rest: stop it rather than
-	// wait for the deadline. What was read is used.
 	cancel()
 	_ = cmd.Wait()
 	return string(out)
@@ -889,13 +912,78 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 		g = rcGrepFallback{rcChainGraph: newRCGraphChain(gdb, root), root: root, deadline: deadline}
 	}
 	started := time.Now()
-	chain := rcReReviewChain(focus, in, g, max)
+	// Base changes to pull-request files the focus uses rank ahead of the rest:
+	// a base merge breaking the pull request's unchanged code is the defect the
+	// BASE MOVED note alone would only hint at.
+	base := rcBaseChain(focus, rcSinceSymbols(rcBaseDiff(prior.Head, root, rcBaseOnlySince(prior.Head))), g)
+	chain := rcMergeChains(base, rcReReviewChain(focus, in, g, max), max)
 	if time.Now().After(deadline) {
 		fmt.Fprintf(os.Stderr, "  re-review: related-file lookups stopped at their %s budget; %d found\n", rcChainBudget, len(chain))
 	} else {
-		fmt.Fprintf(os.Stderr, "  re-review: related files worked out in %s\n", time.Since(started).Round(time.Millisecond))
+		fmt.Fprintf(os.Stderr, "  re-review: related files worked out in %s (%d from base changes)\n", time.Since(started).Round(time.Millisecond), len(base))
 	}
 	return chain
+}
+
+// rcBaseChain surfaces pull-request files the base changed under unchanged
+// pull-request edits (baseSyms, keyed by file) whose changed symbol a focus
+// file calls: where a base merge can break the pull request's code without the
+// pull request changing. The focus file that uses it is named. nil when there
+// is no graph.
+func rcBaseChain(focus []string, baseSyms map[string][]rcChangedSym, g rcChainGraph) []rcChained {
+	if g == nil || len(baseSyms) == 0 {
+		return nil
+	}
+	inFocus := make(map[string]bool, len(focus))
+	for _, f := range focus {
+		inFocus[f] = true
+	}
+	files := make([]string, 0, len(baseSyms))
+	for f := range baseSyms {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	var out []rcChained
+	for _, bf := range files {
+		if inFocus[bf] || rcChainSkip(bf) {
+			continue // a focus file is read anyway
+		}
+		for _, s := range baseSyms[bf] {
+			if s.Type {
+				continue // a type's users are not call sites
+			}
+			usedBy := ""
+			for _, site := range g.SymbolCallers(bf, s.Name) {
+				if inFocus[site.Path] {
+					usedBy = site.Path
+					break
+				}
+			}
+			if usedBy != "" {
+				out = append(out, rcChained{Path: bf, Kind: rcChainBase, Of: usedBy, What: s.Name, Removed: s.Removed})
+				break // one entry per base file
+			}
+		}
+	}
+	return out
+}
+
+// rcMergeChains puts the base-change entries first, then the rest, each path
+// once, up to max.
+func rcMergeChains(base, chain []rcChained, max int) []rcChained {
+	seen := make(map[string]bool, len(base)+len(chain))
+	out := make([]rcChained, 0, max)
+	for _, c := range append(append([]rcChained(nil), base...), chain...) {
+		if len(out) >= max {
+			break
+		}
+		if c.Path == "" || seen[c.Path] {
+			continue
+		}
+		seen[c.Path] = true
+		out = append(out, c)
+	}
+	return out
 }
 
 // rcChainBudget bounds the related-file lookups as a whole. Each callee-name
