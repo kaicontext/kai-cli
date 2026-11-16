@@ -500,10 +500,11 @@ func rcDiffFiles(diff string, fn func(file, line string)) {
 		if !inBody {
 			switch {
 			case strings.HasPrefix(line, "--- "):
-				oldFile = strings.TrimPrefix(strings.TrimPrefix(line, "--- "), "a/")
+				// git appends a tab to the path when it has a space.
+				oldFile = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(line, "--- "), "a/"), "\t")
 				continue
 			case strings.HasPrefix(line, "+++ "):
-				file = strings.TrimPrefix(strings.TrimPrefix(line, "+++ "), "b/")
+				file = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(line, "+++ "), "b/"), "\t")
 				if file == "/dev/null" {
 					file = oldFile
 				}
