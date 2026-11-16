@@ -391,9 +391,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// job's or the benchmark's (review_commit_profile.go). Loaded before any
 	// model is resolved, so every stage below sees it.
 	risk := rcPreReviewRisk(files, blast)
-	if os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK") != "" && risk.Level != "" {
+	if (os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK") != "" || os.Getenv("KAI_REVIEW_PROFILE_SMALL") != "") && risk.Level != "" {
 		profile := "standard profile"
-		if rcLowRiskLevel(risk.Level) {
+		switch {
+		case rcSmallRiskLevel(risk.Level):
+			profile = "small profile"
+		case os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK") != "" && rcLowRiskLevel(risk.Level):
 			profile = "low-risk profile"
 		}
 		fmt.Fprintf(os.Stderr, "  pre-review risk %s → %s\n", risk, profile)
@@ -440,8 +443,13 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// From here every model call is recorded for the bundle's "run" object
 	// (review_commit_run.go): what each stage was set to, what answered, and
 	// every failover. The low-risk test is rcLoadProfileForRisk's own.
-	lowRisk := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")) != "" && rcLowRiskLevel(risk.Level)
-	rcRunStart(risk, rcRunProfile(lowRisk), rcRunStageModels(stageModels, reviewCommitFormat == "json"))
+	small := rcSmallRiskLevel(risk.Level)
+	lowRisk := !small && strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")) != "" && rcLowRiskLevel(risk.Level)
+	runProfile := rcRunProfile(lowRisk)
+	if small {
+		runProfile = rcProfileSmall
+	}
+	rcRunStart(risk, runProfile, rcRunStageModels(stageModels, reviewCommitFormat == "json"))
 
 	// The pull request description a person would write, asked for beside the
 	// review (review_commit_description.go); only a bundle carries it.
