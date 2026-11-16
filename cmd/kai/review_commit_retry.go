@@ -4,8 +4,8 @@ package main
 //
 // kai-engine's send path recovers from an empty reply by switching models,
 // along chains that ignore the review's model set: one empty GLM reply could
-// move the review onto claude-opus-4-8 for the rest of the run, and a Free
-// review's Gemini model fell back to GLM. A review runs on every push and has
+// move the review onto claude-opus-4-8, outside its set, for the rest of the
+// run. A review runs on every push and has
 // its own account of a run that did not finish, so when the server sends the
 // set's backups (KAI_REVIEW_FALLBACK_MODELS, review_commit_backups.go):
 //   - the engine fails over only to them (agent.Options.FallbackModels);

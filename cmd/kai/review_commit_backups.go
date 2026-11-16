@@ -6,7 +6,7 @@ package main
 // Backups and Summary), sent to the review as KAI_REVIEW_FALLBACK_MODELS and
 // KAI_REVIEW_SUMMARY_MODEL. With them, a failing step falls back only to the
 // set's backups, in order, and a long conversation is summarised by the set's
-// own model: Free stays on Google models, and Light stays cheap.
+// own model: each set keeps to its own models, and Light stays cheap.
 //
 // Without them the review behaves exactly as before: the engine's built-in
 // failover chains, its default summarising model, and one plain call per

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"kai/internal/freeplan"
+
 	"context"
 	"fmt"
 	"os"
@@ -270,7 +272,9 @@ func rcFastModel(reviewModel string, kind provider.Kind) string {
 	if m := strings.TrimSpace(os.Getenv("KAI_FAST_MODEL")); m != "" {
 		return m
 	}
-	if !provider.IsReasoningModel(reviewModel) {
+	// On the Free plan the review model is already the server's, and the
+	// plan doesn't include the substitute.
+	if !provider.IsReasoningModel(reviewModel) || freeDefault(freeplan.CatchAll) != "" {
 		return reviewModel
 	}
 	if kind != provider.KindKailab && kind != provider.KindOpenRouter {

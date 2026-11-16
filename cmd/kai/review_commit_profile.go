@@ -113,6 +113,14 @@ func rcProfileHash() string {
 // set once, before any model is resolved, by rcLoadProfileFor.
 var rcActiveProfile *rcReviewProfile
 
+// rcReviewModelsChosen reports whether this review's models were chosen
+// for it: the server sent a model set (KAI_REVIEW_SET_VERSION) or a
+// profile is loaded (the server's or a benchmark's). Such a review keeps
+// them on Free too; the Free plan's defaults are for a person's own runs.
+func rcReviewModelsChosen() bool {
+	return rcActiveProfile != nil || strings.TrimSpace(os.Getenv("KAI_REVIEW_SET_VERSION")) != ""
+}
+
 // A model id as the proxy routes it (the server's own rule for pinned review
 // models): letters, digits and . _ : / - only.
 var rcProfileModelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)

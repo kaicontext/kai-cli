@@ -133,6 +133,13 @@ func buildAgentServices(ctx context.Context, cwd string, autoBootstrap, singleRo
 			kailabToken = t
 		}
 	}
+	// On Free, every role the person didn't set runs the server's model
+	// (free_plan.go).
+	plan := cliFreePlan(provider.FromEnv(kailabBase, kailabToken, cfg.Planner.Model).Kind)
+	if err := applyFreePlan(&cfg, plan); err != nil {
+		set.Close()
+		return nil, err
+	}
 	pcfg := provider.FromEnv(kailabBase, kailabToken, cfg.Planner.Model)
 	prov, perr := provider.New(pcfg)
 	if perr != nil {

@@ -1,9 +1,11 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +37,8 @@ planner:
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := Config{
+		// Only the planner section names a model in this file.
+		ModelsSet: map[string]bool{"planner": true},
 		Agent: AgentConfig{
 			Model:              Default().Agent.Model, // yaml didn't set it → default applies
 			TimeoutSeconds:     1200,
@@ -410,5 +414,43 @@ func TestLoad_TriageCanBeDisabled(t *testing.T) {
 	}
 	if cfg.Triage.Enabled {
 		t.Error("triage.enabled: false in yaml should disable triage")
+	}
+}
+
+// ModelsSet reads every role section that names a model, whatever else the
+// file holds: a top-level scalar or list must not hide them.
+func TestLoad_ModelsSetBesideScalars(t *testing.T) {
+	dir := t.TempDir()
+	body := "autonomy: hands_off\nplanner:\n  model: " + Default().Planner.Model + "\nagent:\n  timeout_seconds: 60\n"
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ModelsSet["planner"] || cfg.ModelsSet["agent"] || len(cfg.ModelsSet) != 1 {
+		t.Fatalf("ModelsSet = %v, want only planner", cfg.ModelsSet)
+	}
+	// It is bookkeeping, not configuration: `kai config show --json` omits it.
+	if b, _ := json.Marshal(cfg); strings.Contains(string(b), "ModelsSet") {
+		t.Errorf("ModelsSet in the JSON form: %s", b)
+	}
+}
+
+// A role section written as an alias of an anchored one counts as setting
+// its model, as Load applies it.
+func TestLoad_ModelsSetThroughAnAlias(t *testing.T) {
+	dir := t.TempDir()
+	body := "chat: &base\n  model: some/model\nplanner: *base\n"
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Planner.Model != "some/model" || !cfg.ModelsSet["planner"] || !cfg.ModelsSet["chat"] {
+		t.Fatalf("planner %q, ModelsSet %v", cfg.Planner.Model, cfg.ModelsSet)
 	}
 }

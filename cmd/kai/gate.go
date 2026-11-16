@@ -21,6 +21,7 @@ import (
 	"github.com/kaicontext/kai-engine/util"
 	"github.com/kaicontext/kai-engine/workspace"
 	"kai/internal/config"
+	"kai/internal/freeplan"
 )
 
 // `kai gate` is the human-facing surface for the safety gate's hold
@@ -826,13 +827,26 @@ func runGateFix(cmd *cobra.Command, args []string) error {
 // For BYOM providers both roles collapse to the
 // single provider-resolved model (kailab model ids aren't valid
 // there), mirroring buildPlannerServices in tui.go.
+//
+// On the Free plan (free_plan.go) the roles the person didn't set run the
+// server's models, commit review included, unless the review's models were
+// chosen for it (rcReviewModelsChosen): a review the server sent a set
+// for, or a benchmark profile, keeps exactly what it was given.
 func buildGateProvider(cfg config.Config) (prov provider.Provider, reviewModel, fixModel string, err error) {
 	kailabBase, kailabToken := kailabCreds()
+	var plan freeplan.Plan
+	if !rcReviewModelsChosen() {
+		plan = cliFreePlan(provider.FromEnv(kailabBase, kailabToken, cfg.Planner.Model).Kind)
+	}
+	if err := applyFreePlan(&cfg, plan); err != nil {
+		return nil, "", "", err
+	}
 	pcfg := provider.FromEnv(kailabBase, kailabToken, cfg.Planner.Model)
 	prov, err = provider.New(pcfg)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("provider: %w (run `kai login`)", err)
 	}
+
 	reviewModel, fixModel = pcfg.Model, pcfg.Model
 	if pcfg.Kind == provider.KindKailab {
 		reviewModel = modelFromEnv("KAI_REVIEW_MODEL", cfg.Review.Model)

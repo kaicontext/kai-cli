@@ -413,7 +413,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, line)
 	}
 
-	prov, model, provKind := rcReviewProvider()
+	prov, model, provKind, perr := rcReviewProvider()
+	if perr != nil {
+		return perr
+	}
 	if prov == nil {
 		return fmt.Errorf("no LLM provider available (run `kai login`)")
 	}
@@ -785,15 +788,21 @@ func rcWorktreeRoot(dir string) string {
 }
 
 // rcReviewProvider builds the LLM provider (kailab creds → OpenRouter, or an
-// ANTHROPIC_API_KEY fallback), reusing the gate/planner plumbing.
-func rcReviewProvider() (provider.Provider, string, provider.Kind) {
+// ANTHROPIC_API_KEY fallback), reusing the gate/planner plumbing. No
+// provider is a nil one, which callers report themselves; the error is
+// only the Free plan's stop, which they show as it is.
+func rcReviewProvider() (provider.Provider, string, provider.Kind, error) {
 	cfg, err := config.Load(kaiDir)
 	if err != nil {
-		return nil, "", ""
+		return nil, "", "", nil
 	}
 	prov, reviewModel, _, err := buildGateProvider(cfg)
 	if err != nil {
-		return nil, "", ""
+		var stop freeStopError
+		if errors.As(err, &stop) {
+			return nil, "", "", err
+		}
+		return nil, "", "", nil
 	}
 	// The kind, not just the model: it decides whether the fast pass may
 	// substitute a model at all. An OpenAI-compatible endpoint (Together,
@@ -801,7 +810,7 @@ func rcReviewProvider() (provider.Provider, string, provider.Kind) {
 	// own namespace, and handing it an OpenRouter-style id would fail the
 	// DEFAULT review outright. See rcFastModel.
 	base, token := kailabCreds()
-	return prov, reviewModel, provider.FromEnv(base, token, cfg.Planner.Model).Kind
+	return prov, reviewModel, provider.FromEnv(base, token, cfg.Planner.Model).Kind, nil
 }
 
 func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, body, diff string) (string, error) {

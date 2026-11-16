@@ -17,6 +17,8 @@ package main
 // careful maintainer would want fixed, most important first, a few per change.
 
 import (
+	"kai/internal/freeplan"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -63,6 +65,10 @@ func rcEnsembleModel(stage string) string {
 	// variables; "off" or "none" turns the stage off.
 	if v := strings.TrimSpace(os.Getenv(d.modelEnv)); v != "" {
 		m = v
+	} else if f := freeDefault(freeplan.CatchAll); f != "" && m != rcEffortOff && m != "none" {
+		// On the Free plan a stage on its own default runs the server's
+		// model.
+		m = f
 	}
 	m = rcStageModel(stage, m)
 	if m == rcEffortOff || m == "none" {

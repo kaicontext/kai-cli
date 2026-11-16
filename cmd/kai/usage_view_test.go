@@ -108,12 +108,12 @@ func TestUsageNoReviewsYet(t *testing.T) {
 	}
 }
 
-func TestUsageFreeOnGoogle(t *testing.T) {
+func TestUsageFreeReviews(t *testing.T) {
 	c := usageServer(t, 200, `{"tier":"free","monthly_cap_cents":500,"monthly_cost_cents":200,
-		"free_reviews":{"label":"Free (Google models)","reviews_share_pct":12,"own_use_share_pct":28,"prs_left":15,"billed_to_you":true}}`)
+		"free_reviews":{"label":"Free","reviews_share_pct":12,"own_use_share_pct":28,"prs_left":15,"billed_to_you":true}}`)
 	out := renderUsage(t, c)
 	for _, want := range []string{
-		"  Plan:    Free (Google models)\n",
+		"  Plan:    Free\n",
 		"  Free:    about 15 pull requests left this month\n",
 		"  Split:   reviews of acme 12% · your own use 28%\n",
 	} {
@@ -123,7 +123,7 @@ func TestUsageFreeOnGoogle(t *testing.T) {
 	}
 
 	// No count when the server can't yet say; someone else's allowance.
-	c = usageServer(t, 200, `{"tier":"free","free_reviews":{"label":"Free (Google models)","reviews_share_pct":0,"own_use_share_pct":0,"billed_to_you":false}}`)
+	c = usageServer(t, 200, `{"tier":"free","free_reviews":{"label":"Free","reviews_share_pct":0,"own_use_share_pct":0,"billed_to_you":false}}`)
 	out = renderUsage(t, c)
 	if strings.Contains(out, "pull requests left") || !strings.Contains(out, "the billing person's own use 0%") {
 		t.Errorf("free lines:\n%s", out)
