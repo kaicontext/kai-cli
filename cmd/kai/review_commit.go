@@ -830,6 +830,7 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 		MaxTokens:       rcTokensFor(600, rcStageEffort(rcStageIntent)),
 		ReasoningEffort: rcStageEffort(rcStageIntent),
 		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
+		NoCache:         rcOneShotNoCache,
 	})
 	if err != nil {
 		return "", err

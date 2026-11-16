@@ -101,6 +101,7 @@ func rcWriteDescription(ctx context.Context, prov provider.Provider, model, auth
 		System:    rcDescriptionSystem,
 		MaxTokens: rcDescriptionMaxTokens,
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
+		NoCache:   rcOneShotNoCache,
 	})
 	if err != nil {
 		return "", err
