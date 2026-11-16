@@ -530,6 +530,23 @@ func TestSinceDiff_SpacedName(t *testing.T) {
 	}
 }
 
+// A deleted file whose name has a space takes rcDiffFiles' "+++ /dev/null"
+// branch, so the file is keyed by the "--- " path. Without that line's
+// TrimSuffix the key keeps git's trailing tab and the removed symbol is lost.
+func TestSinceDiff_SpacedNameDeleted(t *testing.T) {
+	run, write := gitRepo(t)
+	write("my file.go", "package c\n\nfunc Brew() int { return 1 }\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+	run("rm", "my file.go")
+	run("commit", "-qm", "delete")
+	diff := rcSinceDiff("HEAD~1", "", []string{"my file.go"})
+	got := rcSinceSymbols(diff)["my file.go"]
+	if len(got) != 1 || got[0].Name != "Brew" || !got[0].Removed {
+		t.Fatalf("symbols = %+v, want Brew removed under \"my file.go\"", rcSinceSymbols(diff))
+	}
+}
+
 // Whether a changed line is a comment depends on the file's language: "#",
 // "*" and "--" begin code in some languages and comments in others.
 func TestCommentOrBlank_ByLanguage(t *testing.T) {
