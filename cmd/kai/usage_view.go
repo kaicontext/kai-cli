@@ -21,8 +21,8 @@ type usageView struct {
 	// Present only while review depths are on for the org, and only for its
 	// members.
 	ReviewUsage *usageReviews `json:"review_usage"`
-	// Present only while Free runs on Google models for the org and its
-	// reviews are paid from the free allowance.
+	// Present only for an org on the Free plan whose reviews are paid from
+	// the free allowance.
 	FreeReviews *usageFree `json:"free_reviews"`
 }
 

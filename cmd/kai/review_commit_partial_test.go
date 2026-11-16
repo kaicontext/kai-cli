@@ -318,8 +318,8 @@ var (
 	rcEngineBackups = []string{"z-ai/glm-5.2", "moonshotai/kimi-k2.6", "claude-opus-4-8"}
 	rcTestSets      = []rcTestSet{
 		{name: "baseline", stages: rcSetStages("z-ai/glm-5.2", nil), backups: rcEngineBackups, summary: "anthropic/claude-haiku-4.5"},
-		{name: "free", stages: rcSetStages("google/gemini-3.5-flash", nil),
-			backups: []string{"google/gemini-3.7-flash"}, summary: "google/gemini-3.1-flash-lite"},
+		{name: "free", stages: rcSetStages("free/model-fast", nil),
+			backups: []string{"free/model-strong"}, summary: "free/model-small"},
 		{name: "standard", stages: rcSetStages("anthropic/claude-sonnet-5.5", map[string]string{
 			rcStageFactcheck: "deepseek-ai/DeepSeek-V4.1-Flash-1017", rcStageFinder2: "Qwen/Qwen3.8-27B-FP8",
 			rcStageSweep2: "deepseek-ai/DeepSeek-V4.1-Flash-1017", rcStageRank: "anthropic/claude-opus-5.5",
@@ -366,8 +366,9 @@ func rcReasons(b rcFakeBundle) []string {
 }
 
 // The Free set with its main model failing on every call only ever asks
-// Google models, the summarising call included, and still finds the bugs.
-func TestFreeSetWithAFailingGeminiStaysOnGoogle(t *testing.T) {
+// for the set's own models, the summarising call included, and still finds
+// the bugs.
+func TestFreeSetWithAFailingModelStaysInItsSet(t *testing.T) {
 	set := rcTestSets[1]
 	primary := set.stages[rcStageMain]
 	b, out, err, f := rcRunOnSet(t, set, rcFakeScenario{Main: "review", Summarise: true,
@@ -381,8 +382,8 @@ func TestFreeSetWithAFailingGeminiStaysOnGoogle(t *testing.T) {
 		t.Fatalf("review: %v\n%s", err, out)
 	}
 	for m := range f.Models() {
-		if !strings.HasPrefix(m, "google/") {
-			t.Errorf("asked for %q, not a Google model", m)
+		if !strings.HasPrefix(m, "free/") {
+			t.Errorf("asked for %q, not one of the set's models", m)
 		}
 	}
 	rcAssertInSet(t, set, f)

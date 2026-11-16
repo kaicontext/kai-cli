@@ -143,7 +143,10 @@ func runReviewReplay(cmd *cobra.Command, _ []string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	prov, _, _ := rcReviewProvider()
+	prov, _, _, perr := rcReviewProvider()
+	if perr != nil {
+		return perr
+	}
 	if prov == nil {
 		return fmt.Errorf("no model provider: log in with kai first")
 	}
