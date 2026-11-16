@@ -970,7 +970,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		} else {
 			user.WriteString(rcReReviewFocusBlock(prior, focus, rcPRFileCount(prior, changed), maxTurns))
 		}
-		user.WriteString(rcBaseMovedBlock(prior))
+		user.WriteString(rcBaseMovedBlock(prior, focus))
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the
