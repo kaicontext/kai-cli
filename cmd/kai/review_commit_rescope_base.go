@@ -268,7 +268,7 @@ var rcPatchLimit int64 = 32 << 20
 func rcPatchByFile(diff string) map[string]string {
 	out := map[string]string{}
 	var b strings.Builder
-	file := ""
+	file, oldFile := "", ""
 	// inBody: past the file's first "@@". From there every line is part of
 	// the change, including "--- x" (a removed "-- x") and "+++ x" (an added
 	// "++ x"), which before it would be the file's own header lines. A line
@@ -280,22 +280,29 @@ func rcPatchByFile(diff string) map[string]string {
 			out[file] = b.String()
 		}
 		b.Reset()
-		file, inBody = "", false
+		file, oldFile, inBody = "", "", false
 	}
 	for _, line := range strings.Split(diff, "\n") {
 		if strings.HasPrefix(line, "diff --git ") {
 			flush()
-			// "diff --git a/x b/x" (no renames, so both sides name it)
+			// A fallback only: the "---"/"+++" headers below give the real
+			// path. This line does not carry it reliably — a quoted path has
+			// no " b/", and a path whose directory ends " b" a misleading one.
 			if i := strings.LastIndex(line, " b/"); i >= 0 {
 				file = line[i+3:]
 			}
 			continue
 		}
-		if file == "" {
-			continue
-		}
 		if !inBody {
 			switch {
+			case strings.HasPrefix(line, "--- "):
+				oldFile = rcDiffHeaderPath(line, "--- ", "a/")
+			case strings.HasPrefix(line, "+++ "):
+				if p := rcDiffHeaderPath(line, "+++ ", "b/"); p == "/dev/null" {
+					file = oldFile // a deleted file: key by its old path
+				} else {
+					file = p
+				}
 			case strings.HasPrefix(line, "@@"):
 				inBody = true
 			// The whole change of a chmod, and the mode a file is added or
@@ -308,7 +315,7 @@ func rcPatchByFile(diff string) map[string]string {
 				b.WriteString(line)
 				b.WriteString("\n")
 			}
-			continue // index, mode, "---"/"+++" header lines
+			continue // index and header lines hold no change
 		}
 		if len(line) > 0 && (line[0] == '+' || line[0] == '-') {
 			b.WriteString(line)
@@ -317,6 +324,14 @@ func rcPatchByFile(diff string) map[string]string {
 	}
 	flush()
 	return out
+}
+
+// rcDiffHeaderPath is the file path from a "--- "/"+++ " diff header, with the
+// prefix and the "a/"/"b/" stripped and git's quoting (a tab or quote in the
+// name) and trailing tab (a spaced name) undone. "/dev/null" is left as is.
+func rcDiffHeaderPath(line, hdr, side string) string {
+	p := rcGitUnquote(strings.TrimSuffix(strings.TrimPrefix(line, hdr), "\t"))
+	return strings.TrimPrefix(p, side)
 }
 
 // rcGitUnquote undoes git's quoting of a path ("caf\303\251.go"), which
