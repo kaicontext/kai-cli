@@ -343,6 +343,7 @@ func rcRunSweepWith(ctx context.Context, prov provider.Provider, model, stage, i
 				MaxTokens:       rcSweepMaxTokens,
 				ReasoningEffort: effort,
 				Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: b.String()}}}},
+				NoCache:         rcOneShotNoCache,
 			})
 			if err != nil {
 				outs[i] = out{err: err}
