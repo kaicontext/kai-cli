@@ -131,6 +131,7 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 	second.ReasoningEffort = rcStageEffort(rcStageFinder2)
 	second.SessionStore = nil
 	second.SessionID = ""
+	second.CacheKey = rcNewCacheKey(rcStageFinder2)
 	second.TaskName = "review-commit-finder2"
 	second.Hooks = agent.Hooks{OnToolCall: func(name, inputJSON string) {
 		fmt.Fprintf(os.Stderr, "  [finder2] → %s %s\n", name, rcOneLine(inputJSON, 70))
