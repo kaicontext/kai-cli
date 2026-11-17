@@ -285,12 +285,10 @@ func rcPatchByFile(diff string) map[string]string {
 	for _, line := range strings.Split(diff, "\n") {
 		if strings.HasPrefix(line, "diff --git ") {
 			flush()
-			// A fallback only: the "---"/"+++" headers below give the real
-			// path. This line does not carry it reliably — a quoted path has
-			// no " b/", and a path whose directory ends " b" a misleading one.
-			if i := strings.LastIndex(line, " b/"); i >= 0 {
-				file = line[i+3:]
-			}
+			// The headers below override this for an entry that has them; it is
+			// the only key for one that does not (mode-only, binary, an empty
+			// file added or deleted).
+			file = rcDiffGitPath(line)
 			continue
 		}
 		if !inBody {
@@ -332,6 +330,29 @@ func rcPatchByFile(diff string) map[string]string {
 func rcDiffHeaderPath(line, hdr, side string) string {
 	p := rcGitUnquote(strings.TrimSuffix(strings.TrimPrefix(line, hdr), "\t"))
 	return strings.TrimPrefix(p, side)
+}
+
+// rcDiffGitPath is the file path from a "diff --git a/x b/x" line, for the
+// entries (mode-only, binary, an empty file) that carry no "---"/"+++" header.
+// With --no-renames both sides name the same file. A quoted path is two
+// quoted tokens; an unquoted one is "a/P b/P", the paths identical, so the
+// space at the midpoint splits them whatever the name holds.
+func rcDiffGitPath(line string) string {
+	rem := strings.TrimPrefix(line, "diff --git ")
+	if strings.HasPrefix(rem, `"`) {
+		b := rem
+		if i := strings.Index(rem, `" "`); i >= 0 {
+			b = rem[i+2:]
+		}
+		return strings.TrimPrefix(rcGitUnquote(b), "b/")
+	}
+	if mid := len(rem) / 2; mid > 0 && rem[mid] == ' ' {
+		return strings.TrimPrefix(rem[mid+1:], "b/")
+	}
+	if i := strings.LastIndex(rem, " b/"); i >= 0 {
+		return rem[i+3:]
+	}
+	return ""
 }
 
 // rcGitUnquote undoes git's quoting of a path ("caf\303\251.go"), which

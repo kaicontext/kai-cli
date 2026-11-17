@@ -316,6 +316,28 @@ func TestPatchByFile_HeaderPath(t *testing.T) {
 	}
 }
 
+// A mode-only or binary entry has no "---"/"+++" line, so its key comes from
+// the "diff --git" line alone: a quoted path must be unquoted and an unquoted
+// one split at its midpoint, not by LastIndex(" b/").
+func TestDiffGitPath(t *testing.T) {
+	cases := []struct{ line, want string }{
+		{"diff --git a/run.sh b/run.sh", "run.sh"},
+		{"diff --git a/x b/y.go b/x b/y.go", "x b/y.go"},
+		{`diff --git "a/x\ty.go" "b/x\ty.go"`, "x\ty.go"},
+		{`diff --git "a/dir b/run.sh" "b/dir b/run.sh"`, "dir b/run.sh"},
+	}
+	for _, c := range cases {
+		if got := rcDiffGitPath(c.line); got != c.want {
+			t.Errorf("rcDiffGitPath(%q) = %q, want %q", c.line, got, c.want)
+		}
+	}
+	// End to end: a mode-only change on a " b"-directory path keeps its key.
+	m := rcPatchByFile("diff --git a/x b/run.sh b/x b/run.sh\nold mode 100644\nnew mode 100755\n")
+	if _, ok := m["x b/run.sh"]; !ok {
+		t.Fatalf("mode-only entry lost its path: %q", m)
+	}
+}
+
 // A patch over the limit is given up on at once: git, blocked writing the
 // rest, is stopped rather than waited on until the deadline.
 func TestGitPatchByFile_OverLimitReturnsAtOnce(t *testing.T) {
