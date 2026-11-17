@@ -906,7 +906,7 @@ func rcRepoHeader(repo string) string {
 // (review_commit_rescope.go): the turn budget and the coverage gate are sized
 // to it rather than to every changed file.
 func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, hash, sourceContext, intent, hosts, diff string, changed, focus []string, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
-	scope := rcReviewScope(changed, focus)
+	scope := rcReviewablePaths(rcReviewScope(changed, focus), changed)
 	publicationCtx := ctx
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
@@ -2426,10 +2426,12 @@ func rcCommitDiff(base, ref string, maxBytes int) string {
 	if err != nil || len(out) == 0 {
 		return ""
 	}
-	if len(out) > maxBytes {
-		return string(out[:maxBytes]) + "\n... (diff truncated)\n"
+	// Before the cut, so a lockfile cannot push code past maxBytes.
+	d := rcDropUnreviewable(string(out))
+	if len(d) > maxBytes {
+		return d[:maxBytes] + "\n... (diff truncated)\n"
 	}
-	return string(out)
+	return d
 }
 
 func rcCommitDiffStat(base, ref string) (added, removed int, files []finding.DiffFile) {
