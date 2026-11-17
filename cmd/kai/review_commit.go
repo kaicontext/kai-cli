@@ -985,7 +985,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 				fmt.Fprintf(os.Stderr, "  re-review: %d related file(s) chained from the focus (+%d turn(s))\n", len(chain), maxTurns-rcReviewMaxTurns(len(scope)))
 			}
 		}
-		user.WriteString(rcBaseMovedBlock(prior))
+		user.WriteString(rcBaseMovedBlock(prior, focus))
 		fmt.Fprintf(os.Stderr, "  previous review: %s, %d point(s), %d file(s) changed since\n", rcShort(prior.Head), len(prior.Points), len(priorChanged))
 	}
 	// The same for JavaScript and TypeScript: the type declarations of the

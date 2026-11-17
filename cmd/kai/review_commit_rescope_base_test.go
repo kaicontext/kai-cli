@@ -298,6 +298,24 @@ func TestPatchByFile_HeaderLikeBodyLines(t *testing.T) {
 	}
 }
 
+// The file's real path comes from the "---"/"+++" headers, not the
+// "diff --git" line: a quoted name (a tab in it) has no " b/" there, and a
+// path whose directory ends " b" has a misleading one.
+func TestPatchByFile_HeaderPath(t *testing.T) {
+	q := rcPatchByFile("diff --git \"a/x\\ty.go\" \"b/x\\ty.go\"\nindex 1..2 100644\n--- \"a/x\\ty.go\"\n+++ \"b/x\\ty.go\"\n@@ -1 +1 @@\n-a\n+b\n")
+	if _, ok := q["x\ty.go"]; !ok {
+		t.Fatalf("quoted path not keyed by its real name: %q", q)
+	}
+	s := rcPatchByFile("diff --git a/x b/y.go b/x b/y.go\nindex 1..2 100644\n--- a/x b/y.go\t\n+++ b/x b/y.go\t\n@@ -1 +1 @@\n-a\n+b\n")
+	if _, ok := s["x b/y.go"]; !ok {
+		t.Fatalf("path with a directory ending \" b\" not keyed by its real name: %q", s)
+	}
+	d := rcPatchByFile("diff --git \"a/x\\ty.go\" \"b/x\\ty.go\"\ndeleted file mode 100644\n--- \"a/x\\ty.go\"\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n")
+	if _, ok := d["x\ty.go"]; !ok {
+		t.Fatalf("deleted quoted path not keyed by its old name: %q", d)
+	}
+}
+
 // A patch over the limit is given up on at once: git, blocked writing the
 // rest, is stopped rather than waited on until the deadline.
 func TestGitPatchByFile_OverLimitReturnsAtOnce(t *testing.T) {

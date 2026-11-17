@@ -160,7 +160,7 @@ func rcReCheckBlock(prior *rcPrior, pointFiles []string, turns int) string {
 	}
 	// Only point at base changes when BASE MOVED names some (rcBaseMovedBlock).
 	base := "Report no new issue: there is no new code to find one in."
-	if len(rcBaseOnlySince(prior.Head)) > 0 {
+	if len(rcBaseOnlyOutsideFocus(prior, pointFiles)) > 0 {
 		base = "The base under the pull request moved (BASE MOVED, below): report a new issue only where one of those base changes now meets the pull request's code."
 	}
 	return fmt.Sprintf("RE-REVIEW, NOTHING CHANGED: the pull request's own changes are identical to the commit you reviewed last time (%s). "+
@@ -169,13 +169,35 @@ func rcReCheckBlock(prior *rcPrior, pointFiles []string, turns int) string {
 		rcShort(prior.Head), turns, where, base)
 }
 
+// rcBaseOnlyOutsideFocus is the base-moved files that are not in the focus. An
+// earlier point's file is added to the focus by rcReReviewFocus, so a base-only
+// file can be in it; such a file is reviewed, not outside the focus.
+func rcBaseOnlyOutsideFocus(prior *rcPrior, focus []string) []string {
+	if prior == nil {
+		return nil
+	}
+	inFocus := map[string]bool{}
+	for _, f := range focus {
+		inFocus[rcGitUnquote(f)] = true
+	}
+	var out []string
+	for _, f := range rcBaseOnlySince(prior.Head) {
+		if !inFocus[f] {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // rcBaseMovedBlock names the files of the pull request that changed only
 // because the base moved under them since the previous review. "" when none.
-func rcBaseMovedBlock(prior *rcPrior) string {
+// The "not in the focus" sentence is omitted on a whole-change review (focus
+// nil), where there is no focus.
+func rcBaseMovedBlock(prior *rcPrior, focus []string) string {
 	if prior == nil {
 		return ""
 	}
-	files := rcBaseOnlySince(prior.Head)
+	files := rcBaseOnlyOutsideFocus(prior, focus)
 	if len(files) == 0 {
 		return ""
 	}
@@ -183,10 +205,14 @@ func rcBaseMovedBlock(prior *rcPrior) string {
 	if len(files) > 20 {
 		files, more = files[:20], fmt.Sprintf(" … and %d more", len(files)-20)
 	}
+	note := ""
+	if focus != nil {
+		note = "They are not in the focus. "
+	}
 	return fmt.Sprintf("BASE MOVED: since %s these files of the pull request changed only because the base branch changed them; "+
-		"the pull request's own changes to them are the same as before: %s%s. They are not in the focus. "+
+		"the pull request's own changes to them are the same as before: %s%s. %s"+
 		"Open one only where a base change touches code the pull request's change relies on.\n\n",
-		rcShort(prior.Head), strings.Join(files, ", "), more)
+		rcShort(prior.Head), strings.Join(files, ", "), more, note)
 }
 
 // rcReReviewFocusBlock tells a scoped re-review what it is sized to, so the
