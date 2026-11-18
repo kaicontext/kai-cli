@@ -74,6 +74,23 @@ func TestLockSummaryIsCapped(t *testing.T) {
 	}
 }
 
+func TestLockSummaryShowsPnpmVersionedKeys(t *testing.T) {
+	d := "diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\n--- a/pnpm-lock.yaml\n+++ b/pnpm-lock.yaml\n@@ -1,8 +1,8 @@\n" +
+		"-  /foo/1.0.0:\n+  /foo/1.1.0:\n" +
+		"     resolution: {integrity: sha512-old}\n" +
+		"-  '@scope/bar@2.0.0':\n+  '@scope/bar@2.1.0':\n" +
+		"     resolution: {integrity: sha512-new}\n"
+	got := rcDropUnreviewable(d)
+	for _, want := range []string{"-  /foo/1.0.0:\n+  /foo/1.1.0:\n", "-  '@scope/bar@2.0.0':\n+  '@scope/bar@2.1.0':\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "integrity") {
+		t.Errorf("integrity should not be shown:\n%s", got)
+	}
+}
+
 func TestDropUnreviewableVendorOnlyOnABump(t *testing.T) {
 	vendorEdit := "diff --git a/vendor/lib/x.go b/vendor/lib/x.go\n--- a/vendor/lib/x.go\n+++ b/vendor/lib/x.go\n@@ -1 +1 @@\n-return nil\n+return err\n"
 	if got := rcDropUnreviewable(vendorEdit); got != vendorEdit {

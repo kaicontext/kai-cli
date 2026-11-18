@@ -76,6 +76,9 @@ var (
 	// The package a kept line belongs to: npm's "node_modules/x": {, a yarn
 	// or pnpm entry header, Cargo and Poetry's name = line.
 	rcLockKey = regexp.MustCompile(`^\s*"node_modules/[^"]+":\s*\{\s*$|^"?[^\s#"][^:]*"?:\s*$|^ {2}['"]?/?[@\w][^:]*['"]?:\s*$|^\s*name\s*=`)
+	// A pnpm entry key that carries the version itself: /foo/1.1.0: (pnpm ≤8)
+	// or foo@1.1.0: (pnpm 9), either optionally @scoped and quoted.
+	rcLockVersionedKey = regexp.MustCompile(`^ {2}['"]?/?(@[^/\s'"]+/)?[^@/\s'"]+[/@]\d[^:]*['"]?:\s*$`)
 	// The default registries; a source anywhere else is the supply-chain
 	// change worth showing.
 	rcDefaultRegistry = regexp.MustCompile(`(?i)registry\.npmjs\.org|registry\.yarnpkg\.com`)
@@ -143,6 +146,11 @@ func rcWriteLockSummary(b *strings.Builder, sec []string) {
 			continue
 		}
 		content := strings.TrimRight(l[1:], "\n")
+		if rcChangedLine(l) && rcLockVersionedKey.MatchString(content) {
+			kept = append(kept, l)
+			lastKey, keyShown = l, true
+			continue
+		}
 		if rcChangedLine(l) && rcLockKeep.MatchString(content) {
 			if rcLockSource.MatchString(content) && rcDefaultRegistry.MatchString(content) {
 				continue
