@@ -91,6 +91,23 @@ func TestLockSummaryShowsPnpmVersionedKeys(t *testing.T) {
 	}
 }
 
+func TestDiffHeaderPath(t *testing.T) {
+	for header, want := range map[string]string{
+		"diff --git a/x.go b/x.go\n":                             "x.go",
+		"diff --git a/vendor/my lib/x.go b/vendor/my lib/x.go\n": "vendor/my lib/x.go",
+		"diff --git a/old.go b/new.go\n":                         "new.go",
+	} {
+		if got := rcDiffHeaderPath(header); got != want {
+			t.Errorf("rcDiffHeaderPath(%q) = %q, want %q", header, got, want)
+		}
+	}
+	bump := "diff --git a/go.mod b/go.mod\n--- a/go.mod\n+++ b/go.mod\n@@ -1 +1 @@\n-require lib v1.0.0\n+require lib v1.1.0\n" +
+		"diff --git a/vendor/my lib/x.go b/vendor/my lib/x.go\n--- a/vendor/my lib/x.go\n+++ b/vendor/my lib/x.go\n@@ -1 +1 @@\n-return nil\n+return err\n"
+	if got := rcDropUnreviewable(bump); strings.Contains(got, "+return err") {
+		t.Errorf("a re-vendored file under a spaced path must be omitted:\n%s", got)
+	}
+}
+
 func TestDropUnreviewableVendorOnlyOnABump(t *testing.T) {
 	vendorEdit := "diff --git a/vendor/lib/x.go b/vendor/lib/x.go\n--- a/vendor/lib/x.go\n+++ b/vendor/lib/x.go\n@@ -1 +1 @@\n-return nil\n+return err\n"
 	if got := rcDropUnreviewable(vendorEdit); got != vendorEdit {

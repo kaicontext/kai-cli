@@ -216,6 +216,15 @@ func rcChangedLines(ls []string) int {
 
 // rcDiffHeaderPath is the b/ path of a "diff --git a/x b/x" line.
 func rcDiffHeaderPath(header string) string {
+	// "a/<p> b/<p>" splits at its midpoint when the path is unchanged, which
+	// keeps paths with spaces whole; renames fall back to the last field.
+	rest := strings.TrimRight(strings.TrimPrefix(header, "diff --git "), "\r\n")
+	if n := len(rest); n%2 == 1 {
+		a, b := rest[:n/2], rest[n/2+1:]
+		if rest[n/2] == ' ' && strings.HasPrefix(a, "a/") && strings.HasPrefix(b, "b/") && a[2:] == b[2:] {
+			return b[2:]
+		}
+	}
 	f := strings.Fields(header)
 	if len(f) < 4 {
 		return ""
