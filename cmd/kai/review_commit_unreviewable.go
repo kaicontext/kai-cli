@@ -71,17 +71,20 @@ const rcLockSummaryMaxLines = 150
 
 var (
 	// Lockfile lines a reviewer checks: versions, engine floors, and where a
-	// package is fetched from.
-	rcLockKeep = regexp.MustCompile(`(?i)"version"\s*:|^\s*version[\s:=]|"engines"|"node"\s*:|"resolved"\s*:|^\s*resolved[\s:]|tarball:`)
+	// package is fetched from. Besides version fields: Bundler and CocoaPods'
+	// name (1.2.3), bun.lock's ["pkg@1.2.3", mix.lock's {:hex, :pkg, "1.2.3",
+	// and a Nix flake input's "rev".
+	rcLockKeep = regexp.MustCompile(`(?i)"version"\s*:|^\s*version[\s:=]|"engines"|"node"\s*:|"resolved"\s*:|^\s*resolved[\s:]|tarball:|^\s*(-\s+)?[\w.\-/]+ \(\d[^)]*\):?\s*$|\["[^"]+@\d|\{:hex,\s*:\w+,\s*"\d|"rev"\s*:`)
 	// The package a kept line belongs to: npm's "node_modules/x": {, a yarn
-	// or pnpm entry header, Cargo and Poetry's name = line.
-	rcLockKey = regexp.MustCompile(`^\s*"node_modules/[^"]+":\s*\{\s*$|^"?[^\s#"][^:]*"?:\s*$|^ {2}['"]?/?[@\w][^:]*['"]?:\s*$|^\s*name\s*=`)
+	// or pnpm entry header, a Yarn Berry "x@npm:1.2.3": header, Cargo and
+	// Poetry's name = line.
+	rcLockKey = regexp.MustCompile(`^\s*"node_modules/[^"]+":\s*\{\s*$|^"?[^\s#"][^:]*"?:\s*$|^ {2}['"]?/?[@\w][^:]*['"]?:\s*$|^"[^"]+@[a-z]+:[^"]*":\s*$|^\s*name\s*=`)
 	// A pnpm entry key that carries the version itself: /foo/1.1.0: (pnpm ≤8)
 	// or foo@1.1.0: (pnpm 9), either optionally @scoped and quoted.
 	rcLockVersionedKey = regexp.MustCompile(`^ {2}['"]?/?(@[^/\s'"]+/)?[^@/\s'"]+[/@]\d[^:]*['"]?:\s*$`)
 	// The default registries; a source anywhere else is the supply-chain
 	// change worth showing.
-	rcDefaultRegistry = regexp.MustCompile(`(?i)registry\.npmjs\.org|registry\.yarnpkg\.com`)
+	rcDefaultRegistry = regexp.MustCompile(`(?i)://(registry\.npmjs\.org|registry\.yarnpkg\.com)([/:]|$)`)
 	rcLockSource      = regexp.MustCompile(`(?i)resolved|tarball:`)
 )
 
@@ -117,7 +120,12 @@ func rcDropUnreviewable(diff string) string {
 				rcWriteLockSummary(&b, cur)
 			case rcFileOmit:
 				rcWriteLines(&b, cur[:1])
-				fmt.Fprintf(&b, "(vendored, generated, minified or binary file: %d changed line(s), not shown)\n", rcChangedLines(cur[1:]))
+				// A binary section has only a "Binary files ... differ" line to count.
+				if n := rcChangedLines(cur[1:]); n > 0 || !rcHasBinaryLine(cur) {
+					fmt.Fprintf(&b, "(vendored, generated, minified or binary file: %d changed line(s), not shown)\n", n)
+				} else {
+					b.WriteString("(binary file, not shown)\n")
+				}
 			default:
 				rcWriteLines(&b, cur)
 			}
@@ -202,6 +210,15 @@ func rcDiffMetaLine(l string) bool {
 
 func rcChangedLine(l string) bool {
 	return (strings.HasPrefix(l, "+") || strings.HasPrefix(l, "-")) && !rcDiffMetaLine(l)
+}
+
+func rcHasBinaryLine(ls []string) bool {
+	for _, l := range ls {
+		if strings.HasPrefix(l, "Binary files ") {
+			return true
+		}
+	}
+	return false
 }
 
 func rcChangedLines(ls []string) int {

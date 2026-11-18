@@ -91,6 +91,52 @@ func TestLockSummaryShowsPnpmVersionedKeys(t *testing.T) {
 	}
 }
 
+func TestLockSummaryShowsLookalikeRegistryHost(t *testing.T) {
+	d := "diff --git a/package-lock.json b/package-lock.json\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1,3 +1,3 @@\n" +
+		`     "node_modules/left-pad": {` + "\n" +
+		`-      "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",` + "\n" +
+		`+      "resolved": "https://registry.npmjs.org.evil.com/left-pad/-/left-pad-1.3.0.tgz",` + "\n"
+	got := rcDropUnreviewable(d)
+	if !strings.Contains(got, "registry.npmjs.org.evil.com") {
+		t.Errorf("a lookalike registry host must be shown:\n%s", got)
+	}
+	if strings.Contains(got, `-      "resolved"`) {
+		t.Errorf("the default registry line should be dropped:\n%s", got)
+	}
+}
+
+func TestLockSummaryNamesYarnBerryEntry(t *testing.T) {
+	d := "diff --git a/yarn.lock b/yarn.lock\n--- a/yarn.lock\n+++ b/yarn.lock\n@@ -1,4 +1,4 @@\n" +
+		"-\"left-pad@npm:1.3.0\":\n+\"left-pad@npm:1.3.1\":\n" +
+		"-  version: 1.3.0\n+  version: 1.3.1\n"
+	got := rcDropUnreviewable(d)
+	if want := "+\"left-pad@npm:1.3.1\":\n-  version: 1.3.0\n+  version: 1.3.1\n"; !strings.Contains(got, want) {
+		t.Errorf("missing %q in:\n%s", want, got)
+	}
+}
+
+func TestLockSummaryShowsOtherEcosystemVersions(t *testing.T) {
+	for path, body := range map[string]string{
+		"Gemfile.lock": "-    rack (2.2.3)\n+    rack (2.2.8)\n",
+		"Podfile.lock": "-  - Alamofire (5.4.0)\n+  - Alamofire (5.8.1)\n",
+		"bun.lock":     "-    \"zod\": [\"zod@3.22.0\", \"\", {}, \"sha512-old\"],\n+    \"zod\": [\"zod@3.23.8\", \"\", {}, \"sha512-new\"],\n",
+		"mix.lock":     "-  \"plug\": {:hex, :plug, \"1.14.0\", \"aa\", [:mix], [], \"hexpm\", \"bb\"},\n+  \"plug\": {:hex, :plug, \"1.15.3\", \"cc\", [:mix], [], \"hexpm\", \"dd\"},\n",
+		"flake.lock":   "-        \"rev\": \"aaaa\",\n+        \"rev\": \"bbbb\",\n",
+	} {
+		d := "diff --git a/" + path + " b/" + path + "\n--- a/" + path + "\n+++ b/" + path + "\n@@ -1,2 +1,2 @@\n" + body
+		if got := rcDropUnreviewable(d); !strings.Contains(got, body) {
+			t.Errorf("%s: versions not shown:\n%s", path, got)
+		}
+	}
+}
+
+func TestOmitNoteForBinary(t *testing.T) {
+	d := "diff --git a/logo.png b/logo.png\nindex 1..2 100644\nBinary files a/logo.png and b/logo.png differ\n"
+	if got := rcDropUnreviewable(d); got != "diff --git a/logo.png b/logo.png\n(binary file, not shown)\n" {
+		t.Errorf("binary note: got %q", got)
+	}
+}
+
 func TestDiffHeaderPath(t *testing.T) {
 	for header, want := range map[string]string{
 		"diff --git a/x.go b/x.go\n":                             "x.go",
