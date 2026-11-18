@@ -25,6 +25,7 @@ import (
 var (
 	replayRecord      string
 	replayNoCorrobate bool
+	replayGateOnly    bool
 )
 
 var reviewReplayCmd = &cobra.Command{
@@ -38,6 +39,8 @@ var reviewReplayCmd = &cobra.Command{
 func init() {
 	reviewReplayCmd.Flags().StringVar(&replayRecord, "record", "", "a saved review JSON (the bundle review-commit --format json writes)")
 	reviewReplayCmd.Flags().BoolVar(&replayNoCorrobate, "no-corroboration", false, "leave out the single-proposal rule, as when the second sweep did not run")
+	reviewReplayCmd.Flags().BoolVar(&replayGateOnly, "gate-only", false, "no model call: count votes and apply only the vote bypass to the record as saved")
+	_ = reviewReplayCmd.Flags().MarkHidden("gate-only")
 	rootCmd.AddCommand(reviewReplayCmd)
 }
 
@@ -69,6 +72,8 @@ type rcReplayAllegaton struct {
 	Rank   string `json:"rank,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	Votes  int    `json:"votes,omitempty"`
+	// VoteBypass: restored by the vote bypass (rcVoteBypassCap).
+	VoteBypass bool `json:"voteBypass,omitempty"`
 }
 
 // rcReplayRestore undoes what the selection and the gate did to a saved
@@ -139,6 +144,9 @@ func runReviewReplay(cmd *cobra.Command, _ []string) error {
 	if rec.Challenge == nil || len(rec.Challenge.Allegations) == 0 {
 		return fmt.Errorf("%s has no challenge.allegations to replay", replayRecord)
 	}
+	if replayGateOnly {
+		return rcReplayGateOnly(&rec)
+	}
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -157,7 +165,23 @@ func runReviewReplay(cmd *cobra.Command, _ []string) error {
 	rcPublishGate(res, repo, ranked && !replayNoCorrobate)
 	out := rcReplayOut{Ranked: ranked, Selection: res.Selection}
 	for _, a := range res.Allegations {
-		out.Allegations = append(out.Allegations, rcReplayAllegaton{ID: a.ID, Status: a.Status, Rank: a.Rank, Reason: a.Reason, Votes: a.Votes})
+		out.Allegations = append(out.Allegations, rcReplayAllegaton{ID: a.ID, Status: a.Status, Rank: a.Rank, Reason: a.Reason, Votes: a.Votes, VoteBypass: a.VoteBypass})
+	}
+	return json.NewEncoder(os.Stdout).Encode(out)
+}
+
+// rcReplayGateOnly runs the vote bypass over the record as saved: no ranker,
+// no restore, no provider. It counts votes, then restores the cap-cut defects
+// with 3+ votes that pass the gate (corroboration on, as in a two-sweep run).
+func rcReplayGateOnly(rec *rcReplayRecord) error {
+	res := rec.Challenge
+	_, repo := rcReplayDiff(rec)
+	rcCountVotes(res)
+	ranged := repo != nil && len(repo.changed) > 0
+	rcVoteBypassCap(res, repo, ranged, !replayNoCorrobate)
+	out := rcReplayOut{Selection: res.Selection}
+	for _, a := range res.Allegations {
+		out.Allegations = append(out.Allegations, rcReplayAllegaton{ID: a.ID, Status: a.Status, Rank: a.Rank, Reason: a.Reason, Votes: a.Votes, VoteBypass: a.VoteBypass})
 	}
 	return json.NewEncoder(os.Stdout).Encode(out)
 }

@@ -255,6 +255,9 @@ type rcAllegationResult struct {
 	// benchmark can measure what the cap and the gate cut by severity.
 	Severity string `json:"severity,omitempty"`
 	Rank     string `json:"rank,omitempty"`
+	// VoteBypass marks a defect the cap cut that the vote bypass published
+	// because 3+ proposals raised it (rcVoteBypassCap). Recorded only.
+	VoteBypass bool `json:"voteBypass,omitempty"`
 	// rankPos is the allegation's place in the selection's answer (publish
 	// list, then minor list); keptReason is the check's reason, which the
 	// selection's reason replaces when it leaves the allegation out. Both
