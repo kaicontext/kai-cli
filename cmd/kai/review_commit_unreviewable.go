@@ -276,7 +276,7 @@ func rcSectionPath(sec []string) string {
 		t := strings.TrimRight(l, "\r\n")
 		switch {
 		case strings.HasPrefix(t, "@@"):
-			return rcDiffHeaderPath(sec[0])
+			return rcDiffGitBPath(sec[0])
 		case strings.HasPrefix(t, "rename to "):
 			return strings.TrimPrefix(t, "rename to ")
 		case strings.HasPrefix(t, "copy to "):
@@ -289,11 +289,11 @@ func rcSectionPath(sec []string) string {
 			return minus
 		}
 	}
-	return rcDiffHeaderPath(sec[0])
+	return rcDiffGitBPath(sec[0])
 }
 
-// rcDiffHeaderPath is the b/ path of a "diff --git a/x b/y" line.
-func rcDiffHeaderPath(header string) string {
+// rcDiffGitBPath is the b/ path of a "diff --git a/x b/y" line.
+func rcDiffGitBPath(header string) string {
 	// "a/<p> b/<p>" splits at its midpoint when the path is unchanged, which
 	// keeps paths with spaces whole; a rename splits at its last " b/".
 	rest := strings.TrimRight(strings.TrimPrefix(header, "diff --git "), "\r\n")
