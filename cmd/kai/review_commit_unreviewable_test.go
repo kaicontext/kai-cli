@@ -264,3 +264,20 @@ func TestReviewablePaths(t *testing.T) {
 		t.Errorf("hand-edited vendor file must stay in scope, got %v", got)
 	}
 }
+
+func TestNewHostsSeeOmittedFiles(t *testing.T) {
+	out := "diff --git a/api/api.pb.go b/api/api.pb.go\n" +
+		"index 1..2 100644\n--- a/api/api.pb.go\n+++ b/api/api.pb.go\n" +
+		"@@ -1,1 +1,2 @@\n package api\n+const endpoint = \"https://pkgs.evil-cdn.io/v1\"\n"
+	diff, raw := rcSplitCommitDiff(out, 1<<20)
+	if strings.Contains(diff, "evil-cdn") {
+		t.Fatalf("generated file should be omitted from the reviewer's diff:\n%s", diff)
+	}
+	hosts := rcAddedURLHosts(raw)
+	if len(hosts) != 1 || hosts[0].Host != "pkgs.evil-cdn.io" || hosts[0].Path != "api/api.pb.go" {
+		t.Fatalf("raw diff hosts = %+v, want pkgs.evil-cdn.io in api/api.pb.go", hosts)
+	}
+	if _, raw := rcSplitCommitDiff(out, 10); raw != out {
+		t.Fatalf("raw diff must not be cut")
+	}
+}
