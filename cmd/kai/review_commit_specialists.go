@@ -81,6 +81,7 @@ func rcStartSpecialists(runCtx, concludeCtx context.Context, opts agent.Options,
 		spec.System = opts.System + rcSpecialistFocus[stage] + rcSpecialistContract
 		spec.SessionStore = nil
 		spec.SessionID = ""
+		spec.CacheKey = rcNewCacheKey(stage)
 		spec.TaskName = "review-commit-" + stage
 		label := stage
 		spec.Hooks = agent.Hooks{OnToolCall: func(name, inputJSON string) {

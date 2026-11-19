@@ -1040,6 +1040,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		EnableBash: false,
 		MaxTurns:   rcReviewMaxTurns(len(scope)),
 		Prompt:     user.String(),
+		CacheKey:   rcNewCacheKey(rcStageMain),
 
 		InjectedContext: injected,
 		SessionStore:    gdb,
