@@ -362,11 +362,17 @@ func rcChainMax() int {
 }
 
 // rcReReviewTurns is a scoped re-review's turn budget: the focus's, plus one
-// turn per rcChainFilesPerTurn related files, under the same ceiling.
-func rcReReviewTurns(scope int, chained int) int {
+// turn per rcChainFilesPerTurn related files, never above a full review of the
+// whole change (total files) and under the same ceiling. The clamp matters on
+// a small change the chain is one file larger than, where the fixed chain
+// bonus would otherwise cost more turns than just reviewing everything.
+func rcReReviewTurns(scope, chained, total int) int {
 	n := rcReviewMaxTurns(scope)
 	if chained > 0 {
 		n += (chained + rcChainFilesPerTurn - 1) / rcChainFilesPerTurn
+	}
+	if full := rcReviewMaxTurns(total); n > full {
+		n = full
 	}
 	if n > rcReviewTurnCeiling {
 		return rcReviewTurnCeiling

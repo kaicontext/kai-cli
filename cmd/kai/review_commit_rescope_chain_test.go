@@ -282,18 +282,27 @@ func TestChainMax_Env(t *testing.T) {
 	}
 }
 
-// Related files cost one turn per two, and never lift the budget past the
-// ceiling.
+// Related files cost one turn per two, never past the ceiling, and never above
+// a full review of the whole change.
 func TestReReviewTurns(t *testing.T) {
 	base := rcReviewMaxTurns(2)
-	if got := rcReReviewTurns(2, 0); got != base {
+	if got := rcReReviewTurns(2, 0, 2); got != base {
 		t.Errorf("no chain: %d, want %d", got, base)
 	}
-	if got := rcReReviewTurns(2, 5); got != base+3 {
+	if got := rcReReviewTurns(2, 5, 100); got != base+3 {
 		t.Errorf("5 related: %d, want %d", got, base+3)
 	}
-	if got := rcReReviewTurns(100, 12); got != rcReviewTurnCeiling {
+	if got := rcReReviewTurns(100, 12, 100); got != rcReviewTurnCeiling {
 		t.Errorf("ceiling: %d, want %d", got, rcReviewTurnCeiling)
+	}
+	// One-file focus, two-file change: +6 would reach 39, but a full review of both files is only rcReviewMaxTurns(2), so clamp.
+	full := rcReviewMaxTurns(2)
+	if got := rcReReviewTurns(1, 12, 2); got != full {
+		t.Errorf("tiny-change clamp: %d, want %d (full budget)", got, full)
+	}
+	// Larger change: room for the full bonus, no clamp.
+	if got := rcReReviewTurns(1, 12, 10); got != rcReviewMaxTurns(1)+6 {
+		t.Errorf("large-change no clamp: %d, want %d", got, rcReviewMaxTurns(1)+6)
 	}
 }
 

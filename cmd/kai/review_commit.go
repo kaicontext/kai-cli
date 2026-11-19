@@ -970,7 +970,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	if recheck {
 		maxTurns = rcReCheckTurns(len(focus))
 	} else if focus != nil {
-		maxTurns = rcReReviewTurns(len(scope), len(chain))
+		maxTurns = rcReReviewTurns(len(scope), len(chain), rcPRFileCount(prior, changed))
 	}
 	if prior != nil {
 		priorChanged, priorKnown = rcChangedSince(prior.Head)
