@@ -353,7 +353,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  merge commit: intent taken from %d commit(s) in %s..%s\n",
 			len(rangeSubjects), reviewCommitBase, rcShort(hash))
 	}
-	diff := rcCommitDiff(reviewCommitBase, ref, maxReviewCommitDiffBytes)
+	diff, rawDiff := rcCommitDiff(reviewCommitBase, ref, maxReviewCommitDiffBytes)
 	if strings.TrimSpace(diff) == "" {
 		return fmt.Errorf("commit %s has an empty diff (merge commit? try a child, or pass --base)", rcShort(hash))
 	}
@@ -391,9 +391,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// job's or the benchmark's (review_commit_profile.go). Loaded before any
 	// model is resolved, so every stage below sees it.
 	risk := rcPreReviewRisk(files, blast)
-	if os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK") != "" && risk.Level != "" {
+	if (os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK") != "" || os.Getenv("KAI_REVIEW_PROFILE_SMALL") != "") && risk.Level != "" {
 		profile := "standard profile"
-		if rcLowRiskLevel(risk.Level) {
+		switch {
+		case rcSmallRiskLevel(risk.Level):
+			profile = "small profile"
+		case os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK") != "" && rcLowRiskLevel(risk.Level):
 			profile = "low-risk profile"
 		}
 		fmt.Fprintf(os.Stderr, "  pre-review risk %s → %s\n", risk, profile)
@@ -410,7 +413,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, line)
 	}
 
-	prov, model, provKind := rcReviewProvider()
+	prov, model, provKind, perr := rcReviewProvider()
+	if perr != nil {
+		return perr
+	}
 	if prov == nil {
 		return fmt.Errorf("no LLM provider available (run `kai login`)")
 	}
@@ -440,8 +446,13 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// From here every model call is recorded for the bundle's "run" object
 	// (review_commit_run.go): what each stage was set to, what answered, and
 	// every failover. The low-risk test is rcLoadProfileForRisk's own.
-	lowRisk := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")) != "" && rcLowRiskLevel(risk.Level)
-	rcRunStart(risk, rcRunProfile(lowRisk), rcRunStageModels(stageModels, reviewCommitFormat == "json"))
+	small := rcSmallRiskLevel(risk.Level)
+	lowRisk := !small && strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")) != "" && rcLowRiskLevel(risk.Level)
+	runProfile := rcRunProfile(lowRisk)
+	if small {
+		runProfile = rcProfileSmall
+	}
+	rcRunStart(risk, runProfile, rcRunStageModels(stageModels, reviewCommitFormat == "json"))
 
 	// The pull request description a person would write, asked for beside the
 	// review (review_commit_description.go); only a bundle carries it.
@@ -492,7 +503,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 
 		fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
 		phase = time.Now()
-		hosts := rcNewHostsBlock(rcNewHosts(hash, diff, rcPathsOf(files), rcFilesMentioningHost))
+		hosts := rcNewHostsBlock(rcNewHosts(hash, rawDiff, rcPathsOf(files), rcFilesMentioningHost))
 		// A re-review is sized to what changed since the previous review
 		// (review_commit_rescope.go); nil covers the whole change.
 		focus := rcReReviewFocus(rcPriorFromEnv(), rcPathsOf(files), rcChangedSince)
@@ -787,15 +798,21 @@ func rcWorktreeRoot(dir string) string {
 }
 
 // rcReviewProvider builds the LLM provider (kailab creds → OpenRouter, or an
-// ANTHROPIC_API_KEY fallback), reusing the gate/planner plumbing.
-func rcReviewProvider() (provider.Provider, string, provider.Kind) {
+// ANTHROPIC_API_KEY fallback), reusing the gate/planner plumbing. No
+// provider is a nil one, which callers report themselves; the error is
+// only the Free plan's stop, which they show as it is.
+func rcReviewProvider() (provider.Provider, string, provider.Kind, error) {
 	cfg, err := config.Load(kaiDir)
 	if err != nil {
-		return nil, "", ""
+		return nil, "", "", nil
 	}
 	prov, reviewModel, _, err := buildGateProvider(cfg)
 	if err != nil {
-		return nil, "", ""
+		var stop freeStopError
+		if errors.As(err, &stop) {
+			return nil, "", "", err
+		}
+		return nil, "", "", nil
 	}
 	// The kind, not just the model: it decides whether the fast pass may
 	// substitute a model at all. An OpenAI-compatible endpoint (Together,
@@ -803,7 +820,7 @@ func rcReviewProvider() (provider.Provider, string, provider.Kind) {
 	// own namespace, and handing it an OpenRouter-style id would fail the
 	// DEFAULT review outright. See rcFastModel.
 	base, token := kailabCreds()
-	return prov, reviewModel, provider.FromEnv(base, token, cfg.Planner.Model).Kind
+	return prov, reviewModel, provider.FromEnv(base, token, cfg.Planner.Model).Kind, nil
 }
 
 func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, body, diff string) (string, error) {
@@ -823,6 +840,7 @@ func rcInferIntent(ctx context.Context, prov provider.Provider, model, subject, 
 		MaxTokens:       rcTokensFor(600, rcStageEffort(rcStageIntent)),
 		ReasoningEffort: rcStageEffort(rcStageIntent),
 		Messages:        []message.Message{{Role: message.RoleUser, Parts: []message.ContentPart{message.TextContent{Text: in.String()}}}},
+		NoCache:         rcOneShotNoCache,
 	})
 	if err != nil {
 		return "", err
@@ -898,7 +916,7 @@ func rcRepoHeader(repo string) string {
 // (review_commit_rescope.go): the turn budget and the coverage gate are sized
 // to it rather than to every changed file.
 func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, hash, sourceContext, intent, hosts, diff string, changed, focus []string, chain []rcChained, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
-	scope := rcReviewScope(changed, focus)
+	scope := rcReviewablePaths(rcReviewScope(changed, focus), changed)
 	publicationCtx := ctx
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
@@ -1054,6 +1072,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		EnableBash: false,
 		MaxTurns:   maxTurns,
 		Prompt:     user.String(),
+		CacheKey:   rcNewCacheKey(rcStageMain),
 
 		InjectedContext: injected,
 		SessionStore:    gdb,
@@ -1374,6 +1393,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// Then only what is in the change and, when both sweeps read the
 		// diff, what more than one proposal raised (review_commit_publish.go).
 		rcRecordProposers(res, finders)
+		rcRecordSeverity(res, earlier)
 		rcPublishGate(res, rcRepoFrom(publicationCtx), ranked && sw.Passes >= 2)
 		// Then the confirmed findings, reworded for the person reading the PR
 		// (review_commit_humanize.go). Wording only: no verdict changes. With
@@ -2428,7 +2448,8 @@ func rcCommitMeta(ref string) (hash, subject, body string, err error) {
 	return hash, strings.TrimSpace(string(s)), strings.TrimSpace(string(b)), nil
 }
 
-func rcCommitDiff(base, ref string, maxBytes int) string {
+// raw is git's whole diff, so the new-host check still sees omitted and cut-off files.
+func rcCommitDiff(base, ref string, maxBytes int) (diff, raw string) {
 	var out []byte
 	var err error
 	if strings.TrimSpace(base) != "" {
@@ -2437,12 +2458,18 @@ func rcCommitDiff(base, ref string, maxBytes int) string {
 		out, err = exec.Command("git", "--no-pager", "show", "--no-color", "--format=", ref).Output()
 	}
 	if err != nil || len(out) == 0 {
-		return ""
+		return "", ""
 	}
-	if len(out) > maxBytes {
-		return string(out[:maxBytes]) + "\n... (diff truncated)\n"
+	return rcSplitCommitDiff(string(out), maxBytes)
+}
+
+func rcSplitCommitDiff(out string, maxBytes int) (diff, raw string) {
+	// Before the cut, so a lockfile cannot push code past maxBytes.
+	d := rcDropUnreviewable(out)
+	if len(d) > maxBytes {
+		return d[:maxBytes] + "\n... (diff truncated)\n", out
 	}
-	return string(out)
+	return d, out
 }
 
 func rcCommitDiffStat(base, ref string) (added, removed int, files []finding.DiffFile) {

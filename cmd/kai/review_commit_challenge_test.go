@@ -517,7 +517,7 @@ func TestReviewChallengeLiveDesktop418(t *testing.T) {
 		kaiDir = dir
 		t.Cleanup(func() { kaiDir = old })
 	}
-	prov, model, _ := rcReviewProvider()
+	prov, model, _, _ := rcReviewProvider()
 	if prov == nil {
 		t.Fatal("no configured Kai provider")
 	}

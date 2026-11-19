@@ -248,6 +248,22 @@ type rcAllegationResult struct {
 	// Original is the check's wording of a finding the one-claim rewrite
 	// replaced (rcApplyOneClaim, review_commit_humanize.go).
 	Original *rcOriginalWording `json:"original,omitempty"`
+	// Severity is the finder's "(severity: high|medium|low)" tag on this
+	// defect, empty for a nit or when none was given; Rank is what the
+	// selection step did with it ("publish", "minor", "overflow", "skip" or
+	// "unlisted"; empty when the step did not run). Recorded only, so a
+	// benchmark can measure what the cap and the gate cut by severity.
+	Severity string `json:"severity,omitempty"`
+	Rank     string `json:"rank,omitempty"`
+	// VoteBypass marks a defect the cap cut that the vote bypass published
+	// because 3+ proposals raised it (rcVoteBypassCap). Recorded only.
+	VoteBypass bool `json:"voteBypass,omitempty"`
+	// rankPos is the allegation's place in the selection's answer (publish
+	// list, then minor list); keptReason is the check's reason, which the
+	// selection's reason replaces when it leaves the allegation out. Both
+	// let the refill (rcRefillFromCap) bring a capped allegation back.
+	rankPos    int
+	keptReason string
 	// unchecked: the check never ran to a verdict (its batch failed), as
 	// opposed to a check that looked and could not settle it.
 	unchecked bool
@@ -276,6 +292,9 @@ type rcChallengeResult struct {
 	Review      string               `json:"-"`
 	Allegations []rcAllegationResult `json:"allegations,omitempty"`
 	Decisions   []rcDecisionResult   `json:"decisions,omitempty"`
+	// Selection records the selection step's limits for this review; nil when
+	// it did not run.
+	Selection *rcSelectionRecord `json:"selection,omitempty"`
 
 	// What the answer said about coverage and the verdict, kept so batches of
 	// one draft (rcChallengeBatches) can be reassembled into one review.

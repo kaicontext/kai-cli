@@ -189,6 +189,7 @@ func rcRunIncompleteStage(r *rcIncompleteReason, fast bool) string {
 
 const (
 	rcProfileLowRisk  = "low_risk"
+	rcProfileSmall    = "small"
 	rcProfileStandard = "standard"
 	rcProfileNone     = "none"
 )

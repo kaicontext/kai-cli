@@ -91,6 +91,7 @@ func TestReviewRunReport_ReviewAgainstFakeModelServer(t *testing.T) {
 	t.Setenv("KAI_REVIEW_SET_VERSION", "3")
 	t.Setenv("KAI_REVIEW_PROFILE", "")
 	t.Setenv("KAI_REVIEW_PROFILE_LOW_RISK", "")
+	t.Setenv("KAI_REVIEW_PROFILE_SMALL", "")
 	t.Setenv("GITHUB_REPOSITORY_FULLNAME", "")
 	t.Setenv(provider.RunSourceEnv, "benchmark")
 	oldKaiDir, oldFormat := kaiDir, reviewCommitFormat

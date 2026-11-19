@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -53,18 +54,17 @@ func rcPublishGate(res *rcChallengeResult, repo *rcRepo, corroborate bool) {
 		if first < 0 {
 			first, firstReason = i, a.Reason
 		}
-		var why string
+		why := rcGateWhy(a, repo, ranged, corroborate)
 		switch {
-		case ranged && !rcNearChange(a.Issue, repo):
-			why = fmt.Sprintf("outside the change: no cited line is within %d lines of a changed line", rcPublishRadius)
+		case strings.HasPrefix(why, "outside"):
 			outside++
-		case corroborate && a.Votes < 2:
-			why = "raised by one proposal only"
+		case why != "":
 			single++
 		default:
 			kept++
 			continue
 		}
+		a.keptReason = a.Reason
 		a.Status, a.Reason = rcStatusRefuted, rcSelectionSkipPrefix+why
 	}
 	if first < 0 {
@@ -75,11 +75,135 @@ func rcPublishGate(res *rcChallengeResult, repo *rcRepo, corroborate bool) {
 		res.Allegations[first].Status, res.Allegations[first].Reason = rcStatusSupported, firstReason
 		kept = 1
 	}
-	if outside+single > 0 && res.match != "" {
+	refilled := 0
+	if rcRefillOn() && !fallback {
+		refilled = rcRefillFromCap(res, repo, ranged, corroborate, outside+single)
+		kept += refilled
+	}
+	bypassed := 0
+	if rcVoteBypassOn() {
+		bypassed = rcVoteBypassCap(res, repo, ranged, corroborate)
+		kept += bypassed
+	}
+	if (outside+single > 0 || bypassed > 0) && res.match != "" {
 		rcFinalize(res)
 	}
 	fmt.Fprintf(os.Stderr, "  publish gate: kept %d of %d (single-proposal %d, outside change %d, fallback %v; corroboration %v; distinct finders >=2: %d of %d)\n",
 		kept, total, single, outside, fallback, corroborate, distinct, total)
+	if refilled > 0 {
+		fmt.Fprintf(os.Stderr, "  refill: %d defect(s) the cap had left out took the slots the gate freed\n", refilled)
+	}
+	if bypassed > 0 {
+		fmt.Fprintf(os.Stderr, "  vote bypass: %d defect(s) with 3+ votes the cap had left out\n", bypassed)
+	}
+}
+
+// rcGateWhy is the gate's reason for withholding a published allegation, or
+// "" when it passes.
+func rcGateWhy(a *rcAllegationResult, repo *rcRepo, ranged, corroborate bool) string {
+	switch {
+	case ranged && !rcNearChange(a.Issue, repo):
+		return fmt.Sprintf("outside the change: no cited line is within %d lines of a changed line", rcPublishRadius)
+	case corroborate && a.Votes < 2:
+		return "raised by one proposal only"
+	}
+	return ""
+}
+
+// rcRefillOn reports whether the refill is on. It follows the review depth
+// the server chose (KAI_REVIEW_TIER): on for standard, deep and auto (auto
+// runs Standard for a change rated S or M and Deep for the rest, so it only
+// ever lands on a depth that has the refill), off for light and for every
+// other value, including unset (free, baseline, or a repo running its own
+// workflow). KAI_REVIEW_REFILL=0 turns it off in every depth and
+// KAI_REVIEW_REFILL=1 forces it on.
+func rcRefillOn() bool {
+	switch strings.TrimSpace(os.Getenv("KAI_REVIEW_REFILL")) {
+	case "0":
+		return false
+	case "1":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("KAI_REVIEW_TIER"))) {
+	case "standard", "deep", "auto":
+		return true
+	}
+	return false
+}
+
+// rcRefillFromCap gives the slots the gate freed back to the allegations the
+// cap left out. The cap runs before the gate, so a defect it cut never came
+// back when the gate then withheld one of the published ones; here the cut
+// ones, in the selection's order, take the freed slots when they pass the same
+// gate. Returns how many were brought back.
+func rcRefillFromCap(res *rcChallengeResult, repo *rcRepo, ranged, corroborate bool, slots int) int {
+	var cut []int
+	for i, a := range res.Allegations {
+		if a.Status == rcStatusRefuted && strings.HasPrefix(a.Reason, rcSelectionSkipPrefix+"outside the ") &&
+			strings.Contains(a.Reason, "most important") && a.rankPos > 0 {
+			cut = append(cut, i)
+		}
+	}
+	sort.SliceStable(cut, func(x, y int) bool { return res.Allegations[cut[x]].rankPos < res.Allegations[cut[y]].rankPos })
+	back := 0
+	for _, i := range cut {
+		if back == slots {
+			break
+		}
+		a := &res.Allegations[i]
+		if rcGateWhy(a, repo, ranged, corroborate) != "" {
+			continue
+		}
+		a.Status, a.Reason = rcStatusSupported, a.keptReason
+		back++
+	}
+	return back
+}
+
+// rcVoteBypassMinVotes is how many proposals must have raised a defect for it
+// to get past the cap.
+const rcVoteBypassMinVotes = 3
+
+// rcVoteBypassOn reports whether the vote bypass is on. Same switches as the
+// refill: on for standard, deep and auto (KAI_REVIEW_TIER), off for light and
+// for every other value including unset. KAI_REVIEW_VOTE_BYPASS=0 turns it off
+// in every depth and =1 forces it on. Light is off because no Light run was
+// part of the evidence.
+func rcVoteBypassOn() bool {
+	switch strings.TrimSpace(os.Getenv("KAI_REVIEW_VOTE_BYPASS")) {
+	case "0":
+		return false
+	case "1":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("KAI_REVIEW_TIER"))) {
+	case "standard", "deep", "auto":
+		return true
+	}
+	return false
+}
+
+// rcVoteBypassCap publishes every defect the cap cut that three or more
+// proposals raised and that passes the same gate, with no slot limit. It runs
+// after the refill, so it takes what the cut set has left. Benchmark runs 51,
+// Gate A and 59: such defects matched a missed golden 54-75% of the time
+// (break-even ~27%) and never cost one. Returns how many it restored.
+func rcVoteBypassCap(res *rcChallengeResult, repo *rcRepo, ranged, corroborate bool) int {
+	back := 0
+	for i := range res.Allegations {
+		a := &res.Allegations[i]
+		if a.Status != rcStatusRefuted || !strings.HasPrefix(a.Reason, rcSelectionSkipPrefix+"outside the ") ||
+			!strings.Contains(a.Reason, "most important") || a.Votes < rcVoteBypassMinVotes {
+			continue
+		}
+		if rcGateWhy(a, repo, ranged, corroborate) != "" {
+			continue
+		}
+		a.Status, a.Reason = rcStatusSupported, a.keptReason
+		a.VoteBypass = true
+		back++
+	}
+	return back
 }
 
 // rcCountVotes sets each allegation's Votes: how many allegations the check's

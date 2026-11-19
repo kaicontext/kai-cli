@@ -105,3 +105,44 @@ func TestLoadProfileForRisk(t *testing.T) {
 		t.Error("a missing low-risk profile loaded without an error")
 	}
 }
+
+// A small profile takes the levels in KAI_REVIEW_SMALL_LEVELS (default S) ahead
+// of the low-risk profile, so S can run small while M runs low-risk.
+func TestLoadProfileForRiskSmall(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, model string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(`{"stages":{"main":{"model":"`+model+`"}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	t.Setenv("GITHUB_REPOSITORY_FULLNAME", "acme/app")
+	t.Setenv("KAI_REVIEW_PROFILE", write("high.json", "deep"))
+	t.Setenv("KAI_REVIEW_PROFILE_LOW_RISK", write("low.json", "mid"))
+	t.Setenv("KAI_REVIEW_LOW_RISK_LEVELS", "S,M")
+	defer func() { rcActiveProfile = nil }()
+
+	check := func(level, want string) {
+		t.Helper()
+		if err := rcLoadProfileForRisk("main", rcRisk{Level: level}); err != nil {
+			t.Fatal(err)
+		}
+		if got := rcStageModel(rcStageMain, "default"); got != want {
+			t.Errorf("risk %q: main runs on %s, want %s", level, got, want)
+		}
+	}
+	check("S", "mid") // no small profile named: unchanged
+	t.Setenv("KAI_REVIEW_PROFILE_SMALL", write("small.json", "tiny"))
+	check("S", "tiny")
+	check("M", "mid")
+	check("L", "deep")
+	check("", "deep")
+	t.Setenv("KAI_REVIEW_SMALL_LEVELS", "s, m")
+	check("M", "tiny")
+	check("L", "deep")
+	t.Setenv("KAI_REVIEW_PROFILE_SMALL", filepath.Join(dir, "missing.json"))
+	if err := rcLoadProfileForRisk("main", rcRisk{Level: "S"}); err == nil {
+		t.Error("a missing small profile loaded without an error")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +25,13 @@ const configFileName = "config.yaml"
 // planner and chat agent reason/converse, and the agent writes code.
 // See Default() for the built-in assignments.
 type Config struct {
+	// ModelsSet names the roles whose model .kai/config.yaml sets (by
+	// their yaml key: "agent", "planner", …), whatever the value, even
+	// the built-in default's. The Free plan (task 21 part B) keeps a model
+	// the person set and replaces only the rest. Never read from or
+	// written to the file.
+	ModelsSet map[string]bool `yaml:"-" json:"-"`
+
 	Agent      AgentConfig      `yaml:"agent"`
 	Planner    PlannerConfig    `yaml:"planner"`
 	Chat       ChatConfig       `yaml:"chat"`
@@ -294,6 +302,7 @@ func Load(kaiDir string) (Config, error) {
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parsing %s: %w", p, err)
 	}
+	cfg.ModelsSet = modelsSetIn(b)
 	cfg.Agent.Model = defaultIfEmpty(cfg.Agent.Model, Default().Agent.Model)
 	cfg.Planner.Model = defaultIfEmpty(cfg.Planner.Model, Default().Planner.Model)
 	cfg.Chat.Model = defaultIfEmpty(cfg.Chat.Model, Default().Chat.Model)
@@ -303,4 +312,34 @@ func Load(kaiDir string) (Config, error) {
 		cfg.Planner.MaxAgents = Default().Planner.MaxAgents
 	}
 	return cfg, nil
+}
+
+// modelsSetIn is the yaml keys of the role sections in a config file that
+// set a non-empty model. Only mapping sections (or aliases of one) are
+// read, so a top-level scalar (autonomy: hands_off) or list doesn't hide
+// the rest.
+func modelsSetIn(b []byte) map[string]bool {
+	var raw map[string]yaml.Node
+	if yaml.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for key, node := range raw {
+		// A section written as an alias (planner: *base) is the section
+		// it points at.
+		sec := &node
+		if sec.Kind == yaml.AliasNode && sec.Alias != nil {
+			sec = sec.Alias
+		}
+		if sec.Kind != yaml.MappingNode {
+			continue
+		}
+		var role struct {
+			Model string `yaml:"model"`
+		}
+		if sec.Decode(&role) == nil && strings.TrimSpace(role.Model) != "" {
+			set[key] = true
+		}
+	}
+	return set
 }

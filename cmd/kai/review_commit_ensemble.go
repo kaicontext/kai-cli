@@ -17,6 +17,8 @@ package main
 // careful maintainer would want fixed, most important first, a few per change.
 
 import (
+	"kai/internal/freeplan"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -63,6 +65,10 @@ func rcEnsembleModel(stage string) string {
 	// variables; "off" or "none" turns the stage off.
 	if v := strings.TrimSpace(os.Getenv(d.modelEnv)); v != "" {
 		m = v
+	} else if f := freeDefault(freeplan.CatchAll); f != "" && m != rcEffortOff && m != "none" {
+		// On the Free plan a stage on its own default runs the server's
+		// model.
+		m = f
 	}
 	m = rcStageModel(stage, m)
 	if m == rcEffortOff || m == "none" {
@@ -125,6 +131,7 @@ func rcStartSecondFinder(runCtx, concludeCtx context.Context, opts agent.Options
 	second.ReasoningEffort = rcStageEffort(rcStageFinder2)
 	second.SessionStore = nil
 	second.SessionID = ""
+	second.CacheKey = rcNewCacheKey(rcStageFinder2)
 	second.TaskName = "review-commit-finder2"
 	second.Hooks = agent.Hooks{OnToolCall: func(name, inputJSON string) {
 		fmt.Fprintf(os.Stderr, "  [finder2] → %s %s\n", name, rcOneLine(inputJSON, 70))
@@ -341,11 +348,60 @@ func rcRankSupported(ctx context.Context, prov provider.Provider, intent, diff s
 	// to the main list, the minor list or the overflow past the cap: the
 	// bundle keeps only the outcome, which cannot tell them apart.
 	fmt.Fprintf(os.Stderr, "  selection answer: cap=%d publish=%v minor=%v skip=%v\n", limit, ans.Publish, ans.Minor, rcSortedKeys(ans.Skip))
+	rcMarkRank(res, ans, limit)
+	res.Selection = &rcSelectionRecord{Model: model, Cap: limit, MinorCap: rcRankMinorCap, Confirmed: len(supported)}
 	kept, dropped := rcApplyRank(res, ans, limit)
 	fmt.Fprintf(os.Stderr, "  selection (%s, %s): %d of %d confirmed defect(s) published, %d held back\n",
 		model, time.Since(started).Round(time.Second), kept, len(supported), dropped)
 	rcFinalize(res)
 	return true
+}
+
+// rcSelectionRecord is what the selection step saves in the review's record:
+// the cap it applied and how many confirmed defects it chose among.
+type rcSelectionRecord struct {
+	Model     string `json:"model"`
+	Cap       int    `json:"cap"`
+	MinorCap  int    `json:"minorCap"`
+	Confirmed int    `json:"confirmed"`
+}
+
+// rcMarkRank sets each supported allegation's Rank from the selection's
+// answer, before rcApplyRank reorders and refutes them.
+func rcMarkRank(res *rcChallengeResult, ans rcRankAnswer, limit int) {
+	rank := map[int]string{}
+	pos := map[int]int{}
+	for n, id := range append(append([]int{}, ans.Publish...), ans.Minor...) {
+		if _, ok := pos[id]; !ok {
+			pos[id] = n + 1
+		}
+	}
+	for n, id := range ans.Publish {
+		rank[id] = "publish"
+		if n >= limit {
+			rank[id] = "overflow" // chosen to publish, past the main cap
+		}
+	}
+	for _, id := range ans.Minor {
+		if rank[id] == "" {
+			rank[id] = "minor"
+		}
+	}
+	for id := range ans.Skip {
+		if rank[id] == "" {
+			rank[id] = "skip"
+		}
+	}
+	for i := range res.Allegations {
+		a := &res.Allegations[i]
+		if a.Status != rcStatusSupported {
+			continue
+		}
+		if a.Rank = rank[a.ID]; a.Rank == "" {
+			a.Rank = "unlisted"
+		}
+		a.rankPos = pos[a.ID]
+	}
 }
 
 // rcRankAnswer is the selection's answer: the defects to publish first, the
@@ -470,6 +526,7 @@ func rcApplyRank(res *rcChallengeResult, ans rcRankAnswer, limit int) (kept, dro
 			if why == "" {
 				why = fmt.Sprintf("outside the %d most important defects of this change", limit)
 			}
+			a.keptReason = a.Reason
 			a.Status = rcStatusRefuted
 			a.Reason = rcSelectionSkipPrefix + why
 			dropped++

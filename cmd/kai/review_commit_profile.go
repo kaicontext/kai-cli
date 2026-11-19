@@ -113,6 +113,14 @@ func rcProfileHash() string {
 // set once, before any model is resolved, by rcLoadProfileFor.
 var rcActiveProfile *rcReviewProfile
 
+// rcReviewModelsChosen reports whether this review's models were chosen
+// for it: the server sent a model set (KAI_REVIEW_SET_VERSION) or a
+// profile is loaded (the server's or a benchmark's). Such a review keeps
+// them on Free too; the Free plan's defaults are for a person's own runs.
+func rcReviewModelsChosen() bool {
+	return rcActiveProfile != nil || strings.TrimSpace(os.Getenv("KAI_REVIEW_SET_VERSION")) != ""
+}
+
 // A model id as the proxy routes it (the server's own rule for pinned review
 // models): letters, digits and . _ : / - only.
 var rcProfileModelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
@@ -261,11 +269,37 @@ func rcLoadProfileFile(path string) error {
 // runs on KAI_REVIEW_PROFILE_LOW_RISK when the job names one. Every other
 // change, and every change when that is unset, loads as rcLoadProfileFor does.
 func rcLoadProfileForRisk(base string, risk rcRisk) error {
+	// The small profile is checked first: S can sit in both level lists (the
+	// server's Auto sends S to the small profile and M to the low-risk one).
+	if path := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_SMALL")); path != "" && rcSmallRiskLevel(risk.Level) {
+		rcActiveProfile = nil
+		return rcLoadProfileFile(path)
+	}
 	if path := strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_LOW_RISK")); path != "" && rcLowRiskLevel(risk.Level) {
 		rcActiveProfile = nil
 		return rcLoadProfileFile(path)
 	}
 	return rcLoadProfileFor(base)
+}
+
+// rcSmallRiskLevel reports whether a pre-review risk level is routed to the
+// small profile (KAI_REVIEW_PROFILE_SMALL): one of KAI_REVIEW_SMALL_LEVELS
+// (comma-separated, default S). No small profile named, or an unrated change,
+// and it never is.
+func rcSmallRiskLevel(level string) bool {
+	if level == "" || strings.TrimSpace(os.Getenv("KAI_REVIEW_PROFILE_SMALL")) == "" {
+		return false
+	}
+	levels := strings.TrimSpace(os.Getenv("KAI_REVIEW_SMALL_LEVELS"))
+	if levels == "" {
+		levels = "S"
+	}
+	for _, l := range strings.Split(levels, ",") {
+		if strings.EqualFold(strings.TrimSpace(l), level) {
+			return true
+		}
+	}
+	return false
 }
 
 // rcLowRiskLevel reports whether a pre-review risk level is routed to the

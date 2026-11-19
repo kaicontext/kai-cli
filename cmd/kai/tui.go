@@ -17,6 +17,7 @@ import (
 	"github.com/kaicontext/kai-engine/session"
 	"github.com/kaicontext/kai-engine/agentprompt"
 	"kai/internal/config"
+	"kai/internal/freeplan"
 	"github.com/kaicontext/kai-engine/graph"
 	"github.com/kaicontext/kai-engine/orchestrator"
 	"github.com/kaicontext/kai-engine/planner"
@@ -122,6 +123,11 @@ func consultModelFromEnv() string {
 	case "off", "none", "disabled":
 		return ""
 	case "":
+		// On the Free plan, the server's model: the Free plan doesn't
+		// include this one.
+		if m := freeDefault(freeplan.CatchAll); m != "" {
+			return m
+		}
 		return "claude-opus-4-7"
 	default:
 		return v
@@ -430,6 +436,12 @@ func runCodeTUI(cmd *cobra.Command, args []string) error {
 	// matches `db`, by construction. Single-project layouts are
 	// unaffected: primary.Path == cwd in that case.
 	planner := buildPlannerServices(asGraphDB(db), kaiDir, primary.Path, liveSync, set)
+	if freePlanStop != nil {
+		// The person set a model their plan doesn't include
+		// (free_plan.go): stop and say so, rather than open a TUI
+		// that can't run it.
+		return freePlanStop
+	}
 	if planner != nil {
 		// Pass the binary's version through so the startup banner
 		// can show "kai v0.16.0" instead of "kai vdev". Single
@@ -445,6 +457,10 @@ func runCodeTUI(cmd *cobra.Command, args []string) error {
 		ResumeSessionID: resumeSessionID,
 	})
 }
+
+// freePlanStop is set by buildPlannerServices when the person set a model
+// their Free plan doesn't include; runCodeTUI stops with it.
+var freePlanStop error
 
 // buildPlannerServices wires up the engine handles the REPL needs for
 // natural-language input.
@@ -500,6 +516,13 @@ func buildPlannerServices(db *graph.DB, kaiDir, workDir string, liveSync *liveSy
 	if kailabBase != "" {
 		go seedModelCatalog(kailabBase)
 	}
+	// On the Free plan, every role the person didn't set runs the
+	// server's model (free_plan.go); flags are already in cfg.
+	plan := cliFreePlan(provider.FromEnv(kailabBase, kailabToken, cfg.Planner.Model).Kind)
+	if err := applyFreePlan(&cfg, plan); err != nil {
+		freePlanStop = err
+		return nil
+	}
 	pcfg := provider.FromEnv(kailabBase, kailabToken, cfg.Planner.Model)
 	prov, perr := provider.New(pcfg)
 	if perr != nil {
@@ -545,7 +568,9 @@ func buildPlannerServices(db *graph.DB, kaiDir, workDir string, liveSync *liveSy
 	// completion on that schema-constrained turn, triggering
 	// MaxTokens-bumped retries. Mirrors the runner's empty-completion
 	// fallback chain.
-	if plannerFinalizeModel == "" && provider.IsReasoningModel(plannerModel) {
+	// Not on the Free plan: the planner already runs the server's model
+	// there, and the Free plan doesn't include GLM.
+	if plannerFinalizeModel == "" && !plan.Free && provider.IsReasoningModel(plannerModel) {
 		plannerFinalizeModel = "z-ai/glm-5.1"
 	}
 
@@ -572,7 +597,10 @@ func buildPlannerServices(db *graph.DB, kaiDir, workDir string, liveSync *liveSy
 		PlannerFinalizeModel: plannerFinalizeModel,
 		ChatModel:            chatModel,
 		ReviewModel:          reviewModel,
-		HandsOff:             handsOffEnabled(cfg),
+		// On the Free plan the critic runs the server's model; elsewhere
+		// "" keeps its own default (views/critic.go).
+		CriticModel: freeDefault(freeplan.CatchAll),
+		HandsOff:    handsOffEnabled(cfg),
 		PlannerCfg: planner.Config{
 			Model:     cfg.Planner.Model,
 			MaxAgents: cfg.Planner.MaxAgents,

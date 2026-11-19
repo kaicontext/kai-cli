@@ -215,3 +215,33 @@ func rcEarlierKey(item string) (string, bool) {
 	}
 	return fmt.Sprintf("%s:%d", path, line), true
 }
+
+// rcRecordSeverity sets each allegation's Severity from the tags the finders
+// put on their bullets (the map rcTakeEarlierTags and rcRememberTags fill),
+// matched like rcPutEarlierTags: by location and wording, or by location alone
+// when only one tagged bullet was there. A nit has none.
+func rcRecordSeverity(res *rcChallengeResult, tags map[string]string) {
+	if res == nil || len(tags) == 0 {
+		return
+	}
+	for i := range res.Allegations {
+		a := &res.Allegations[i]
+		if _, nit := rcSplitNit(a.Issue); nit {
+			continue
+		}
+		key, loc, ok := rcEarlierBulletKey("issues", "- "+a.Issue)
+		if !ok {
+			continue
+		}
+		t := tags[key]
+		if t == "" && loc != "" && tags[loc] != rcAmbiguous {
+			t = tags[loc]
+		}
+		for _, m := range rcEarlierTagRe.FindAllString(t, -1) {
+			m = strings.ToLower(strings.TrimSpace(m))
+			if strings.HasPrefix(m, "(severity:") {
+				a.Severity = strings.TrimSpace(strings.Trim(strings.TrimPrefix(m, "(severity:"), ")"))
+			}
+		}
+	}
+}
