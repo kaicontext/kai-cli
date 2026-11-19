@@ -765,11 +765,111 @@ func TestCommentOrBlank_ByLanguage(t *testing.T) {
 		{"page.html", "<!-- note -->", true},
 		{"Makefile", "# note", true},
 		{"a.unknownext", "# maybe", false}, // unknown: code, so it still chains
+		{"a.php", "# note", true},
+		{"a.php", "#", true},
+		{"a.php", "    #TODO later", true},
+		{"A.PHP", "#note", true},
+		{"a.php", "#[Route('/x')]", false},
+		{"a.php", "// note", true},
+		{"a.php", "$x = 1; # trailing", false},
 	}
 	for _, c := range cases {
 		if got := rcCommentOrBlank(c.file, c.line); got != c.comment {
 			t.Errorf("rcCommentOrBlank(%q, %q) = %v, want %v", c.file, c.line, got, c.comment)
 		}
+	}
+}
+
+// A PHP function changed only in "#" comments (bare, or with no space) is not
+// touched, so its callers are not chained; an attribute change is code.
+func TestSinceSymbols_PHPHashComments(t *testing.T) {
+	hunk := func(lines ...string) string {
+		return strings.Join(append([]string{
+			"diff --git a/a.php b/a.php",
+			"--- a/a.php",
+			"+++ b/a.php",
+			"@@ -3,2 +3,2 @@ function charge($amt) {",
+		}, lines...), "\n") + "\n"
+	}
+	comments := hunk("-	#", "+	#TODO check the amount")
+	if s := rcSinceSymbols(comments); len(s["a.php"]) != 0 {
+		t.Errorf("comment-only change touched %+v", s["a.php"])
+	}
+	if rcSinceCode(comments)["a.php"] {
+		t.Error("comment-only change counted as code")
+	}
+	attr := hunk("-	#[Deprecated]", "+	#[Deprecated('use pay')]")
+	if s := rcSinceSymbols(attr); len(s["a.php"]) == 0 {
+		t.Error("attribute change not counted as touching charge")
+	}
+}
+
+// A quoted word on a changed line of a prose file is not a changed key.
+func TestSinceKeys_SkipsProse(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/README.md b/README.md",
+		"--- a/README.md",
+		"+++ b/README.md",
+		"@@ -1 +1 @@",
+		`-Set "payment.retry_limit" to retry.`,
+		`+Set "payment.retry_max" to retry.`,
+		"diff --git a/cfg.go b/cfg.go",
+		"--- a/cfg.go",
+		"+++ b/cfg.go",
+		"@@ -1 +1 @@",
+		`-	v := conf.Get("payment.retry_limit")`,
+		`+	v := conf.Get("payment.retry_max")`,
+	}, "\n") + "\n"
+	keys := rcSinceKeys(diff)
+	if len(keys["README.md"]) != 0 {
+		t.Errorf("prose keys = %+v", keys["README.md"])
+	}
+	if len(keys["cfg.go"]) == 0 {
+		t.Error("code keys lost")
+	}
+}
+
+// The graph's freshness check takes the symbol as a whole identifier, like
+// the word-search fallback: ChargeAmount is not a call of Charge.
+func TestHasWord(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"x := Charge(1)", true},
+		{"Charge(1)", true},
+		{"p.Charge", true},
+		{"return Charge", true},
+		{"x := ChargeAmount(1)", false},
+		{"x := PreCharge(1)", false},
+		{"Charge_v2()", false},
+		{"ChargeAmount(); Charge()", true},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := rcHasWord(c.text, "Charge"); got != c.want {
+			t.Errorf("rcHasWord(%q, Charge) = %v, want %v", c.text, got, c.want)
+		}
+	}
+	if rcHasWord("Charge()", "") {
+		t.Error("empty word matched")
+	}
+}
+
+// The progress line counts base entries in the chain as capped, not all the
+// base produced.
+func TestRelatedLog_CountsCappedBase(t *testing.T) {
+	var base []rcChained
+	for i := 0; i < 15; i++ {
+		base = append(base, rcChained{Path: fmt.Sprintf("b%02d.go", i), Kind: rcChainBase})
+	}
+	chain := rcMergeChains(base, []rcChained{{Path: "x.go", Kind: rcChainSymbol}}, 12)
+	if got := rcRelatedLog(chain, 0); !strings.Contains(got, "(12 from base changes)") {
+		t.Errorf("log = %q, want 12 from base changes", got)
+	}
+	mixed := rcMergeChains(base[:2], []rcChained{{Path: "x.go", Kind: rcChainSymbol}}, 12)
+	if got := rcRelatedLog(mixed, 0); !strings.Contains(got, "(2 from base changes)") {
+		t.Errorf("log = %q, want 2 from base changes", got)
 	}
 }
 

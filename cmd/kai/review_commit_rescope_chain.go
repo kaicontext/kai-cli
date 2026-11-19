@@ -685,6 +685,10 @@ func rcCommentOrBlank(file, l string) bool {
 			return true
 		}
 	}
+	// PHP: "#" starts a comment ("#", "#TODO"), "#[" an attribute.
+	if strings.EqualFold(filepath.Ext(file), ".php") && strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "#[") {
+		return true
+	}
 	// A block-comment continuation: "* text", a lone "*", or "*/". Not "*p".
 	if rcHasBlockComments(file) && (t == "*" || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "*/")) {
 		return true
@@ -720,7 +724,7 @@ func rcCommentLeads(file string) []string {
 		"ini", "cfg", "conf", "tf", "tfvars", "nix", "cmake", "ps1", "jl", "ex", "exs", "cr", "mk", "dockerfile":
 		return []string{"#"}
 	case "php":
-		return []string{"//", "/*", "# "} // "#[" is an attribute
+		return []string{"//", "/*"} // and "#", but not "#[" (rcCommentOrBlank)
 	case "sql", "lua", "hs", "elm", "ada", "adb", "ads", "vhd", "vhdl":
 		return []string{"--"}
 	case "html", "htm", "xml", "svg", "md", "markdown", "vue", "svelte":
@@ -789,7 +793,8 @@ func rcSinceKeys(diff string) map[string][]rcChangedKey {
 	per := map[string]map[string]*acc{}
 	order := map[string][]string{}
 	rcDiffFiles(diff, func(file, line string) {
-		if len(line) < 2 || (line[0] != '+' && line[0] != '-') {
+		// A quoted word in prose is not a key the code reads.
+		if len(line) < 2 || (line[0] != '+' && line[0] != '-') || rcProseFile(file) {
 			return
 		}
 		for _, m := range rcKeyLitRe.FindAllStringSubmatch(line[1:], -1) {
@@ -923,9 +928,21 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 	if time.Now().After(deadline) {
 		fmt.Fprintf(os.Stderr, "  re-review: related-file lookups stopped at their %s budget; %d found\n", rcChainBudget, len(chain))
 	} else {
-		fmt.Fprintf(os.Stderr, "  re-review: related files worked out in %s (%d from base changes)\n", time.Since(started).Round(time.Millisecond), len(base))
+		fmt.Fprint(os.Stderr, rcRelatedLog(chain, time.Since(started)))
 	}
 	return chain
+}
+
+// rcRelatedLog is the progress line for a worked-out chain. The base count is
+// of the chain as capped, which may have cut base entries (rcMergeChains).
+func rcRelatedLog(chain []rcChained, took time.Duration) string {
+	base := 0
+	for _, c := range chain {
+		if c.Kind == rcChainBase {
+			base++
+		}
+	}
+	return fmt.Sprintf("  re-review: related files worked out in %s (%d from base changes)\n", took.Round(time.Millisecond), base)
 }
 
 func rcChainGraphFor(gdb *graph.DB, root string, deadline time.Time) rcChainGraph {
@@ -1275,7 +1292,7 @@ func (g *rcGraphChain) SymbolCallers(path, symbol string) []rcSite {
 		if rcBareName(callee) != symbol || calleeFile != path || caller == "" || !g.inSnapshot(caller) {
 			continue
 		}
-		if !strings.Contains(g.read(caller), symbol) {
+		if !rcHasWord(g.read(caller), symbol) {
 			continue
 		}
 		site := rcSite{Path: caller}
@@ -1288,6 +1305,28 @@ func (g *rcGraphChain) SymbolCallers(path, symbol string) []rcSite {
 		}
 	}
 	return out
+}
+
+// rcHasWord reports whether text names word as a whole identifier, not as part
+// of a longer one (Charge, not ChargeAmount): the token rcWordGrep matches.
+func rcHasWord(text, word string) bool {
+	if word == "" {
+		return false
+	}
+	isIdent := func(b byte) bool {
+		return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+	}
+	for i := 0; ; {
+		j := strings.Index(text[i:], word)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(word)
+		if (start == 0 || !isIdent(text[start-1])) && (end == len(text) || !isIdent(text[end])) {
+			return true
+		}
+		i = start + 1
+	}
 }
 
 // rcBareName strips a qualifier: Type.Method → Method, crate::foo → foo.
