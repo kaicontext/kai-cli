@@ -1,0 +1,283 @@
+package main
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
+
+const rcTestLockDiff = `diff --git a/package-lock.json b/package-lock.json
+index 1..2 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -10,9 +10,12 @@
+     "node_modules/electron": {
+-      "version": "41.0.0",
+-      "resolved": "https://registry.npmjs.org/electron/-/electron-41.0.0.tgz",
+-      "integrity": "sha512-old",
++      "version": "42.11.17",
++      "resolved": "https://registry.npmjs.org/electron/-/electron-42.11.17.tgz",
++      "integrity": "sha512-new",
++      "engines": {
++        "node": ">=22.12.0"
++      },
+     },
+     "node_modules/left-pad": {
+-      "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
++      "resolved": "https://evil.example.com/left-pad-1.3.0.tgz",
+     },
+diff --git a/src/app.ts b/src/app.ts
+index 3..4 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1 +1 @@
+-const a = 1
++const a = 2
+diff --git a/api/v1/svc.pb.go b/api/v1/svc.pb.go
+--- a/api/v1/svc.pb.go
++++ b/api/v1/svc.pb.go
+@@ -1 +1,2 @@
++// generated
++package v1
+`
+
+func TestDropUnreviewableSummarisesLockfileKeepsCodeOmitsGenerated(t *testing.T) {
+	got := rcDropUnreviewable(rcTestLockDiff)
+	for _, want := range []string{
+		"(lockfile: 11 changed line(s); only package versions, engine requirements and non-registry sources are shown)\n",
+		`     "node_modules/electron": {` + "\n" + `-      "version": "41.0.0",` + "\n" + `+      "version": "42.11.17",` + "\n",
+		`+      "engines": {` + "\n" + `+        "node": ">=22.12.0"` + "\n",
+		`     "node_modules/left-pad": {` + "\n" + `+      "resolved": "https://evil.example.com/left-pad-1.3.0.tgz",` + "\n",
+		"diff --git a/src/app.ts b/src/app.ts\nindex 3..4 100644\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-const a = 1\n+const a = 2\n",
+		"diff --git a/api/v1/svc.pb.go b/api/v1/svc.pb.go\n(vendored, generated, minified or binary file: 2 changed line(s), not shown)\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	for _, gone := range []string{"integrity", "registry.npmjs.org", "+package v1"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("%q should not be shown:\n%s", gone, got)
+		}
+	}
+}
+
+func TestLockSummaryIsCapped(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("diff --git a/Cargo.lock b/Cargo.lock\n--- a/Cargo.lock\n+++ b/Cargo.lock\n@@ -1,400 +1,400 @@\n")
+	for i := 0; i < 200; i++ {
+		b.WriteString(" name = \"crate\"\n-version = \"1.0.0\"\n+version = \"1.0.1\"\n")
+	}
+	got := rcDropUnreviewable(b.String())
+	if !strings.Contains(got, "... (450 more lockfile line(s) not shown)\n") {
+		t.Errorf("summary not capped:\n%s", got[len(got)-300:])
+	}
+}
+
+func TestLockSummaryShowsPnpmVersionedKeys(t *testing.T) {
+	d := "diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\n--- a/pnpm-lock.yaml\n+++ b/pnpm-lock.yaml\n@@ -1,8 +1,8 @@\n" +
+		"-  /foo/1.0.0:\n+  /foo/1.1.0:\n" +
+		"     resolution: {integrity: sha512-old}\n" +
+		"-  '@scope/bar@2.0.0':\n+  '@scope/bar@2.1.0':\n" +
+		"     resolution: {integrity: sha512-new}\n"
+	got := rcDropUnreviewable(d)
+	for _, want := range []string{"-  /foo/1.0.0:\n+  /foo/1.1.0:\n", "-  '@scope/bar@2.0.0':\n+  '@scope/bar@2.1.0':\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "integrity") {
+		t.Errorf("integrity should not be shown:\n%s", got)
+	}
+}
+
+func TestLockSummaryShowsLookalikeRegistryHost(t *testing.T) {
+	d := "diff --git a/package-lock.json b/package-lock.json\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1,3 +1,3 @@\n" +
+		`     "node_modules/left-pad": {` + "\n" +
+		`-      "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",` + "\n" +
+		`+      "resolved": "https://registry.npmjs.org.evil.com/left-pad/-/left-pad-1.3.0.tgz",` + "\n"
+	got := rcDropUnreviewable(d)
+	if !strings.Contains(got, "registry.npmjs.org.evil.com") {
+		t.Errorf("a lookalike registry host must be shown:\n%s", got)
+	}
+	if strings.Contains(got, `-      "resolved"`) {
+		t.Errorf("the default registry line should be dropped:\n%s", got)
+	}
+}
+
+func TestLockSummaryNamesYarnBerryEntry(t *testing.T) {
+	d := "diff --git a/yarn.lock b/yarn.lock\n--- a/yarn.lock\n+++ b/yarn.lock\n@@ -1,4 +1,4 @@\n" +
+		"-\"left-pad@npm:1.3.0\":\n+\"left-pad@npm:1.3.1\":\n" +
+		"-  version: 1.3.0\n+  version: 1.3.1\n"
+	got := rcDropUnreviewable(d)
+	if want := "+\"left-pad@npm:1.3.1\":\n-  version: 1.3.0\n+  version: 1.3.1\n"; !strings.Contains(got, want) {
+		t.Errorf("missing %q in:\n%s", want, got)
+	}
+}
+
+func TestLockSummaryShowsOtherEcosystemVersions(t *testing.T) {
+	for path, body := range map[string]string{
+		"Gemfile.lock": "-    rack (2.2.3)\n+    rack (2.2.8)\n",
+		"Podfile.lock": "-  - Alamofire (5.4.0)\n+  - Alamofire (5.8.1)\n",
+		"bun.lock":     "-    \"zod\": [\"zod@3.22.0\", \"\", {}, \"sha512-old\"],\n+    \"zod\": [\"zod@3.23.8\", \"\", {}, \"sha512-new\"],\n",
+		"mix.lock":     "-  \"plug\": {:hex, :plug, \"1.14.0\", \"aa\", [:mix], [], \"hexpm\", \"bb\"},\n+  \"plug\": {:hex, :plug, \"1.15.3\", \"cc\", [:mix], [], \"hexpm\", \"dd\"},\n",
+		"flake.lock":   "-        \"rev\": \"aaaa\",\n+        \"rev\": \"bbbb\",\n",
+	} {
+		d := "diff --git a/" + path + " b/" + path + "\n--- a/" + path + "\n+++ b/" + path + "\n@@ -1,2 +1,2 @@\n" + body
+		if got := rcDropUnreviewable(d); !strings.Contains(got, body) {
+			t.Errorf("%s: versions not shown:\n%s", path, got)
+		}
+	}
+}
+
+func TestLockSummaryNamesComposerPackage(t *testing.T) {
+	d := "diff --git a/composer.lock b/composer.lock\n--- a/composer.lock\n+++ b/composer.lock\n@@ -10,4 +10,4 @@\n" +
+		"         {\n" +
+		"             \"name\": \"monolog/monolog\",\n" +
+		"-            \"version\": \"2.9.1\",\n+            \"version\": \"3.5.0\",\n"
+	got := rcDropUnreviewable(d)
+	if want := "             \"name\": \"monolog/monolog\",\n-            \"version\": \"2.9.1\",\n+            \"version\": \"3.5.0\",\n"; !strings.Contains(got, want) {
+		t.Errorf("missing %q in:\n%s", want, got)
+	}
+}
+
+func TestLockSummaryKeepsLineNumbers(t *testing.T) {
+	d := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-x\n+y\n" +
+		"diff --git a/package-lock.json b/package-lock.json\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -40,6 +40,6 @@\n" +
+		`     "node_modules/left-pad": {` + "\n" +
+		`       "license": "MIT",` + "\n" +
+		`-      "integrity": "sha512-old",` + "\n" +
+		`+      "integrity": "sha512-new",` + "\n" +
+		`-      "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",` + "\n" +
+		`+      "resolved": "https://pkgs.evil-cdn.io/left-pad-1.3.0.tgz",` + "\n"
+	got := rcDropUnreviewable(d)
+	if !strings.Contains(got, "--- a/package-lock.json\n+++ b/package-lock.json\n") {
+		t.Errorf("file lines dropped:\n%s", got)
+	}
+	hosts := rcAddedURLHosts(got)
+	if len(hosts) != 1 || hosts[0].Path != "package-lock.json" || hosts[0].Line != 43 {
+		t.Errorf("host = %+v, want package-lock.json:43 in:\n%s", hosts, got)
+	}
+}
+
+func TestOmitNoteForBinary(t *testing.T) {
+	d := "diff --git a/logo.png b/logo.png\nindex 1..2 100644\nBinary files a/logo.png and b/logo.png differ\n"
+	if got := rcDropUnreviewable(d); got != "diff --git a/logo.png b/logo.png\n(binary file, not shown)\n" {
+		t.Errorf("binary note: got %q", got)
+	}
+}
+
+func TestDiffHeaderPath(t *testing.T) {
+	for header, want := range map[string]string{
+		"diff --git a/x.go b/x.go\n":                               "x.go",
+		"diff --git a/vendor/my lib/x.go b/vendor/my lib/x.go\n":   "vendor/my lib/x.go",
+		"diff --git a/old.go b/new.go\n":                           "new.go",
+		"diff --git a/old.go b/vendor/my lib/x.go\n":               "vendor/my lib/x.go",
+		"diff --git a/vendor/my lib/old.go b/vendor/my lib/x.go\n": "vendor/my lib/x.go",
+	} {
+		if got := rcDiffHeaderPath(header); got != want {
+			t.Errorf("rcDiffHeaderPath(%q) = %q, want %q", header, got, want)
+		}
+	}
+	for name, sec := range map[string][]string{
+		"rename": {"diff --git a/vendor/my lib/old.go b/vendor/my lib/x.go\n", "similarity index 90%\n", "rename from vendor/my lib/old.go\n", "rename to vendor/my lib/x.go\n"},
+		"+++":    {"diff --git a/a b/a b/a b/a\n", "--- a/a b/a\t\n", "+++ b/a b/a\t\n", "@@ -1 +1 @@\n"},
+		"delete": {"diff --git a/my lib/x.go b/my lib/x.go\n", "deleted file mode 100644\n", "--- a/my lib/x.go\t\n", "+++ /dev/null\n"},
+	} {
+		want := map[string]string{"rename": "vendor/my lib/x.go", "+++": "a b/a", "delete": "my lib/x.go"}[name]
+		if got := rcSectionPath(sec); got != want {
+			t.Errorf("%s: rcSectionPath = %q, want %q", name, got, want)
+		}
+	}
+	bump := "diff --git a/go.mod b/go.mod\n--- a/go.mod\n+++ b/go.mod\n@@ -1 +1 @@\n-require lib v1.0.0\n+require lib v1.1.0\n" +
+		"diff --git a/vendor/my lib/x.go b/vendor/my lib/x.go\n--- a/vendor/my lib/x.go\n+++ b/vendor/my lib/x.go\n@@ -1 +1 @@\n-return nil\n+return err\n"
+	if got := rcDropUnreviewable(bump); strings.Contains(got, "+return err") {
+		t.Errorf("a re-vendored file under a spaced path must be omitted:\n%s", got)
+	}
+}
+
+func TestDropUnreviewableVendorOnlyOnABump(t *testing.T) {
+	vendorEdit := "diff --git a/vendor/lib/x.go b/vendor/lib/x.go\n--- a/vendor/lib/x.go\n+++ b/vendor/lib/x.go\n@@ -1 +1 @@\n-return nil\n+return err\n"
+	if got := rcDropUnreviewable(vendorEdit); got != vendorEdit {
+		t.Errorf("a hand edit to vendored code must be reviewed in full:\n%s", got)
+	}
+	bump := "diff --git a/go.mod b/go.mod\n--- a/go.mod\n+++ b/go.mod\n@@ -1 +1 @@\n-require lib v1.0.0\n+require lib v1.1.0\n" + vendorEdit
+	got := rcDropUnreviewable(bump)
+	if strings.Contains(got, "+return err") || !strings.Contains(got, "+require lib v1.1.0") {
+		t.Errorf("a re-vendor must keep go.mod and drop vendor/:\n%s", got)
+	}
+}
+
+func TestDropUnreviewableLeavesCodeOnlyDiffUnchanged(t *testing.T) {
+	d := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-x\n+y\n"
+	if got := rcDropUnreviewable(d); got != d {
+		t.Errorf("code-only diff changed:\n%s", got)
+	}
+	if got := rcDropUnreviewable(""); got != "" {
+		t.Errorf("empty diff: got %q", got)
+	}
+}
+
+func TestFileKindOf(t *testing.T) {
+	for _, c := range []struct {
+		path string
+		bump bool
+		want rcFileKind
+	}{
+		{"package-lock.json", false, rcFileLockSummary},
+		{"web/yarn.lock", false, rcFileLockSummary},
+		{"go.sum", false, rcFileLockSummary},
+		{"Cargo.lock", false, rcFileLockSummary},
+		{"bun.lockb", false, rcFileOmit},
+		{"app/node_modules/a/index.js", false, rcFileOmit},
+		{"static/app.min.js", false, rcFileOmit},
+		{"api/v1/service.pb.go", false, rcFileOmit},
+		{"proto/svc_pb2_grpc.py", false, rcFileOmit},
+		{"assets/logo.png", false, rcFileOmit},
+		{"vendor/github.com/x/y.go", false, rcFileReview},
+		{"vendor/github.com/x/y.go", true, rcFileOmit},
+		{"src/__snapshots__/a.test.ts.snap", false, rcFileReview},
+		{"go.mod", false, rcFileReview},
+		{"package.json", false, rcFileReview},
+		{"Dockerfile", false, rcFileReview},
+		{"deploy/k8s/app.yaml", false, rcFileReview},
+		{"build/deploy.sh", false, rcFileReview},
+		{"src/vendors.ts", false, rcFileReview},
+		{"internal/lockfile.go", false, rcFileReview},
+	} {
+		if got := rcFileKindOf(c.path, c.bump); got != c.want {
+			t.Errorf("rcFileKindOf(%q, bump=%v) = %v, want %v", c.path, c.bump, got, c.want)
+		}
+	}
+}
+
+func TestReviewablePaths(t *testing.T) {
+	if rcReviewablePaths(nil, []string{"a.go"}) != nil {
+		t.Error("nil scope must stay nil")
+	}
+	changed := []string{"go.sum", "main.go", "vendor/a/b.go", "go.mod", "x.pb.go"}
+	got := rcReviewablePaths(changed, changed)
+	if want := []string{"main.go", "go.mod"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if got := rcReviewablePaths([]string{"vendor/a/b.go"}, []string{"vendor/a/b.go"}); len(got) != 1 {
+		t.Errorf("hand-edited vendor file must stay in scope, got %v", got)
+	}
+}
+
+func TestNewHostsSeeOmittedFiles(t *testing.T) {
+	out := "diff --git a/api/api.pb.go b/api/api.pb.go\n" +
+		"index 1..2 100644\n--- a/api/api.pb.go\n+++ b/api/api.pb.go\n" +
+		"@@ -1,1 +1,2 @@\n package api\n+const endpoint = \"https://pkgs.evil-cdn.io/v1\"\n"
+	diff, raw := rcSplitCommitDiff(out, 1<<20)
+	if strings.Contains(diff, "evil-cdn") {
+		t.Fatalf("generated file should be omitted from the reviewer's diff:\n%s", diff)
+	}
+	hosts := rcAddedURLHosts(raw)
+	if len(hosts) != 1 || hosts[0].Host != "pkgs.evil-cdn.io" || hosts[0].Path != "api/api.pb.go" {
+		t.Fatalf("raw diff hosts = %+v, want pkgs.evil-cdn.io in api/api.pb.go", hosts)
+	}
+	if _, raw := rcSplitCommitDiff(out, 10); raw != out {
+		t.Fatalf("raw diff must not be cut")
+	}
+}
