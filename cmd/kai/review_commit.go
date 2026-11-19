@@ -353,7 +353,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  merge commit: intent taken from %d commit(s) in %s..%s\n",
 			len(rangeSubjects), reviewCommitBase, rcShort(hash))
 	}
-	diff := rcCommitDiff(reviewCommitBase, ref, maxReviewCommitDiffBytes)
+	diff, rawDiff := rcCommitDiff(reviewCommitBase, ref, maxReviewCommitDiffBytes)
 	if strings.TrimSpace(diff) == "" {
 		return fmt.Errorf("commit %s has an empty diff (merge commit? try a child, or pass --base)", rcShort(hash))
 	}
@@ -503,7 +503,7 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 
 		fmt.Fprintf(os.Stderr, "  reviewing against the graph…\n\n")
 		phase = time.Now()
-		hosts := rcNewHostsBlock(rcNewHosts(hash, diff, rcPathsOf(files), rcFilesMentioningHost))
+		hosts := rcNewHostsBlock(rcNewHosts(hash, rawDiff, rcPathsOf(files), rcFilesMentioningHost))
 		// A re-review is sized to what changed since the previous review
 		// (review_commit_rescope.go); nil covers the whole change.
 		focus := rcReReviewFocus(rcPriorFromEnv(), rcPathsOf(files), rcChangedSince)
@@ -906,7 +906,7 @@ func rcRepoHeader(repo string) string {
 // (review_commit_rescope.go): the turn budget and the coverage gate are sized
 // to it rather than to every changed file.
 func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Provider, model, hash, sourceContext, intent, hosts, diff string, changed, focus []string, sweep <-chan rcSweepResult) (string, *rcIncomplete, error) {
-	scope := rcReviewScope(changed, focus)
+	scope := rcReviewablePaths(rcReviewScope(changed, focus), changed)
 	publicationCtx := ctx
 	primary := set.Primary()
 	gdb := asGraphDB(primary.DB)
@@ -2415,7 +2415,8 @@ func rcCommitMeta(ref string) (hash, subject, body string, err error) {
 	return hash, strings.TrimSpace(string(s)), strings.TrimSpace(string(b)), nil
 }
 
-func rcCommitDiff(base, ref string, maxBytes int) string {
+// raw is git's whole diff, so the new-host check still sees omitted and cut-off files.
+func rcCommitDiff(base, ref string, maxBytes int) (diff, raw string) {
 	var out []byte
 	var err error
 	if strings.TrimSpace(base) != "" {
@@ -2424,12 +2425,18 @@ func rcCommitDiff(base, ref string, maxBytes int) string {
 		out, err = exec.Command("git", "--no-pager", "show", "--no-color", "--format=", ref).Output()
 	}
 	if err != nil || len(out) == 0 {
-		return ""
+		return "", ""
 	}
-	if len(out) > maxBytes {
-		return string(out[:maxBytes]) + "\n... (diff truncated)\n"
+	return rcSplitCommitDiff(string(out), maxBytes)
+}
+
+func rcSplitCommitDiff(out string, maxBytes int) (diff, raw string) {
+	// Before the cut, so a lockfile cannot push code past maxBytes.
+	d := rcDropUnreviewable(out)
+	if len(d) > maxBytes {
+		return d[:maxBytes] + "\n... (diff truncated)\n", out
 	}
-	return string(out)
+	return d, out
 }
 
 func rcCommitDiffStat(base, ref string) (added, removed int, files []finding.DiffFile) {
