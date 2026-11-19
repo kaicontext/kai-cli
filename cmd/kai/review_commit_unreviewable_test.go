@@ -130,6 +130,36 @@ func TestLockSummaryShowsOtherEcosystemVersions(t *testing.T) {
 	}
 }
 
+func TestLockSummaryNamesComposerPackage(t *testing.T) {
+	d := "diff --git a/composer.lock b/composer.lock\n--- a/composer.lock\n+++ b/composer.lock\n@@ -10,4 +10,4 @@\n" +
+		"         {\n" +
+		"             \"name\": \"monolog/monolog\",\n" +
+		"-            \"version\": \"2.9.1\",\n+            \"version\": \"3.5.0\",\n"
+	got := rcDropUnreviewable(d)
+	if want := "             \"name\": \"monolog/monolog\",\n-            \"version\": \"2.9.1\",\n+            \"version\": \"3.5.0\",\n"; !strings.Contains(got, want) {
+		t.Errorf("missing %q in:\n%s", want, got)
+	}
+}
+
+func TestLockSummaryKeepsLineNumbers(t *testing.T) {
+	d := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-x\n+y\n" +
+		"diff --git a/package-lock.json b/package-lock.json\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -40,6 +40,6 @@\n" +
+		`     "node_modules/left-pad": {` + "\n" +
+		`       "license": "MIT",` + "\n" +
+		`-      "integrity": "sha512-old",` + "\n" +
+		`+      "integrity": "sha512-new",` + "\n" +
+		`-      "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",` + "\n" +
+		`+      "resolved": "https://pkgs.evil-cdn.io/left-pad-1.3.0.tgz",` + "\n"
+	got := rcDropUnreviewable(d)
+	if !strings.Contains(got, "--- a/package-lock.json\n+++ b/package-lock.json\n") {
+		t.Errorf("file lines dropped:\n%s", got)
+	}
+	hosts := rcAddedURLHosts(got)
+	if len(hosts) != 1 || hosts[0].Path != "package-lock.json" || hosts[0].Line != 43 {
+		t.Errorf("host = %+v, want package-lock.json:43 in:\n%s", hosts, got)
+	}
+}
+
 func TestOmitNoteForBinary(t *testing.T) {
 	d := "diff --git a/logo.png b/logo.png\nindex 1..2 100644\nBinary files a/logo.png and b/logo.png differ\n"
 	if got := rcDropUnreviewable(d); got != "diff --git a/logo.png b/logo.png\n(binary file, not shown)\n" {
@@ -139,12 +169,24 @@ func TestOmitNoteForBinary(t *testing.T) {
 
 func TestDiffHeaderPath(t *testing.T) {
 	for header, want := range map[string]string{
-		"diff --git a/x.go b/x.go\n":                             "x.go",
-		"diff --git a/vendor/my lib/x.go b/vendor/my lib/x.go\n": "vendor/my lib/x.go",
-		"diff --git a/old.go b/new.go\n":                         "new.go",
+		"diff --git a/x.go b/x.go\n":                               "x.go",
+		"diff --git a/vendor/my lib/x.go b/vendor/my lib/x.go\n":   "vendor/my lib/x.go",
+		"diff --git a/old.go b/new.go\n":                           "new.go",
+		"diff --git a/old.go b/vendor/my lib/x.go\n":               "vendor/my lib/x.go",
+		"diff --git a/vendor/my lib/old.go b/vendor/my lib/x.go\n": "vendor/my lib/x.go",
 	} {
 		if got := rcDiffHeaderPath(header); got != want {
 			t.Errorf("rcDiffHeaderPath(%q) = %q, want %q", header, got, want)
+		}
+	}
+	for name, sec := range map[string][]string{
+		"rename": {"diff --git a/vendor/my lib/old.go b/vendor/my lib/x.go\n", "similarity index 90%\n", "rename from vendor/my lib/old.go\n", "rename to vendor/my lib/x.go\n"},
+		"+++":    {"diff --git a/a b/a b/a b/a\n", "--- a/a b/a\t\n", "+++ b/a b/a\t\n", "@@ -1 +1 @@\n"},
+		"delete": {"diff --git a/my lib/x.go b/my lib/x.go\n", "deleted file mode 100644\n", "--- a/my lib/x.go\t\n", "+++ /dev/null\n"},
+	} {
+		want := map[string]string{"rename": "vendor/my lib/x.go", "+++": "a b/a", "delete": "my lib/x.go"}[name]
+		if got := rcSectionPath(sec); got != want {
+			t.Errorf("%s: rcSectionPath = %q, want %q", name, got, want)
 		}
 	}
 	bump := "diff --git a/go.mod b/go.mod\n--- a/go.mod\n+++ b/go.mod\n@@ -1 +1 @@\n-require lib v1.0.0\n+require lib v1.1.0\n" +
