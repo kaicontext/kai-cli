@@ -42,14 +42,16 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 	if prior == nil || len(changed) == 0 || rcReScopeOff() {
 		return nil
 	}
-	inPR := make(map[string]bool, len(changed))
-	for _, f := range changed {
+	// Paths are compared unquoted and returned as changed spells them.
+	spell := rcPRFiles(prior.Head, changed)
+	inPR := make(map[string]bool, len(spell))
+	for f := range spell {
 		inPR[f] = true
 	}
 	focus := map[string]bool{}
 	add := func(f string) {
-		if inPR[f] {
-			focus[f] = true
+		if s, ok := spell[rcGitUnquote(f)]; ok {
+			focus[s] = true
 		}
 	}
 
@@ -63,19 +65,29 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 			commits = append(commits, s)
 		}
 	}
-	for _, c := range commits {
+	unchanged := false
+	for i, c := range commits {
 		files, ok := since(c)
 		if !ok {
 			return nil // a commit this clone does not have: review it all
 		}
+		// Nothing the pull request changes differs from the previous review's
+		// commit: the code under review is the code already reviewed. The
+		// re-review re-checks the earlier points in their own files and
+		// nothing else (rcReReviewUnchanged); an older point's own commit
+		// adds nothing, since the previous review already read from there.
+		// A change taken back out of the pull request is a change, though,
+		// and what it leaves behind is reviewed whole.
+		if i == 0 && !rcAnyIn(files, inPR) {
+			if len(rcDroppedSinceFn(c, changed)) > 0 {
+				return nil
+			}
+			unchanged = true
+			break
+		}
 		for _, f := range files {
 			add(f)
 		}
-	}
-	// Nothing changed since: the review is a re-check of the same code. Leave
-	// it whole rather than size it to nothing.
-	if len(focus) == 0 {
-		return nil
 	}
 	// The files earlier points name, so a point is re-checked in its own file
 	// even when that file did not change.
@@ -84,15 +96,123 @@ func rcReReviewFocus(prior *rcPrior, changed []string, since func(string) ([]str
 			add(loc.path)
 		}
 	}
-	if len(focus) >= len(changed) {
+	// A re-check stays a re-check even when the earlier points name every
+	// file; otherwise a focus that is the whole change is the whole change.
+	// Counted like the focus, through spell: a rename is both its paths in
+	// each, where changed (from --numstat) lists it once.
+	if !unchanged && len(focus) >= len(spell) {
 		return nil
 	}
-	out := make([]string, 0, len(focus))
+	out := make([]string, 0, len(focus)) // empty, not nil, when only re-checking
 	for f := range focus {
 		out = append(out, f)
 	}
 	sort.Strings(out)
 	return out
+}
+
+func rcAnyIn(files []string, set map[string]bool) bool {
+	for _, f := range files {
+		if set[rcGitUnquote(f)] {
+			return true
+		}
+	}
+	return false
+}
+
+// rcReReviewUnchanged reports whether a re-review's code is the code the
+// previous review read: nothing the pull request changes differs since its
+// commit. Such a review only re-checks the earlier points, on a small budget.
+func rcReReviewUnchanged(prior *rcPrior, changed []string, since func(string) ([]string, bool)) bool {
+	if prior == nil || len(changed) == 0 || rcReScopeOff() {
+		return false
+	}
+	files, ok := since(prior.Head)
+	if !ok {
+		return false
+	}
+	inPR := map[string]bool{}
+	for f := range rcPRFiles(prior.Head, changed) {
+		inPR[f] = true
+	}
+	return !rcAnyIn(files, inPR) && len(rcDroppedSinceFn(prior.Head, changed)) == 0
+}
+
+// rcReCheckTurns is the budget of a re-review whose code has not changed: a
+// few turns, and three per file an earlier point names, never more than a
+// full review's base.
+const rcReCheckBaseTurns = 8
+
+func rcReCheckTurns(pointFiles int) int {
+	n := rcReCheckBaseTurns + rcReviewTurnsPerFile*pointFiles
+	if n > rcReviewBaseTurns {
+		return rcReviewBaseTurns
+	}
+	return n
+}
+
+// rcReCheckBlock replaces the RE-REVIEW FOCUS block when the code has not
+// changed since the previous review.
+func rcReCheckBlock(prior *rcPrior, pointFiles []string, turns int) string {
+	where := "Open the files the earlier points name"
+	if len(pointFiles) > 0 {
+		where = "Open the files the earlier points name (" + strings.Join(pointFiles, ", ") + ")"
+	}
+	// Only point at base changes when BASE MOVED names some (rcBaseMovedBlock).
+	base := "Report no new issue: there is no new code to find one in."
+	if len(rcBaseOnlyOutsideFocus(prior, pointFiles)) > 0 {
+		base = "The base under the pull request moved (BASE MOVED, below): report a new issue only where one of those base changes now meets the pull request's code."
+	}
+	return fmt.Sprintf("RE-REVIEW, NOTHING CHANGED: the pull request's own changes are identical to the commit you reviewed last time (%s). "+
+		"You have %d turns. Do not review the change again: it was reviewed at that commit. "+
+		"%s and re-check each earlier point against the code as it is now, stating whether it still holds. %s\n\n",
+		rcShort(prior.Head), turns, where, base)
+}
+
+// rcBaseOnlyOutsideFocus is the base-moved files that are not in the focus. An
+// earlier point's file is added to the focus by rcReReviewFocus, so a base-only
+// file can be in it; such a file is reviewed, not outside the focus.
+func rcBaseOnlyOutsideFocus(prior *rcPrior, focus []string) []string {
+	if prior == nil {
+		return nil
+	}
+	inFocus := map[string]bool{}
+	for _, f := range focus {
+		inFocus[rcGitUnquote(f)] = true
+	}
+	var out []string
+	for _, f := range rcBaseOnlySince(prior.Head) {
+		if !inFocus[f] {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// rcBaseMovedBlock names the files of the pull request that changed only
+// because the base moved under them since the previous review. "" when none.
+// The "not in the focus" sentence is omitted on a whole-change review (focus
+// nil), where there is no focus.
+func rcBaseMovedBlock(prior *rcPrior, focus []string) string {
+	if prior == nil {
+		return ""
+	}
+	files := rcBaseOnlyOutsideFocus(prior, focus)
+	if len(files) == 0 {
+		return ""
+	}
+	more := ""
+	if len(files) > 20 {
+		files, more = files[:20], fmt.Sprintf(" … and %d more", len(files)-20)
+	}
+	note := ""
+	if focus != nil {
+		note = "They are not in the focus. "
+	}
+	return fmt.Sprintf("BASE MOVED: since %s these files of the pull request changed only because the base branch changed them; "+
+		"the pull request's own changes to them are the same as before: %s%s. %s"+
+		"Open one only where a base change touches code the pull request's change relies on.\n\n",
+		rcShort(prior.Head), strings.Join(files, ", "), more, note)
 }
 
 // rcReReviewFocusBlock tells a scoped re-review what it is sized to, so the

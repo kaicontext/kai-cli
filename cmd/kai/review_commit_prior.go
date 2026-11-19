@@ -90,24 +90,18 @@ func rcChangedSince(head string) ([]string, bool) {
 	return rcChangedSinceFn(head)
 }
 
-// rcChangedSinceFn is rcChangedSince's implementation; tests replace it.
-var rcChangedSinceFn = rcGitChangedSince
+// rcChangedSinceFn is rcChangedSince's implementation; tests replace it. It
+// counts the pull request's own changes when the base moved in between
+// (review_commit_rescope_base.go).
+var rcChangedSinceFn = rcGitPRChangedSince
 
 func rcGitChangedSince(head string) ([]string, bool) {
 	if !rcHasCommit(head) && !(rcFetchCommit(head) && rcHasCommit(head)) {
 		return nil, false
 	}
-	out, err := exec.Command("git", "--no-pager", "diff", "--name-only", head, "HEAD").Output()
-	if err != nil {
-		return nil, false
-	}
-	var files []string
-	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			files = append(files, l)
-		}
-	}
-	return files, true
+	// Unquoted, and a rename as both its paths: the same spelling and listing
+	// as the pull request's own file lists (review_commit_rescope_base.go).
+	return rcGitNames(head, "HEAD")
 }
 
 // rcHasCommit reports whether the clone has commit c.
