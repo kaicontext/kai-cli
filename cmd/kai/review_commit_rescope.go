@@ -152,16 +152,25 @@ func rcReCheckTurns(pointFiles int) int {
 }
 
 // rcReCheckBlock replaces the RE-REVIEW FOCUS block when the code has not
-// changed since the previous review.
-func rcReCheckBlock(prior *rcPrior, pointFiles []string, turns int) string {
+// changed since the previous review. baseChained: RE-REVIEW RELATED FILES
+// names base changes the pull request calls (rcReCheckBaseChain).
+func rcReCheckBlock(prior *rcPrior, pointFiles []string, turns int, baseChained bool) string {
 	where := "Open the files the earlier points name"
 	if len(pointFiles) > 0 {
 		where = "Open the files the earlier points name (" + strings.Join(pointFiles, ", ") + ")"
 	}
-	// Only point at base changes when BASE MOVED names some (rcBaseMovedBlock).
-	base := "Report no new issue: there is no new code to find one in."
+	// Only point at base changes when a block below names some
+	// (rcBaseMovedBlock, rcReReviewChainBlock).
+	var blocks []string
+	if baseChained {
+		blocks = append(blocks, "RE-REVIEW RELATED FILES")
+	}
 	if len(rcBaseOnlyOutsideFocus(prior, pointFiles)) > 0 {
-		base = "The base under the pull request moved (BASE MOVED, below): report a new issue only where one of those base changes now meets the pull request's code."
+		blocks = append(blocks, "BASE MOVED")
+	}
+	base := "Report no new issue: there is no new code to find one in."
+	if len(blocks) > 0 {
+		base = "The base under the pull request moved (" + strings.Join(blocks, " and ") + ", below): report a new issue only where one of those base changes now meets the pull request's code."
 	}
 	return fmt.Sprintf("RE-REVIEW, NOTHING CHANGED: the pull request's own changes are identical to the commit you reviewed last time (%s). "+
 		"You have %d turns. Do not review the change again: it was reviewed at that commit. "+

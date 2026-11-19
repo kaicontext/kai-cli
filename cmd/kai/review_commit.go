@@ -501,9 +501,12 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "  re-review: %d of %d changed file(s) to read again; budgets sized to those\n", len(focus), len(files))
 			// And the files the change since then can break
 			// (review_commit_rescope_chain.go).
-			// Not when the code has not changed: there is nothing to follow.
+			// When the code has not changed, only what the base changed
+			// under it that it calls.
 			if !rcReReviewUnchanged(rcPriorFromEnv(), rcPathsOf(files), rcChangedSince) {
 				chain = rcReReviewRelated(rcPriorFromEnv(), focus, asGraphDB(set.Primary().DB), set.Primary().Path)
+			} else {
+				chain = rcReCheckBaseChain(rcPriorFromEnv(), rcPathsOf(files), asGraphDB(set.Primary().DB), set.Primary().Path)
 			}
 		}
 		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref, rcSweepFocus(focus, chain))
@@ -968,7 +971,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 	maxTurns := rcReviewMaxTurns(len(scope))
 	recheck := focus != nil && rcReReviewUnchanged(prior, changed, rcChangedSince)
 	if recheck {
-		maxTurns = rcReCheckTurns(len(focus))
+		maxTurns = rcReCheckChainTurns(len(focus), len(chain))
 	} else if focus != nil {
 		maxTurns = rcReReviewTurns(len(scope), len(chain), rcPRFileCount(prior, changed))
 	}
@@ -976,7 +979,8 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		priorChanged, priorKnown = rcChangedSince(prior.Head)
 		user.WriteString(rcPriorBlock(prior, priorChanged, priorKnown))
 		if recheck {
-			user.WriteString(rcReCheckBlock(prior, focus, maxTurns))
+			user.WriteString(rcReCheckBlock(prior, focus, maxTurns, len(chain) > 0))
+			user.WriteString(rcReReviewChainBlock(chain))
 			fmt.Fprintf(os.Stderr, "  re-review: nothing the pull request changes differs since %s; re-checking earlier points only (%d turns)\n", rcShort(prior.Head), maxTurns)
 		} else {
 			user.WriteString(rcReReviewFocusBlock(prior, focus, rcPRFileCount(prior, changed), maxTurns))

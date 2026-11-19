@@ -53,11 +53,15 @@ func TestReCheckTurnsAndBlock(t *testing.T) {
 	if got := rcReCheckTurns(50); got != rcReviewBaseTurns {
 		t.Errorf("never above a full review's base: %d", got)
 	}
-	b := rcReCheckBlock(&rcPrior{Head: "0123456789abcdef"}, []string{"d.go"}, 11)
-	for _, want := range []string{"NOTHING CHANGED", rcShort("0123456789abcdef"), "11 turns", "(d.go)", "Do not review the change again"} {
+	b := rcReCheckBlock(&rcPrior{Head: "0123456789abcdef"}, []string{"d.go"}, 11, false)
+	for _, want := range []string{"NOTHING CHANGED", rcShort("0123456789abcdef"), "11 turns", "(d.go)", "Do not review the change again", "Report no new issue"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("block missing %q:\n%s", want, b)
 		}
+	}
+	b = rcReCheckBlock(&rcPrior{Head: "0123456789abcdef"}, []string{"d.go"}, 11, true)
+	if strings.Contains(b, "Report no new issue") || !strings.Contains(b, "(RE-REVIEW RELATED FILES, below)") {
+		t.Errorf("base-chained block:\n%s", b)
 	}
 }
 

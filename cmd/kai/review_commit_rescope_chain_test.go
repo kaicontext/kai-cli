@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -346,6 +348,185 @@ func TestBaseChain_SurfacesWhenFocusUsesIt(t *testing.T) {
 	}
 	if c := rcBaseChain([]string{"pr.go"}, base, nil); c != nil {
 		t.Errorf("no graph: %+v", c)
+	}
+}
+
+// A re-check after a rebase: nothing the pull request changes differs, but
+// the base changed a function outside it that pr.go calls. That file is
+// chained; the pull request's own files, vendored files and base changes
+// nothing in the pull request calls are not.
+func TestReCheckBaseChain(t *testing.T) {
+	oldRaw, oldDiff, oldNow := rcRawChangedSince, rcBaseDiff, rcPRNowFn
+	defer func() { rcRawChangedSince, rcBaseDiff, rcPRNowFn = oldRaw, oldDiff, oldNow }()
+	rcPRNowFn = func(string) []string { return nil }
+	raw := []string{"other.go", "pr.go", "util.go", "vendor/v.go"}
+	rcRawChangedSince = func(string) ([]string, bool) { return raw, true }
+	var diffed []string
+	rcBaseDiff = func(head, root string, files []string) string {
+		diffed = files
+		return strings.Join([]string{
+			"diff --git a/other.go b/other.go",
+			"--- a/other.go",
+			"+++ b/other.go",
+			"@@ -3 +3 @@ func Unused() int {",
+			"-	return 1",
+			"+	return 2",
+			"diff --git a/util.go b/util.go",
+			"--- a/util.go",
+			"+++ b/util.go",
+			"@@ -10 +10 @@ func Charge(amt int) error {",
+			"-	if amt < 0 {",
+			"+	if amt <= 0 {",
+		}, "\n") + "\n"
+	}
+	g := &fakeChainGraph{sym: map[string][]rcSite{
+		"util.go|Charge":  {{"pr.go", 7}},
+		"other.go|Unused": {{"elsewhere.go", 2}},
+	}}
+	prior := &rcPrior{Head: "h1"}
+	got := rcReCheckBaseChainIn(prior, []string{"pr.go"}, g, "", 12)
+	want := []rcChained{{Path: "util.go", Kind: rcChainBase, Of: "pr.go", What: "Charge"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("chain = %+v, want %+v", got, want)
+	}
+	if !reflect.DeepEqual(diffed, []string{"other.go", "util.go"}) {
+		t.Errorf("diffed %v, want the base's files outside the pull request", diffed)
+	}
+
+	// The base did not move: nothing outside the pull request differs.
+	raw = nil
+	if c := rcReCheckBaseChainIn(prior, []string{"pr.go"}, g, "", 12); c != nil {
+		t.Errorf("unmoved base: %+v", c)
+	}
+	// A commit the clone does not have.
+	rcRawChangedSince = func(string) ([]string, bool) { return nil, false }
+	if c := rcReCheckBaseChainIn(prior, []string{"pr.go"}, g, "", 12); c != nil {
+		t.Errorf("missing commit: %+v", c)
+	}
+	// Chaining off.
+	t.Setenv("KAI_REVIEW_RESCOPE_CHAIN", "off")
+	if c := rcReCheckBaseChain(prior, []string{"pr.go"}, nil, ""); c != nil {
+		t.Errorf("chaining off: %+v", c)
+	}
+}
+
+// End to end on a real repository, with no graph (the word-search fallback):
+// main moves under a pull request that calls Charge, and the author rebases
+// or merges main in with no edit of their own. The re-review is a re-check
+// that reads util.go only when main changed or removed what the pull request
+// calls.
+func TestReCheckBaseChain_RealRepo(t *testing.T) {
+	charge := func(cond string) string {
+		return "package p\n\nfunc Charge(amt int) error {\n\tif " + cond + " {\n\t\treturn nil\n\t}\n\treturn nil\n}\n"
+	}
+	called := []rcChained{{Path: "util.go", Kind: rcChainBase, Of: "pr.go", What: "Charge"}}
+	removed := []rcChained{{Path: "util.go", Kind: rcChainBase, Of: "pr.go", What: "Charge", Removed: true}}
+	for _, tc := range []struct {
+		name  string
+		main  map[string]string // what main changes after the review
+		merge bool              // merge main in rather than rebase
+		want  []rcChained
+	}{
+		{"rebase, called function changed", map[string]string{"util.go": charge("amt <= 0")}, false, called},
+		{"merge, called function changed", map[string]string{"util.go": charge("amt <= 0")}, true, called},
+		{"rebase, called function removed", map[string]string{"util.go": "package p\n"}, false, removed},
+		{"rebase, unrelated change", map[string]string{"other.go": "package p\n\nfunc Other() int {\n\treturn 2\n}\n"}, false, nil},
+		{"rebase, vendored change", map[string]string{"vendor/v/v.go": "package v\n\nfunc Charge() {}\n"}, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run, write := gitRepo(t)
+			write("util.go", charge("amt < 0"))
+			write("other.go", "package p\n\nfunc Other() int {\n\treturn 1\n}\n")
+			write("pr.go", "package p\n\nfunc Pay() {\n}\n")
+			run("add", "-A")
+			run("commit", "-qm", "base")
+			run("checkout", "-q", "-b", "pr")
+			write("pr.go", "package p\n\nfunc Pay() {\n\t_ = Charge(1)\n}\n")
+			run("commit", "-qam", "pr")
+			reviewed := run("rev-parse", "HEAD")
+			run("checkout", "-q", "main")
+			for f, body := range tc.main {
+				if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				write(f, body)
+			}
+			run("add", "-A")
+			run("commit", "-qm", "main moves")
+			run("checkout", "-q", "pr")
+			if tc.merge {
+				run("merge", "-q", "--no-edit", "main")
+			} else {
+				run("rebase", "-q", "main")
+			}
+
+			old := reviewCommitBase
+			defer func() { reviewCommitBase = old }()
+			reviewCommitBase = "main"
+			t.Setenv("KAI_REVIEW_RESCOPE", "")
+			t.Setenv("KAI_REVIEW_RESCOPE_CHAIN", "")
+			prior := &rcPrior{Head: reviewed}
+			pr := []string{"pr.go"}
+			if !rcReReviewUnchanged(prior, pr, rcGitPRChangedSince) {
+				t.Fatal("no edits of the pull request's own, not read as a re-check")
+			}
+			if got := rcReCheckBaseChain(prior, pr, nil, ""); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("chain = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Past rcReCheckBaseMaxFiles base-changed files, the files the pull request
+// uses are diffed first; the chain is cut at the cap it is given.
+func TestReCheckBaseChain_Caps(t *testing.T) {
+	oldRaw, oldDiff, oldNow := rcRawChangedSince, rcBaseDiff, rcPRNowFn
+	defer func() { rcRawChangedSince, rcBaseDiff, rcPRNowFn = oldRaw, oldDiff, oldNow }()
+	rcPRNowFn = func(string) []string { return nil }
+	var raw []string
+	for i := 0; i <= rcReCheckBaseMaxFiles; i++ {
+		raw = append(raw, fmt.Sprintf("f%04d.go", i))
+	}
+	last := raw[len(raw)-1]
+	rcRawChangedSince = func(string) ([]string, bool) { return raw, true }
+	var diffed []string
+	rcBaseDiff = func(head, root string, files []string) string {
+		diffed = files
+		var b strings.Builder
+		for _, f := range []string{"f0000.go", "f0001.go"} {
+			fmt.Fprintf(&b, "diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -3 +3 @@ func F%s() int {\n-\treturn 1\n+\treturn 2\n", f, f, f, f, f[1:5])
+		}
+		return b.String()
+	}
+	g := &fakeChainGraph{
+		uses: map[string][]string{"pr.go": {last}},
+		sym: map[string][]rcSite{
+			"f0000.go|F0000": {{"pr.go", 1}},
+			"f0001.go|F0001": {{"pr.go", 2}},
+		},
+	}
+	got := rcReCheckBaseChainIn(&rcPrior{Head: "h1"}, []string{"pr.go"}, g, "", 1)
+	if len(diffed) != rcReCheckBaseMaxFiles || diffed[0] != last {
+		t.Fatalf("diffed %d file(s), first %q; want %d, %q first", len(diffed), diffed[0], rcReCheckBaseMaxFiles, last)
+	}
+	if !reflect.DeepEqual(chainPaths(got), []string{"f0000.go"}) {
+		t.Fatalf("chain = %v, want one entry", chainPaths(got))
+	}
+}
+
+func TestUsedFirstAndReCheckChainTurns(t *testing.T) {
+	g := &fakeChainGraph{uses: map[string][]string{"pr.go": {"c.go"}}}
+	if got, want := rcUsedFirst([]string{"a.go", "b.go", "c.go"}, []string{"pr.go"}, g), []string{"c.go", "a.go", "b.go"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("used first = %v, want %v", got, want)
+	}
+	if got := rcReCheckChainTurns(1, 0); got != rcReCheckTurns(1) {
+		t.Errorf("no chain: %d", got)
+	}
+	if got := rcReCheckChainTurns(1, 3); got != rcReCheckTurns(1)+2 {
+		t.Errorf("three chained: %d", got)
+	}
+	if got := rcReCheckChainTurns(50, 12); got != rcReviewBaseTurns {
+		t.Errorf("never above a full review's base: %d", got)
 	}
 }
 

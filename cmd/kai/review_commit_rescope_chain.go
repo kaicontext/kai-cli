@@ -913,10 +913,7 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 	diff := rcSinceDiff(prior.Head, root, focus)
 	in := rcChainInputs{Symbols: rcSinceSymbols(diff), Keys: rcResolveKeys(rcSinceKeys(diff), root), Code: rcSinceCode(diff)}
 	deadline := time.Now().Add(rcChainBudget)
-	var g rcChainGraph = rcGrepFallback{root: root, deadline: deadline}
-	if gdb != nil {
-		g = rcGrepFallback{rcChainGraph: newRCGraphChain(gdb, root), root: root, deadline: deadline}
-	}
+	g := rcChainGraphFor(gdb, root, deadline)
 	started := time.Now()
 	// Base changes to pull-request files the focus uses rank ahead of the rest:
 	// a base merge breaking the pull request's unchanged code is the defect the
@@ -929,6 +926,107 @@ func rcReReviewRelated(prior *rcPrior, focus []string, gdb *graph.DB, root strin
 		fmt.Fprintf(os.Stderr, "  re-review: related files worked out in %s (%d from base changes)\n", time.Since(started).Round(time.Millisecond), len(base))
 	}
 	return chain
+}
+
+func rcChainGraphFor(gdb *graph.DB, root string, deadline time.Time) rcChainGraph {
+	if gdb != nil {
+		return rcGrepFallback{rcChainGraph: newRCGraphChain(gdb, root), root: root, deadline: deadline}
+	}
+	return rcGrepFallback{root: root, deadline: deadline}
+}
+
+// rcReCheckBaseMaxFiles bounds the base-changed files diffed for a re-check;
+// past it, the files the pull request's files use come first.
+const rcReCheckBaseMaxFiles = 400
+
+// rcRawChangedSince is every file that differs between a commit and HEAD,
+// base changes included; tests replace it.
+var rcRawChangedSince = rcGitChangedSince
+
+// rcReCheckBaseChain is a re-check's related files. Nothing the pull request
+// changes differs since the previous review, but after a rebase or a merge of
+// main the base may have changed functions outside the pull request that its
+// files call: there its unchanged code can break. nil when nothing the base
+// changed is called from the pull request, or chaining is off.
+func rcReCheckBaseChain(prior *rcPrior, changed []string, gdb *graph.DB, root string) []rcChained {
+	max := rcChainMax()
+	if prior == nil || max <= 0 {
+		return nil
+	}
+	started := time.Now()
+	deadline := started.Add(rcChainBudget)
+	chain := rcReCheckBaseChainIn(prior, changed, rcChainGraphFor(gdb, root, deadline), root, max)
+	if time.Now().After(deadline) {
+		fmt.Fprintf(os.Stderr, "  re-check: base-change lookups stopped at their %s budget; %d found\n", rcChainBudget, len(chain))
+	} else if len(chain) > 0 {
+		fmt.Fprintf(os.Stderr, "  re-check: %d base-changed file(s) the pull request calls into, worked out in %s\n", len(chain), time.Since(started).Round(time.Millisecond))
+	}
+	return chain
+}
+
+func rcReCheckBaseChainIn(prior *rcPrior, changed []string, g rcChainGraph, root string, max int) []rcChained {
+	all, ok := rcRawChangedSince(prior.Head)
+	if !ok {
+		return nil
+	}
+	pr := rcPRFiles(prior.Head, changed)
+	prFiles := make([]string, 0, len(pr))
+	for f := range pr {
+		prFiles = append(prFiles, f)
+	}
+	sort.Strings(prFiles)
+	// The pull request's own files the base changed are named by BASE MOVED
+	// (rcBaseMovedBlock); rcBaseChain skips them too.
+	var outside []string
+	for _, f := range all {
+		if _, in := pr[f]; !in && !rcChainSkip(f) {
+			outside = append(outside, f)
+		}
+	}
+	if len(outside) == 0 {
+		return nil
+	}
+	if len(outside) > rcReCheckBaseMaxFiles {
+		outside = rcUsedFirst(outside, prFiles, g)[:rcReCheckBaseMaxFiles]
+	}
+	// The base's change to files the pull request does not touch: the same
+	// from the previous review's commit to HEAD as from merge base to merge base.
+	chain := rcBaseChain(prFiles, rcSinceSymbols(rcBaseDiff(prior.Head, root, outside)), g)
+	if len(chain) > max {
+		chain = chain[:max]
+	}
+	return chain
+}
+
+// rcUsedFirst orders files so those any of from calls into or imports come
+// first, each group keeping its order.
+func rcUsedFirst(files, from []string, g rcChainGraph) []string {
+	used := map[string]bool{}
+	for _, f := range from {
+		for _, u := range g.Uses(f) {
+			used[u] = true
+		}
+	}
+	out := make([]string, 0, len(files))
+	var rest []string
+	for _, f := range files {
+		if used[f] {
+			out = append(out, f)
+		} else {
+			rest = append(rest, f)
+		}
+	}
+	return append(out, rest...)
+}
+
+// rcReCheckChainTurns is a re-check's budget with base-changed files to read:
+// one more turn per two, never above a full review's base.
+func rcReCheckChainTurns(pointFiles, chained int) int {
+	n := rcReCheckTurns(pointFiles) + (chained+rcChainFilesPerTurn-1)/rcChainFilesPerTurn
+	if n > rcReviewBaseTurns {
+		return rcReviewBaseTurns
+	}
+	return n
 }
 
 // rcBaseChain surfaces pull-request files the base changed under unchanged
