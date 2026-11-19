@@ -175,8 +175,8 @@ func TestDiffHeaderPath(t *testing.T) {
 		"diff --git a/old.go b/vendor/my lib/x.go\n":               "vendor/my lib/x.go",
 		"diff --git a/vendor/my lib/old.go b/vendor/my lib/x.go\n": "vendor/my lib/x.go",
 	} {
-		if got := rcDiffHeaderPath(header); got != want {
-			t.Errorf("rcDiffHeaderPath(%q) = %q, want %q", header, got, want)
+		if got := rcDiffGitBPath(header); got != want {
+			t.Errorf("rcDiffGitBPath(%q) = %q, want %q", header, got, want)
 		}
 	}
 	for name, sec := range map[string][]string{
