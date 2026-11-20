@@ -14,16 +14,29 @@ import (
 	"kai/internal/config"
 	"kai/internal/freeplan"
 
+	"github.com/kaicontext/kai-engine/modelplan"
 	"github.com/kaicontext/kai-engine/provider"
 )
 
-// cliFreePlan is the caller's plan, asked of the server once per process,
-// for Kai's own provider only: a provider the person brought isn't on a
-// Kai plan. A variable so tests can answer for the server.
+// cliFreePlan is the caller's plan for a run on provider kind, for Kai's
+// own provider only: a provider the person brought isn't on a Kai plan.
+// It also hands that plan to the engine (modelplan.Set), so the models the
+// engine picks on its own during the run follow it too; with the person's
+// own provider the engine gets the zero plan and keeps its own models. A
+// variable so tests can answer for the server.
 var cliFreePlan = func(kind provider.Kind) freeplan.Plan {
 	if kind != provider.KindKailab {
+		modelplan.Set(modelplan.Plan{})
 		return freeplan.Plan{}
 	}
+	p := cliHostedPlan()
+	modelplan.Set(p.Engine())
+	return p
+}
+
+// cliHostedPlan is the caller's plan on Kai's own provider, asked of the
+// server once per process. A variable so tests can answer for the server.
+var cliHostedPlan = func() freeplan.Plan {
 	base, token := kailabCreds()
 	return freeplan.Current(base, token)
 }

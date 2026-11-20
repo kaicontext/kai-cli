@@ -14,6 +14,7 @@ import (
 	"kai/internal/config"
 	"kai/internal/freeplan"
 
+	"github.com/kaicontext/kai-engine/modelplan"
 	"github.com/kaicontext/kai-engine/provider"
 	"github.com/kaicontext/kai-engine/remote"
 )
@@ -65,15 +66,13 @@ func signInTo(t *testing.T, srv *httptest.Server) {
 		ExpiresAt: time.Now().Add(time.Hour).Unix()}); err != nil {
 		t.Fatal(err)
 	}
-	prev := cliFreePlan
-	cliFreePlan = func(kind provider.Kind) freeplan.Plan {
-		if kind != provider.KindKailab {
-			return freeplan.Plan{}
-		}
+	prev := cliHostedPlan
+	cliHostedPlan = func() freeplan.Plan {
 		return freeplan.Fetch(context.Background(), srv.URL, "tok")
 	}
 	t.Cleanup(func() {
-		cliFreePlan = prev
+		cliHostedPlan = prev
+		modelplan.Set(modelplan.Plan{})
 		activeFreePlan = freeplan.Plan{}
 		PlannerModelFlag, AgentModelFlag = prevPlanner, prevAgent
 	})
@@ -293,5 +292,49 @@ func TestFreePlan_FlagNotAppliedDoesntCount(t *testing.T) {
 	}
 	if cfg.Planner.Model != fakeFreeDefaults["planner"] {
 		t.Errorf("planner runs %s", cfg.Planner.Model)
+	}
+}
+
+// The plan read from the server reaches the engine when a run on Kai's
+// own provider reads it (cliFreePlan): on Free the plan, so a model the
+// engine picks on its own is the plan's; off Free the zero plan, so the
+// engine keeps its own models. A run on the person's own provider leaves
+// the engine on the zero plan.
+func TestCliFreePlanHandsThePlanToTheEngine(t *testing.T) {
+	srv := newFakeKaiServer(t, true)
+	signInTo(t, srv)
+
+	if p := cliFreePlan(provider.KindKailab); !p.Free {
+		t.Fatalf("Free list: %+v", p)
+	}
+	got := modelplan.Current()
+	want := modelplan.Plan{Free: true, Defaults: fakeFreeDefaults,
+		Allowed: []string{"free/model-fast", "free/model-small", "free/model-strong"}, BillingURL: srv.URL + "/billing"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("engine plan on Free:\n got  %+v\n want %+v", got, want)
+	}
+	if m, err := got.Resolve("the run", modelplan.RoleAgent, "anthropic/claude-sonnet-5", nil); err != nil || m != "free/model-strong" {
+		t.Fatalf("engine default on Free: %q, %v", m, err)
+	}
+
+	// The person's own provider: the zero plan, over the Free one.
+	if p := cliFreePlan(provider.KindOpenAI); p.Free {
+		t.Fatalf("own provider read as Free: %+v", p)
+	}
+	if got := modelplan.Current(); !reflect.DeepEqual(got, modelplan.Plan{}) {
+		t.Fatalf("engine plan with the person's own provider: %+v", got)
+	}
+
+	// Not Free: the zero plan, over an earlier Free one.
+	cliFreePlan(provider.KindKailab)
+	signInTo(t, newFakeKaiServer(t, false))
+	if p := cliFreePlan(provider.KindKailab); p.Free {
+		t.Fatalf("no free key read as Free: %+v", p)
+	}
+	if got := modelplan.Current(); !reflect.DeepEqual(got, modelplan.Plan{}) {
+		t.Fatalf("engine plan off Free: %+v", got)
+	}
+	if m, err := modelplan.Current().Resolve("the run", modelplan.RoleAgent, "anthropic/claude-sonnet-5", nil); err != nil || m != "anthropic/claude-sonnet-5" {
+		t.Fatalf("engine default off Free: %q, %v", m, err)
 	}
 }
