@@ -20708,6 +20708,10 @@ func runReviewSummary(cmd *cobra.Command, args []string) error {
 			fmt.Println("⚠ AI review requires a kailab login — run `kai login`")
 		} else {
 			fmt.Println("Running AI review...")
+			// The engine picks this review's model. Reading the plan
+			// first hands it to the engine (cliFreePlan), so on the Free
+			// plan that pick is the plan's, not one it refuses.
+			cliFreePlan(provider.KindKailab)
 			reviewer, err := ai.NewReviewer(aiBase, aiToken, "")
 			if err != nil {
 				fmt.Printf("⚠ AI review setup failed: %v\n", err)
