@@ -520,11 +520,30 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 				chain = rcReCheckBaseChain(rcPriorFromEnv(), rcPathsOf(files), asGraphDB(set.Primary().DB), set.Primary().Path)
 			}
 		}
-		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref, rcSweepFocus(focus, chain))
+		// A large change, when the job sets a file limit, is reviewed on its
+		// riskiest files (review_commit_bigpr.go): the budgets, the sweeps
+		// and the diff in the prompt are sized to those.
+		reviewed, sweepFocus, reviewDiff := rcPathsOf(files), rcSweepFocus(focus, chain), diff
+		keep, over := rcRiskiestLimits()
+		if cut := rcRiskiestCut(files, rcReviewScope(reviewed, focus), keep, over); cut != nil {
+			fmt.Fprintf(os.Stderr, "  large change: reviewing the %d riskiest of %d reviewable file(s): %s\n", len(cut.Kept), cut.Of, strings.Join(cut.Kept, ", "))
+			if focus != nil {
+				// A re-review's focus is cut to its riskiest files, and
+				// the files chained from it are not read.
+				focus, chain = cut.Kept, nil
+			} else {
+				reviewed = cut.Kept
+			}
+			sweepFocus = cut.Kept
+			reviewDiff = rcCutDiff(rawDiff, cut.Kept, maxReviewCommitDiffBytes)
+			hosts = rcFileCutBlock(cut) + hosts
+			rcRunNoteFileCut(cut)
+		}
+		sweep := rcStartSweep(ctx, prov, model, intent, reviewCommitBase, ref, sweepFocus)
 		// The publication gate reads the reviewed commit to settle what the
 		// reviewer's own tool results do not show (review_commit_repo.go).
 		gateCtx := rcWithRepo(ctx, rcNewRepo(reviewCommitBase, ref, hash))
-		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, hash, authorContext, intent, hosts, diff, rcPathsOf(files), focus, chain, sweep)
+		raw, inc, err = rcRunReviewAgent(gateCtx, set, prov, model, hash, authorContext, intent, hosts, reviewDiff, reviewed, focus, chain, sweep)
 		if err != nil {
 			return err
 		}
