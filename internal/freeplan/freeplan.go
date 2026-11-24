@@ -16,11 +16,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kaicontext/kai-engine/clientid"
+	"github.com/kaicontext/kai-engine/modelplan"
 )
 
 // CatchAll is the server role a model is resolved for when the command's
@@ -95,6 +97,34 @@ var (
 func Current(server, token string) Plan {
 	currentOnce.Do(func() { current = Fetch(context.Background(), server, token) })
 	return current
+}
+
+// Engine is p as the engine takes it (modelplan.Plan), for the app to hand
+// over with modelplan.Set so the models the engine picks on its own follow
+// the plan too: its client default, a run's rescue model, the
+// stronger-model retry and the screenshot check's strong lane. The zero
+// plan off Free (the engine keeps its own models), else Free with the role
+// defaults, every model the list allows and the upgrade link.
+func (p Plan) Engine() modelplan.Plan {
+	if !p.Free {
+		return modelplan.Plan{}
+	}
+	defaults := make(map[string]string, len(p.Defaults))
+	for role, m := range p.Defaults {
+		defaults[role] = m
+	}
+	allowed := make([]string, 0, len(p.allowed))
+	for m := range p.allowed {
+		if m != "" {
+			allowed = append(allowed, m)
+		}
+	}
+	sort.Strings(allowed)
+	billing := ""
+	if p.server != "" {
+		billing = p.BillingURL()
+	}
+	return modelplan.Plan{Free: true, Defaults: defaults, Allowed: allowed, BillingURL: billing}
 }
 
 // Allows reports whether model may run: always off Free, else when the
