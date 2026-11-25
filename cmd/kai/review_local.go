@@ -27,7 +27,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -41,6 +43,8 @@ var (
 	reviewCommitLocal   bool
 	reviewCommitMaxCost float64
 	reviewCommitYes     bool
+	// reviewCommitEstimate prints what a local review would cost and stops.
+	reviewCommitEstimate bool
 )
 
 const (
@@ -449,4 +453,34 @@ func rcLocalWorktreeCommit(base string) (commit string, made bool, err error) {
 		return "", false, err
 	}
 	return commit, true, nil
+}
+
+// rcLocalEstimateReport is what --estimate prints with --format json.
+type rcLocalEstimateReport struct {
+	Depth        string   `json:"depth"`
+	EstimateUSD  float64  `json:"estimateUsd"`
+	CapUSD       float64  `json:"capUsd"`
+	Models       []string `json:"models"`
+	Base         string   `json:"base,omitempty"`
+	ChangedFiles int      `json:"changedFiles"`
+}
+
+// rcLocalPrintEstimate is `review-commit --local --estimate`: the figure a
+// person, or a tool acting for one, reads before deciding to run the review.
+func rcLocalPrintEstimate(w io.Writer, deep bool, est, capUSD float64, models []string, base string, files int) error {
+	depth := "fast"
+	if deep {
+		depth = "deep"
+	}
+	if reviewCommitFormat == "json" {
+		out, err := json.MarshalIndent(rcLocalEstimateReport{depth, est, capUSD, models, base, files}, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(w, string(out))
+		return nil
+	}
+	fmt.Fprintf(w, "A %s local review of %d changed file(s) is estimated at about $%.2f at list prices, on %s.\n"+
+		"It would stop at $%.2f. Nothing was run.\n", depth, files, est, strings.Join(models, ", "), capUSD)
+	return nil
 }

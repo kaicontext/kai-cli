@@ -280,6 +280,7 @@ func init() {
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitLocal, "local", false, "run on your own Anthropic API key (ANTHROPIC_API_KEY), not your Kai account; with no commit, reviews unpushed and uncommitted work")
 	reviewCommitCmd.Flags().Float64Var(&reviewCommitMaxCost, "max-cost", 0, "with --local: stop the review once it has spent this many US dollars (default 0.50 fast, 5.00 deep)")
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitYes, "yes", false, "with --local --deep: start without asking")
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitEstimate, "estimate", false, "with --local: print the estimated cost and stop, without calling a model")
 	rootCmd.AddCommand(reviewCommitCmd)
 }
 
@@ -298,15 +299,18 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		ctx = context.Background()
 	}
 	cwd, _ := os.Getwd()
-	if !reviewCommitLocal && (reviewCommitMaxCost != 0 || reviewCommitYes) {
-		return fmt.Errorf("--max-cost and --yes belong to a local review; add --local")
+	if !reviewCommitLocal && (reviewCommitMaxCost != 0 || reviewCommitYes || reviewCommitEstimate) {
+		return fmt.Errorf("--max-cost, --yes and --estimate belong to a local review; add --local")
 	}
 	var ref string
 	localWorkingTree := false
 	if reviewCommitLocal {
-		// The key first: every later step is wasted without one.
-		if err := provider.ValidateAnthropicAPIKey(os.Getenv(rcLocalKeyEnv)); err != nil {
-			return fmt.Errorf("local review: %w", err)
+		// The key first: every later step is wasted without one. An estimate
+		// calls nothing, so it needs none.
+		if !reviewCommitEstimate {
+			if err := provider.ValidateAnthropicAPIKey(os.Getenv(rcLocalKeyEnv)); err != nil {
+				return fmt.Errorf("local review: %w", err)
+			}
 		}
 		r, base, made, err := rcLocalTarget(args, reviewCommitBase)
 		if err != nil {
@@ -467,11 +471,15 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			}
 		}
 		capUSD := rcLocalCap(!fast)
+		est := rcLocalEstimate(!fast, len(diff), len(files))
+		if reviewCommitEstimate {
+			return rcLocalPrintEstimate(cmd.OutOrStdout(), !fast, est, capUSD, models, reviewCommitBase, len(files))
+		}
 		meter, err := rcLocalProvider(models, capUSD)
 		if err != nil {
 			return err
 		}
-		if err := rcLocalConfirm(!fast, rcLocalEstimate(!fast, len(diff), len(files)), capUSD, models); err != nil {
+		if err := rcLocalConfirm(!fast, est, capUSD, models); err != nil {
 			return err
 		}
 		prov, model, provKind = meter, rcLocalDeepModel, provider.KindAnthropicLocalReview
