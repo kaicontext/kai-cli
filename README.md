@@ -61,22 +61,36 @@ For full command reference, see [docs/cli-reference.md](docs/cli-reference.md).
 
 ## MCP Server
 
-Kai ships an [MCP](https://modelcontextprotocol.io) server that gives AI coding assistants
-access to call graphs, dependency maps, impact analysis, and test coverage.
+`kai mcp serve` is an [MCP](https://modelcontextprotocol.io) server for AI coding
+assistants. Its main tool runs Kai's code review on your local changes before you push,
+so the assistant can fix what it finds before the pull request exists.
 
 ```bash
 # Claude Code
 claude mcp add kai -- kai mcp serve
-
-# Or without installing kai (npx downloads it automatically)
-claude mcp add kai -- npx -y kai-mcp
 ```
 
-No setup required — the server lazily initializes the semantic graph on first use.
+| Tool | What it does |
+|------|--------------|
+| `kai_review` | Kai's review of this branch's unpushed commits plus your uncommitted work. Returns the findings with `file:line`. |
+| `kai_callers`, `kai_callees`, `kai_dependents`, `kai_dependencies`, `kai_context`, `kai_impact`, `kai_tests` | Queries on the semantic graph, for checking a finding. Served when the repository has a captured graph (`kai capture`). |
 
-12 tools: `kai_status`, `kai_symbols`, `kai_files`, `kai_diff`, `kai_impact`, `kai_callers`, `kai_callees`, `kai_context`, `kai_dependencies`, `kai_dependents`, `kai_tests`, `kai_refresh`.
+`kai_review` runs on **your own Anthropic API key**: set `ANTHROPIC_API_KEY` to a key from
+the Claude Console. A Claude subscription sign-in is not an API key and is refused. Your
+diff, the review and the key are not sent to Kai. The fast review (the default) costs a
+few cents; a deep review returns its estimated cost first and runs only after you agree.
+Every review has a spending cap.
 
-See [docs/mcp.md](docs/mcp.md) for Cursor setup, tool reference, and troubleshooting.
+The same review is available from the terminal:
+
+```bash
+kai review-commit --local             # fast review of unpushed + uncommitted work
+kai review-commit --local --estimate  # what it would cost, without running it
+kai review-commit --local --deep      # grounded review (needs `kai capture`); asks first
+```
+
+A local review runs every stage on Claude models, so it is not the same set of reviewers
+as Kai's review on the pull request, which remains the check of record.
 
 ---
 

@@ -262,7 +262,8 @@ var reviewCommitCmd = &cobra.Command{
 		"--local runs the review on your own Anthropic API key (ANTHROPIC_API_KEY) instead of your Kai\n" +
 		"account, for checking a change before you push it. With no commit named it reviews this branch's\n" +
 		"unpushed commits plus your uncommitted work. Every stage runs on a Claude model, the estimated\n" +
-		"cost is printed first, and the run stops at a spending cap (--max-cost). Nothing is sent to Kai.",
+		"cost is printed first, and the run stops at a spending cap (--max-cost). Your diff, the review and\n" +
+		"your key are not sent to Kai.",
 	Args: rcReviewCommitArgs,
 	RunE: runReviewCommit,
 }

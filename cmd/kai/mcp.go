@@ -18,8 +18,8 @@ package main
 //     own, registered as they are, so the agent can dig into a finding. They
 //     need a captured graph and are simply absent without one.
 //
-// Nothing here calls a model on Kai's account or sends anything to Kai's
-// server.
+// Nothing here calls a model on Kai's account or sends the code or the review
+// to Kai's server.
 
 import (
 	"bytes"

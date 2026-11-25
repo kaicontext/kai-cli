@@ -6,9 +6,9 @@ package main
 // The review of record is still the one Kai runs on the pull request, through
 // kailab. This is the run before it: the same prompts, hints, repository rules
 // and fact-check, on the diff that has not left the machine, paid for by
-// whoever holds the key. Nothing in a local review is sent to Kai's server and
-// the key is read from the environment and handed to api.anthropic.com only
-// (kai-engine provider.AnthropicLocalReview).
+// whoever holds the key. The diff and the review are not sent to Kai's server,
+// and the key is read from the environment and handed to api.anthropic.com
+// only (kai-engine provider.AnthropicLocalReview).
 //
 // Three things are different from the review CI runs, and all three are
 // because the money is somebody else's:
