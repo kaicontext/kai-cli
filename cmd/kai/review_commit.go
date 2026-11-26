@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -353,7 +354,10 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  merge commit: intent taken from %d commit(s) in %s..%s\n",
 			len(rangeSubjects), reviewCommitBase, rcShort(hash))
 	}
-	diff, rawDiff := rcCommitDiff(reviewCommitBase, ref, maxReviewCommitDiffBytes)
+	diff, rawDiff, diffErr := rcCommitDiff(reviewCommitBase, ref, maxReviewCommitDiffBytes)
+	if diffErr != nil {
+		return fmt.Errorf("commit %s: %w", rcShort(hash), diffErr)
+	}
 	if strings.TrimSpace(diff) == "" {
 		return fmt.Errorf("commit %s has an empty diff (merge commit? try a child, or pass --base)", rcShort(hash))
 	}
@@ -2448,19 +2452,52 @@ func rcCommitMeta(ref string) (hash, subject, body string, err error) {
 	return hash, strings.TrimSpace(string(s)), strings.TrimSpace(string(b)), nil
 }
 
+// rcGitDiffFailed starts the error for a diff git itself could not produce.
+// kai-server reads the job log for these words to tell a git failure from a
+// model failure (cliGitDiffFailed in review_outcome.go), so they are a
+// contract.
+const rcGitDiffFailed = "could not read the diff from git"
+
+// rcURLCredentials matches the userinfo of a URL in git's output.
+var rcURLCredentials = regexp.MustCompile(`(https?://)[^/@\s]+@`)
+
+// rcGitError is a failed git command's error with what git printed: the last
+// lines of its stderr, with any URL credentials removed.
+func rcGitError(err error) error {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return err
+	}
+	msg := strings.TrimSpace(rcURLCredentials.ReplaceAllString(string(ee.Stderr), "$1"))
+	if msg == "" {
+		return err
+	}
+	if lines := strings.Split(msg, "\n"); len(lines) > 8 {
+		msg = strings.Join(lines[len(lines)-8:], "\n")
+	}
+	return fmt.Errorf("%w: %s", err, msg)
+}
+
 // raw is git's whole diff, so the new-host check still sees omitted and cut-off files.
-func rcCommitDiff(base, ref string, maxBytes int) (diff, raw string) {
+//
+// A git failure is an error, not an empty diff. In a blobless clone the diff
+// fetches file contents from the remote, and a fetch that fails (kai-server
+// #688: an expired clone token) used to be reported as "has an empty diff".
+func rcCommitDiff(base, ref string, maxBytes int) (diff, raw string, err error) {
 	var out []byte
-	var err error
 	if strings.TrimSpace(base) != "" {
 		out, err = exec.Command("git", "--no-pager", "diff", "--no-color", base+"..."+ref).Output()
 	} else {
 		out, err = exec.Command("git", "--no-pager", "show", "--no-color", "--format=", ref).Output()
 	}
-	if err != nil || len(out) == 0 {
-		return "", ""
+	if err != nil {
+		return "", "", fmt.Errorf("%s: %w", rcGitDiffFailed, rcGitError(err))
 	}
-	return rcSplitCommitDiff(string(out), maxBytes)
+	if len(out) == 0 {
+		return "", "", nil
+	}
+	diff, raw = rcSplitCommitDiff(string(out), maxBytes)
+	return diff, raw, nil
 }
 
 func rcSplitCommitDiff(out string, maxBytes int) (diff, raw string) {
@@ -2481,6 +2518,10 @@ func rcCommitDiffStat(base, ref string) (added, removed int, files []finding.Dif
 		out, err = exec.Command("git", "--no-pager", "show", "--numstat", "--format=", ref).Output()
 	}
 	if err != nil {
+		// Not fatal: the review is written by now and the file list is a
+		// panel beside it. But say so, or the bundle's empty Code tab has no
+		// explanation.
+		fmt.Fprintf(os.Stderr, "warning: git could not list the changed files, so the finding carries none: %v\n", rcGitError(err))
 		return 0, 0, nil
 	}
 	// Also capture the actual unified diff hunks per file so the findings inbox
