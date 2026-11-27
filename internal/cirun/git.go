@@ -143,10 +143,16 @@ func ChangedFiles(ctx context.Context, gi *GitInfo, working bool) (files []strin
 	}
 	add(out)
 	if working {
-		if out, err := git(ctx, gi.Root, "diff", "--name-only", "HEAD"); err == nil {
-			add(out)
-		}
-		if out, err := git(ctx, gi.Root, "ls-files", "--others", "--exclude-standard"); err == nil {
+		// A truncated list would let a paths: filter skip a workflow the
+		// uncommitted files do touch, so a failure here means "unknown".
+		for _, args := range [][]string{
+			{"diff", "--name-only", "HEAD"},
+			{"ls-files", "--others", "--exclude-standard"},
+		} {
+			out, err := git(ctx, gi.Root, args...)
+			if err != nil {
+				return nil, false
+			}
 			add(out)
 		}
 	}

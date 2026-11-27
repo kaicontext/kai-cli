@@ -21,11 +21,18 @@ var WorkflowDirs = []string{".github/workflows", ".kailab/workflows"}
 // Workflow is one workflow file, reduced to what job picking and the fidelity
 // check need.
 type Workflow struct {
-	File string // base name, e.g. "ci.yml"
+	// File names the workflow in job refs. It is the base name ("ci.yml")
+	// for .github/workflows and the repo-relative path for any other
+	// directory, so two directories with a ci.yml don't share a ref.
+	File string
+	Dir  string // repo-relative directory, slash-separated
 	Path string // absolute path
-	Name string
-	On   map[string]*EventFilter // event name → filter (never nil)
-	Jobs []*Job                  // in file order
+	// siblings are all workflows loaded with this one, for resolving a
+	// local reusable workflow call.
+	siblings []*Workflow
+	Name     string
+	On       map[string]*EventFilter // event name → filter (never nil)
+	Jobs     []*Job                  // in file order
 }
 
 // EventFilter holds the branch/tag/path filters of one trigger.
@@ -89,11 +96,42 @@ func LoadWorkflows(repoDir string) ([]*Workflow, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s/%s: %w", dir, e.Name(), err)
 			}
-			wf.Path = p
+			wf.Path, wf.Dir = p, dir
+			if dir != WorkflowDirs[0] {
+				wf.File = dir + "/" + e.Name()
+			}
 			out = append(out, wf)
 		}
 	}
+	for _, wf := range out {
+		wf.siblings = out
+	}
 	return out, nil
+}
+
+// RelPath is the workflow's repo-relative path, slash-separated.
+func (w *Workflow) RelPath() string {
+	dir := w.Dir
+	if dir == "" {
+		dir = WorkflowDirs[0]
+	}
+	name := w.File
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	return dir + "/" + name
+}
+
+// called returns the workflow a local `uses: ./path/to/workflow.yml` refers
+// to, or nil when it isn't among the loaded ones.
+func (w *Workflow) called(uses string) *Workflow {
+	rel, _, _ := strings.Cut(strings.TrimPrefix(uses, "./"), "@")
+	for _, s := range w.siblings {
+		if s.RelPath() == rel {
+			return s
+		}
+	}
+	return nil
 }
 
 // ParseWorkflow parses one workflow file.
@@ -232,47 +270,119 @@ func parseRunsOn(n *yaml.Node, j *Job) {
 	}
 }
 
+// matrixMaxCombos bounds the matrix expansion done to apply exclude:. GitHub
+// caps a matrix at 256 jobs; anything larger than this is left unexpanded.
+const matrixMaxCombos = 4096
+
+// parseMatrix collects the values each matrix key can take in a job GitHub
+// would schedule: the listed values, minus those every combination of which
+// is removed by exclude:, plus those that only appear under include:.
 func parseMatrix(n *yaml.Node, out map[string][]string) {
 	n = resolveAlias(n)
 	if n == nil || n.Kind != yaml.MappingNode {
 		return
 	}
-	add := func(k, v string) {
-		for _, have := range out[k] {
+	add := func(m map[string][]string, k, v string) {
+		for _, have := range m[k] {
 			if have == v {
 				return
 			}
 		}
-		out[k] = append(out[k], v)
+		m[k] = append(m[k], v)
 	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		key, val := n.Content[i].Value, resolveAlias(n.Content[i+1])
-		if key == "exclude" {
-			continue
+	entries := func(val *yaml.Node) []map[string]string {
+		var list []map[string]string
+		if val.Kind != yaml.SequenceNode {
+			return nil
 		}
-		if key == "include" {
-			if val.Kind != yaml.SequenceNode {
+		for _, entry := range val.Content {
+			entry = resolveAlias(entry)
+			if entry.Kind != yaml.MappingNode {
 				continue
 			}
-			for _, entry := range val.Content {
-				entry = resolveAlias(entry)
-				if entry.Kind != yaml.MappingNode {
-					continue
+			m := map[string]string{}
+			for k := 0; k+1 < len(entry.Content); k += 2 {
+				if e := resolveAlias(entry.Content[k+1]); e.Kind == yaml.ScalarNode {
+					m[entry.Content[k].Value] = e.Value
 				}
-				for k := 0; k+1 < len(entry.Content); k += 2 {
-					if e := entry.Content[k+1]; e.Kind == yaml.ScalarNode {
-						add(entry.Content[k].Value, e.Value)
+			}
+			list = append(list, m)
+		}
+		return list
+	}
+
+	base := map[string][]string{}
+	var keys []string
+	var includes, excludes []map[string]string
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		key, val := n.Content[i].Value, resolveAlias(n.Content[i+1])
+		switch {
+		case key == "include":
+			includes = entries(val)
+		case key == "exclude":
+			excludes = entries(val)
+		case val.Kind == yaml.SequenceNode:
+			for _, e := range val.Content {
+				if e = resolveAlias(e); e.Kind == yaml.ScalarNode {
+					add(base, key, e.Value)
+				}
+			}
+			if len(base[key]) > 0 {
+				keys = append(keys, key)
+			}
+		}
+	}
+
+	combos := 1
+	for _, k := range keys {
+		if combos *= len(base[k]); combos > matrixMaxCombos {
+			break
+		}
+	}
+	if len(excludes) == 0 || combos > matrixMaxCombos {
+		for _, k := range keys {
+			out[k] = append(out[k], base[k]...)
+		}
+	} else {
+		combo := map[string]string{}
+		var walk func(int)
+		walk = func(i int) {
+			if i == len(keys) {
+				for _, ex := range excludes {
+					if len(ex) == 0 {
+						continue
+					}
+					hit := true
+					for k, v := range ex {
+						if combo[k] != v {
+							hit = false
+							break
+						}
+					}
+					if hit {
+						return
 					}
 				}
-			}
-			continue
-		}
-		if val.Kind == yaml.SequenceNode {
-			for _, e := range val.Content {
-				if e.Kind == yaml.ScalarNode {
-					add(key, e.Value)
+				for k, v := range combo {
+					add(out, k, v)
 				}
+				return
 			}
+			for _, v := range base[keys[i]] {
+				combo[keys[i]] = v
+				walk(i + 1)
+			}
+		}
+		walk(0)
+	}
+	for _, inc := range includes {
+		ks := make([]string, 0, len(inc))
+		for k := range inc {
+			ks = append(ks, k)
+		}
+		sort.Strings(ks)
+		for _, k := range ks {
+			add(out, k, inc[k])
 		}
 	}
 }

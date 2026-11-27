@@ -1,0 +1,5 @@
+name: Nested
+on: workflow_call
+jobs:
+  local-nested:
+    uses: ./.github/workflows/reusable.yml

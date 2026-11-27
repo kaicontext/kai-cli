@@ -157,6 +157,13 @@ func Run(ctx context.Context, o Options) (*Report, error) {
 		changed, known := ChangedFiles(ctx, gi, o.Tree == "working")
 		ev := EventContext{Event: o.Event, Branch: gi.Branch, BaseBranch: gi.DefaultBranch, Changed: changed, ChangedKnown: known}
 		for _, wf := range wfs {
+			if err := ValidateFilters(wf, o.Event); err != nil {
+				for _, j := range wf.Jobs {
+					p := add(j, "")
+					p.row.Status, p.row.Reason = StatusError, err.Error()
+				}
+				continue
+			}
 			ok, why := Triggered(wf, ev)
 			for _, j := range wf.Jobs {
 				p := add(j, "triggered by "+o.Event)
@@ -257,10 +264,16 @@ func Run(ctx context.Context, o Options) (*Report, error) {
 	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
 		return nil, err
 	}
-	env := os.Environ()
-	if rt.Host != "" {
-		env = append(env, "DOCKER_HOST="+rt.Host)
+	// act runs from an empty directory with an empty HOME, so it reads no
+	// .actrc: not the repo's, and not the user's, which may hold secrets.
+	actHome := filepath.Join(scratch, "home")
+	actCwd := filepath.Join(scratch, "cwd")
+	for _, d := range []string{actHome, actCwd} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return nil, err
+		}
 	}
+	env := actEnv(os.Environ(), actHome, rt)
 
 	for _, root := range roots {
 		args := actArgs(o, root.job.ID, root.job.Workflow.Path, runDir, eventFile, emptyFile, gi.DefaultBranch, images, matrix)
@@ -281,7 +294,7 @@ func Run(ctx context.Context, o Options) (*Report, error) {
 		}
 		runCtx, cancel := context.WithTimeout(ctx, o.Timeout)
 		start := time.Now()
-		code, execErr := o.execAct(runCtx, actInvocation{bin: act.Path, args: args, dir: runDir, env: env}, parser.feed)
+		code, execErr := o.execAct(runCtx, actInvocation{bin: act.Path, args: args, dir: actCwd, env: env}, parser.feed)
 		timedOut := runCtx.Err() == context.DeadlineExceeded
 		cancel()
 		wall := time.Since(start)
@@ -371,6 +384,10 @@ func actArgs(o Options, jobID, wfPath, runDir, eventFile, emptyFile, defaultBran
 		"--env-file", emptyFile,
 		"--input-file", emptyFile,
 		"--action-cache-path", filepath.Join(o.KaiHome, "cache", "actions"),
+		"--cache-server-path", filepath.Join(o.KaiHome, "cache", "actcache"),
+		// With no GITHUB_TOKEN secret, act runs `gh auth token` and hands
+		// the result to the job. An explicitly empty one stops that.
+		"-s", "GITHUB_TOKEN=",
 	}
 	labels := make([]string, 0, len(images))
 	for l := range images {
@@ -392,6 +409,57 @@ func actArgs(o Options, jobID, wfPath, runDir, eventFile, emptyFile, defaultBran
 		args = append(args, "--matrix", m)
 	}
 	return args
+}
+
+// actEnvKeep are the variables act is started with. Everything else in the
+// caller's environment stays out: act reads a bare `-s NAME` from it, and
+// tokens exported in a shell have no business near a job.
+var actEnvKeep = map[string]bool{
+	"PATH": true, "TMPDIR": true, "TMP": true, "TEMP": true, "USER": true, "LOGNAME": true,
+	"LANG": true, "TZ": true, "TERM": true,
+	"DOCKER_HOST": true, "DOCKER_CONFIG": true, "DOCKER_TLS_VERIFY": true, "DOCKER_CERT_PATH": true,
+	"DOCKER_API_VERSION": true, "XDG_RUNTIME_DIR": true,
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "ALL_PROXY": true,
+	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+	// Windows needs these to start a process at all.
+	"SYSTEMROOT": true, "SYSTEMDRIVE": true, "WINDIR": true, "COMSPEC": true, "PATHEXT": true,
+	"USERPROFILE": true, "APPDATA": true, "LOCALAPPDATA": true, "PROGRAMDATA": true,
+}
+
+// actEnv builds act's environment from the caller's: an allowlist, a HOME
+// that holds no config, and the Docker settings act needs to reach the
+// daemon and the user's registry logins.
+func actEnv(environ []string, actHome string, rt *ContainerRuntime) []string {
+	var env []string
+	realHome, dockerConfig := "", ""
+	for _, kv := range environ {
+		k, v, _ := strings.Cut(kv, "=")
+		up := strings.ToUpper(k)
+		switch {
+		case up == "HOME":
+			realHome = v
+		case up == "DOCKER_CONFIG":
+			dockerConfig = v
+		case up == "DOCKER_HOST" && rt != nil && rt.Host != "":
+			// replaced below
+		case actEnvKeep[up] || strings.HasPrefix(up, "LC_"):
+			env = append(env, kv)
+		}
+	}
+	if realHome == "" {
+		realHome, _ = os.UserHomeDir()
+	}
+	if dockerConfig == "" && realHome != "" {
+		dockerConfig = filepath.Join(realHome, ".docker")
+	}
+	env = append(env, "HOME="+actHome, "XDG_CONFIG_HOME="+filepath.Join(actHome, ".config"))
+	if dockerConfig != "" {
+		env = append(env, "DOCKER_CONFIG="+dockerConfig)
+	}
+	if rt != nil && rt.Host != "" {
+		env = append(env, "DOCKER_HOST="+rt.Host)
+	}
+	return env
 }
 
 // matrixArgs turns "os=ubuntu-latest,go=1.25" style values into act's

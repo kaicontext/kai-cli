@@ -83,12 +83,23 @@ func ResolveAct(ctx context.Context, actPath, kaiHome string, notify func(string
 	tool := &ActTool{}
 	switch {
 	case actPath != "":
-		if _, err := os.Stat(actPath); err != nil {
+		// act is started from another directory, so a relative path has to
+		// be pinned to the file that was checked here.
+		abs, err := filepath.Abs(actPath)
+		if err != nil {
 			return nil, fmt.Errorf("--act-path: %w", err)
 		}
-		tool.Path, tool.Source = actPath, "flag"
+		if fi, err := os.Stat(abs); err != nil {
+			return nil, fmt.Errorf("--act-path: %w", err)
+		} else if fi.IsDir() {
+			return nil, fmt.Errorf("--act-path: %s is a directory", abs)
+		}
+		tool.Path, tool.Source = abs, "flag"
 	default:
 		if p, err := exec.LookPath("act"); err == nil {
+			if abs, err := filepath.Abs(p); err == nil {
+				p = abs
+			}
 			tool.Path, tool.Source = p, "path"
 			break
 		}

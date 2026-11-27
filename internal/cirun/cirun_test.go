@@ -37,7 +37,11 @@ func loadGolden(t *testing.T) []*Workflow {
 		if err != nil {
 			t.Fatalf("%s: %v", e.Name(), err)
 		}
+		wf.Dir = WorkflowDirs[0]
 		wfs = append(wfs, wf)
+	}
+	for _, wf := range wfs {
+		wf.siblings = wfs
 	}
 	return wfs
 }
@@ -63,6 +67,13 @@ func TestGoldenFidelity(t *testing.T) {
 		{"needs.yml:notarize", BucketCannot, "needs mac, which can't run here (runs-on macos-14)", false},
 		{"reusable.yml:local", BucketRuns, "", false},
 		{"reusable.yml:remote", BucketCaveats, "reusable workflow in another repo", false},
+		// A local reusable workflow is checked job by job.
+		{"reusable.yml:local-mac", BucketCannot, "whose job mac can't run here (runs-on macos-14)", false},
+		{"nested.yml:local-nested", BucketCannot, "whose job local-mac can't run here", false},
+		{"reusable.yml:local-missing", BucketCaveats, "which Kai couldn't read to check", false},
+		// exclude: removes the only macOS combination, so nothing is partial.
+		{"matrix.yml:excluded", BucketRuns, "", false},
+		{"matrix.yml:excluded-partly", BucketCaveats, "matrix entries on macos-latest are not run here", true},
 		{"limits.yml:services", BucketCaveats, "services: run as local containers", false},
 		{"limits.yml:mac", BucketCannot, "runs-on macos-latest", false},
 		{"limits.yml:windows", BucketCannot, "runs-on windows-latest", false},
@@ -316,6 +327,15 @@ func (f *fakeAct) options(dir string, o Options) Options {
 	return o
 }
 
+func argAfter(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func rowOf(t *testing.T, rep *Report, id string) *JobResult {
 	t.Helper()
 	for _, j := range rep.Jobs {
@@ -360,8 +380,14 @@ func TestRunPassAndFail(t *testing.T) {
 			t.Errorf("act args lack %s: %s", flag, args)
 		}
 	}
-	if strings.Contains(args, " -s ") || strings.Contains(args, "GITHUB_TOKEN") {
-		t.Errorf("act was given a secret: %s", args)
+	// The only secret on the command line is an empty GITHUB_TOKEN, which
+	// stops act from fetching one with `gh auth token`.
+	if strings.Count(args, " -s ") != 1 || !strings.Contains(args, " -s GITHUB_TOKEN= ") {
+		t.Errorf("act must get exactly one secret, an empty GITHUB_TOKEN: %s", args)
+	}
+	// act starts outside the repo, so it reads no .actrc from it.
+	if d := fake.calls[0].dir; d == dir || strings.HasPrefix(d, dir+string(filepath.Separator)) {
+		t.Errorf("act's working directory %s is inside the repo", d)
 	}
 
 	fake = &fakeAct{respond: func(job string) (actLines, int) {
@@ -520,7 +546,7 @@ func TestRunTreeHead(t *testing.T) {
 	fake := &fakeAct{}
 	fake.respond = func(job string) (actLines, int) {
 		if len(fake.calls) == 1 { // the --tree head run
-			runDir = fake.calls[0].dir
+			runDir = argAfter(fake.calls[0].args, "-C")
 			if _, err := os.Stat(filepath.Join(runDir, "uncommitted.txt")); err == nil {
 				t.Error("--tree head ran with uncommitted files present")
 			}
@@ -652,5 +678,159 @@ func TestDownloadActVerifiesChecksum(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(tool.Path); !bytes.Equal(got, body) {
 		t.Errorf("installed binary differs")
+	}
+}
+
+func TestActEnvKeepsCredentialsOut(t *testing.T) {
+	environ := []string{
+		"PATH=/usr/bin", "HOME=/home/dev", "GITHUB_TOKEN=ghp_live", "GH_TOKEN=ghp_live2",
+		"NPM_TOKEN=npm_live", "AWS_SECRET_ACCESS_KEY=aws", "ANTHROPIC_API_KEY=sk", "LC_ALL=C",
+		"DOCKER_HOST=unix:///old.sock", "https_proxy=http://proxy:3128", "XDG_CONFIG_HOME=/home/dev/.config",
+	}
+	env := actEnv(environ, "/scratch/home", &ContainerRuntime{Host: "unix:///new.sock"})
+	got := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if _, dup := got[k]; dup {
+			t.Errorf("%s set twice", k)
+		}
+		got[k] = v
+	}
+	for _, k := range []string{"GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "AWS_SECRET_ACCESS_KEY", "ANTHROPIC_API_KEY"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("%s reached act's environment", k)
+		}
+	}
+	want := map[string]string{
+		"PATH": "/usr/bin", "LC_ALL": "C", "https_proxy": "http://proxy:3128",
+		// No user or project config is readable from here.
+		"HOME": "/scratch/home", "XDG_CONFIG_HOME": filepath.Join("/scratch/home", ".config"),
+		// Registry logins still are.
+		"DOCKER_CONFIG": filepath.Join("/home/dev", ".docker"),
+		"DOCKER_HOST":   "unix:///new.sock",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestRunPassesNoHostEnvironment(t *testing.T) {
+	dir := testRepo(t)
+	t.Setenv("GITHUB_TOKEN", "ghp_live")
+	fake := &fakeAct{respond: func(job string) (actLines, int) {
+		var l actLines
+		l.job(job, true, "")
+		return l, 0
+	}}
+	if _, err := Run(context.Background(), fake.options(dir, Options{Targets: []string{"run-only.yml:test"}})); err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range fake.calls[0].env {
+		if strings.HasPrefix(kv, "GITHUB_TOKEN=") {
+			t.Errorf("act was started with %s", kv)
+		}
+		if home, ok := strings.CutPrefix(kv, "HOME="); ok {
+			if real, _ := os.UserHomeDir(); home == real {
+				t.Errorf("act was started with the real HOME, where ~/.actrc lives")
+			}
+		}
+	}
+}
+
+func TestSameNamedWorkflowsInBothDirs(t *testing.T) {
+	dir := testRepo(t)
+	kailab := filepath.Join(dir, ".kailab", "workflows")
+	if err := os.MkdirAll(kailab, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(goldenDir, "run-only.yml"))
+	if err := os.WriteFile(filepath.Join(kailab, "run-only.yml"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfs, err := LoadWorkflows(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FindJob(wfs, "run-only.yml:test"); err == nil ||
+		!strings.Contains(err.Error(), "run-only.yml:test, .kailab/workflows/run-only.yml:test") {
+		t.Errorf("ambiguity should name two different refs: %v", err)
+	}
+	j, err := FindJob(wfs, ".kailab/workflows/run-only.yml:test")
+	if err != nil || j.Workflow.Dir != ".kailab/workflows" {
+		t.Fatalf("full path target: %v, %v", j, err)
+	}
+	// --all gives each of them its own row and its own run.
+	fake := &fakeAct{respond: func(job string) (actLines, int) {
+		var l actLines
+		l.job(job, true, "")
+		return l, 0
+	}}
+	rep, err := Run(context.Background(), fake.options(dir, Options{All: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowOf(t, rep, "run-only.yml:test").Status != StatusPassed || rowOf(t, rep, ".kailab/workflows/run-only.yml:test").Status != StatusPassed {
+		t.Errorf("rows: %+v", rep.Jobs)
+	}
+}
+
+func TestInvalidFilterIsAnErrorNotASkip(t *testing.T) {
+	dir := testRepo(t)
+	bad := "name: Bad\non:\n  push:\n    paths: ['src/[z-a]*']\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"
+	if err := os.WriteFile(filepath.Join(dir, ".github", "workflows", "bad.yml"), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAct{respond: func(job string) (actLines, int) {
+		var l actLines
+		l.job(job, true, "")
+		return l, 0
+	}}
+	rep, err := Run(context.Background(), fake.options(dir, Options{All: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rowOf(t, rep, "bad.yml:j")
+	if r.Status != StatusError || !strings.Contains(r.Reason, `invalid filter pattern "src/[z-a]*"`) || rep.ExitCode != 1 {
+		t.Errorf("bad filter: %+v exit %d", r, rep.ExitCode)
+	}
+}
+
+func TestChangedFilesUnknownWhenGitFails(t *testing.T) {
+	dir := testRepo(t)
+	ctx := context.Background()
+	gi, err := ReadGit(ctx, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files, ok := ChangedFiles(ctx, gi, true); !ok || len(files) != 1 || files[0] != "src/a.go" {
+		t.Fatalf("healthy repo: %v %v", files, ok)
+	}
+	// A corrupt index makes the working-tree diff fail. The answer has to be
+	// "unknown", not the committed files alone.
+	if err := os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("not an index"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if files, ok := ChangedFiles(ctx, gi, true); ok {
+		t.Errorf("broken index: got %v, ok=true", files)
+	}
+}
+
+func TestActPathIsMadeAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "act"), []byte("#!/bin/sh\necho act version 0.0.1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	tool, err := ResolveAct(context.Background(), "./act", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(tool.Path) || tool.Source != "flag" || tool.Warning == "" {
+		t.Errorf("tool: %+v", tool)
+	}
+	if _, err := ResolveAct(context.Background(), ".", t.TempDir(), nil); err == nil {
+		t.Error("a directory was accepted as --act-path")
 	}
 }

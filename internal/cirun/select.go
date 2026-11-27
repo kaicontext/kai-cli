@@ -17,7 +17,7 @@ func FindJob(wfs []*Workflow, target string) (*Job, error) {
 	}
 	var matches []*Job
 	for _, wf := range wfs {
-		if wfName != "" && wf.File != wfName && strings.TrimSuffix(strings.TrimSuffix(wf.File, ".yml"), ".yaml") != wfName {
+		if wfName != "" && !wfNameMatches(wf, wfName) {
 			continue
 		}
 		if j := wf.Job(jobID); j != nil {
@@ -48,6 +48,17 @@ func FindJob(wfs []*Workflow, target string) (*Job, error) {
 	}
 }
 
+// wfNameMatches accepts a workflow's ref name, its repo-relative path, its
+// base name, and the base name without the extension.
+func wfNameMatches(wf *Workflow, name string) bool {
+	base := wf.File
+	if i := strings.LastIndexByte(base, '/'); i >= 0 {
+		base = base[i+1:]
+	}
+	stem := strings.TrimSuffix(strings.TrimSuffix(base, ".yml"), ".yaml")
+	return name == wf.File || name == wf.RelPath() || name == base || name == stem
+}
+
 // EventContext is the synthetic event a workflow's triggers are matched
 // against.
 type EventContext struct {
@@ -59,6 +70,24 @@ type EventContext struct {
 	// can't prove the workflow is unaffected.
 	Changed      []string
 	ChangedKnown bool
+}
+
+// ValidateFilters reports a branch, tag or path filter of the event's trigger
+// that isn't a valid pattern. GitHub rejects such a workflow; matching it as
+// "no match" would skip the workflow, or drop an ignore rule, without a word.
+func ValidateFilters(wf *Workflow, event string) error {
+	f, ok := wf.On[event]
+	if !ok {
+		return nil
+	}
+	for _, list := range [][]string{f.Branches, f.BranchesIgnore, f.Tags, f.TagsIgnore, f.Paths, f.PathsIgnore} {
+		for _, p := range list {
+			if _, err := filterRegexp(strings.TrimPrefix(p, "!")); err != nil {
+				return fmt.Errorf("invalid filter pattern %q in its %s trigger", p, event)
+			}
+		}
+	}
+	return nil
 }
 
 // Triggered reports whether the event would start the workflow, and if not,
@@ -133,7 +162,7 @@ func matchPatterns(patterns []string, name string) bool {
 		if neg {
 			p = p[1:]
 		}
-		if re := filterRegexp(p); re != nil && re.MatchString(name) {
+		if re, err := filterRegexp(p); err == nil && re.MatchString(name) {
 			matched = !neg
 		}
 	}
@@ -143,7 +172,7 @@ func matchPatterns(patterns []string, name string) bool {
 // filterRegexp translates GitHub's filter pattern syntax: * stops at a
 // slash, ** doesn't, ? and + apply to the character before them, and [] is a
 // character class.
-func filterRegexp(p string) *regexp.Regexp {
+func filterRegexp(p string) (*regexp.Regexp, error) {
 	var b strings.Builder
 	b.WriteString("^")
 	for i := 0; i < len(p); i++ {
@@ -176,9 +205,5 @@ func filterRegexp(p string) *regexp.Regexp {
 		}
 	}
 	b.WriteString("$")
-	re, err := regexp.Compile(b.String())
-	if err != nil {
-		return nil
-	}
-	return re
+	return regexp.Compile(b.String())
 }

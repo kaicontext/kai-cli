@@ -7,3 +7,7 @@ jobs:
     uses: ./.github/workflows/run-only.yml
   remote:
     uses: octo-org/shared/.github/workflows/build.yml@v2
+  local-mac:
+    uses: ./.github/workflows/needs.yml
+  local-missing:
+    uses: ./.github/workflows/not-there.yml

@@ -56,7 +56,9 @@ By default the working tree is tested, uncommitted changes included. With
 the result belongs to a commit. --tree overrides either.
 
 No secrets and no GitHub token are passed to jobs, and the host's Docker
-socket is not mounted into them unless you pass --docker-socket.
+socket is not mounted into them unless you pass --docker-socket. act is
+started with a minimal environment and reads no .actrc, neither the repo's
+nor yours; use the flags here instead.
 
 Examples:
   kai ci run ci.yml:test         # one job (and the jobs it needs)

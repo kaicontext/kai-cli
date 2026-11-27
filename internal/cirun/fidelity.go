@@ -65,6 +65,14 @@ var (
 // Classify sorts one job into a bucket. It looks at the job alone; Resolve
 // adds what the jobs it needs imply.
 func Classify(j *Job, o ClassifyOptions) Fidelity {
+	return classify(j, o, 0)
+}
+
+// reusableMaxDepth is how far nested reusable workflow calls are followed;
+// GitHub allows four levels.
+const reusableMaxDepth = 4
+
+func classify(j *Job, o ClassifyOptions, depth int) Fidelity {
 	var f Fidelity
 	cannot := func(format string, a ...any) Fidelity {
 		return Fidelity{Bucket: BucketCannot, Reason: fmt.Sprintf(format, a...)}
@@ -110,6 +118,28 @@ func Classify(j *Job, o ClassifyOptions) Fidelity {
 	}
 	if j.Environment != "" {
 		return cannot("uses environment %q, whose protection rules and secrets don't exist here", j.Environment)
+	}
+
+	// A local reusable workflow is only as runnable as the jobs it holds.
+	if strings.HasPrefix(j.Uses, "./") {
+		target := j.Workflow.called(j.Uses)
+		switch {
+		case target == nil:
+			f.Caveats = append(f.Caveats, fmt.Sprintf("calls %s, which Kai couldn't read to check", j.Uses))
+		case depth >= reusableMaxDepth:
+			f.Caveats = append(f.Caveats, fmt.Sprintf("calls %s, nested too deep to check", j.Uses))
+		default:
+			for _, tj := range target.Jobs {
+				tf := classify(tj, o, depth+1)
+				if tf.Bucket == BucketCannot {
+					return cannot("calls %s, whose job %s can't run here (%s)", j.Uses, tj.ID, tf.Reason)
+				}
+				f.Partial = f.Partial || tf.Partial
+				for _, c := range tf.Caveats {
+					f.Caveats = append(f.Caveats, tj.ID+": "+c)
+				}
+			}
+		}
 	}
 
 	// What will run, but differently.
