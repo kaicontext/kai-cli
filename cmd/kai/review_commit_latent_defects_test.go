@@ -20,7 +20,8 @@ func TestReachableClauseIsVerbatim(t *testing.T) {
 		name, prompt, clause string
 	}{
 		{"deep trigger", rcReviewSystem, rcReviewTriggerClauseDefault},
-		{"deep score", rcReviewSystem, rcReviewScoreClauseDefault},
+		{"gate score reachable", rcChallengeSystemTail, rcReachableScoreDefault},
+		{"gate score nobody wrote", rcChallengeSystemTail, rcNobodyWroteScoreDefault},
 	} {
 		if !strings.Contains(c.prompt, c.clause) {
 			t.Fatalf("%s clause is no longer a verbatim substring of its prompt", c.name)
@@ -65,6 +66,9 @@ func TestLatentDefectsFlagOffUnchanged(t *testing.T) {
 	if rcChallengeSystemHeadText() != rcChallengeSystemHead {
 		t.Fatal("default head must equal the shipped const")
 	}
+	if rcChallengeSystemTailText() != rcChallengeSystemTail {
+		t.Fatal("default tail must equal the shipped const")
+	}
 }
 
 // TestGateClauseSwapsUnderFlag: with the flag on the gate's reachability clause
@@ -80,6 +84,19 @@ func TestGateClauseSwapsUnderFlag(t *testing.T) {
 	}
 	if !strings.Contains(head, rcReachableClauseLatent) {
 		t.Fatal("latent head must contain the latent clause")
+	}
+	tail := rcChallengeSystemTailText()
+	for _, c := range []struct{ def, latent string }{
+		{rcReachableScoreDefault, rcReachableScoreLatent},
+		{rcNobodyWroteScoreDefault, rcNobodyWroteScoreLatent},
+	} {
+		if strings.Contains(tail, c.def) || !strings.Contains(tail, c.latent) {
+			t.Fatalf("latent tail must swap %q for %q", c.def, c.latent)
+		}
+	}
+	full := rcChallengeSystemPromptWith(false, true)
+	if !strings.Contains(full, rcReachableClauseLatent) || !strings.Contains(full, rcReachableScoreLatent) {
+		t.Fatal("the assembled gate prompt must carry the latent head and tail")
 	}
 }
 
@@ -159,5 +176,29 @@ func TestLatentClauseRaisesTheBar(t *testing.T) {
 		if !strings.Contains(rcReachableClauseLatent, want) {
 			t.Fatalf("latent gate clause missing precision condition %q", want)
 		}
+	}
+}
+
+// TestLatentDropListKeepsTestDefects: rule (2) of the drop-list no longer names
+// tests, so on test-heavy repositories the flag cannot refute a real test
+// defect that the shipped gate's rule 10 supports; the deep finder says the
+// same, so it keeps raising them.
+func TestLatentDropListKeepsTestDefects(t *testing.T) {
+	i := strings.Index(rcReachableClauseLatent, "(2)")
+	j := strings.Index(rcReachableClauseLatent, "(3)")
+	if i < 0 || j < i {
+		t.Fatal("latent clause lost its numbered drop-list")
+	}
+	if rule2 := rcReachableClauseLatent[i:j]; strings.Contains(rule2, "test") {
+		t.Fatalf("drop-list rule 2 must not drop test findings: %q", rule2)
+	}
+	if !strings.Contains(rcChallengeSystemHead, "10. SUPPORT concrete defects wherever they are, test and doc files included") {
+		t.Fatal("the shipped gate's test-defect rule moved; re-check the latent carve-out against it")
+	}
+	if strings.Contains(rcReviewTriggerClauseLatent, "test-only") {
+		t.Fatal("deep finder latent clause must not tell the finder to skip test defects")
+	}
+	if !strings.Contains(rcReviewTriggerClauseLatent, "a test that asserts the wrong value, uses wrong test data or cannot fail is a defect now") {
+		t.Fatal("deep finder latent clause must keep raising concrete test defects")
 	}
 }

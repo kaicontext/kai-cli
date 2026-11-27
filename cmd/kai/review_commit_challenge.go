@@ -90,25 +90,50 @@ Assess every DECISIONS bullet the same way, one entry each, an empty array when 
 
 Set intent_match and merge_ready from SUPPORTED findings only; a fast draft has merge_ready at most 4.`
 
-// rcReachableClauseDefault is the exact "trigger must exist today" sentence
+// rcReachableClauseDefault is rule 1, the exact "trigger must exist today" text
 // inside rcChallengeSystemHead (production, precision-first). The latent variant
 // keeps supporting wrong-as-written code when the path that reaches it would
 // have to be added, which the offline code-review benchmark scores as a true
 // positive (e.g. Cal.com #14943). rcReachableClauseDefault MUST stay a verbatim
 // substring of rcChallengeSystemHead; TestReachableClauseIsVerbatim guards it.
-const rcReachableClauseDefault = `An allegation is a defect only when its trigger is reachable in the code as it stands: an input, caller, configuration or state that exists today and reaches the line. REFUTE one whose failure needs a future change ("dormant today", "if X is ever added", "if the guards are reordered", "a footgun for later") — say in the reason that the trigger is hypothetical. But code that is wrong as written is a defect now, even when no current caller exercises it: a query arm missing a condition its siblings apply, a new subclass that leaves abstract methods unimplemented, a function that mishandles an input its own signature, schema or type allows once the checks the code applies before it have run. Refute only when the failure requires someone to change code.`
+const rcReachableClauseDefault = `A defect needs a trigger that exists today: an input, caller, configuration or state that reaches the line. REFUTE one whose failure needs a future change ("if X is ever added") or something no source shows exists (an out-of-tree plugin, a null no caller passes, another exception for an input nobody sends); say the trigger is hypothetical. But two concurrent calls to a handler that requests, a scheduler or a queue can invoke ARE a reachable trigger: refute it only when a source shows something that serializes them (a lock, a transaction, an atomic update).`
 
-const rcReachableClauseLatent = `An allegation is a defect when the code is WRONG AS WRITTEN, even when the input, caller, configuration or state that reaches the line does not exist in the tree yet. SUPPORT such a defect and name the latency in the finding ("dormant: only the SMS handler writes retryCount today, but the delete removes the e-mail and WhatsApp rows the moment any other handler increments it"): a query arm missing a condition its siblings apply, a deletion whose filter omits rows a sibling path produces, a new subclass that leaves abstract methods unimplemented, a function that mishandles an input its signature, schema or type allows. Do NOT refute such a defect merely because no current caller exercises it, and do NOT call it hypothetical. Still REFUTE a finding whose code is CORRECT as written and would only become wrong after someone rewrites it (a pure "footgun if these guards are ever reordered" where every input is handled correctly today), and keep refuting generic advice, a preference between two correct styles, and a behaviour change the author describes as intended. Because a defect that is not reachable today is harder to confirm, hold a LATENT one to a higher bar than a defect with a live trigger. Before you SUPPORT a latent finding, run this drop-list and REFUTE it — naming which rule fired — when ANY rule holds: (1) it is cosmetic, formatting or a preference between two forms that are both correct; (2) it is only about a comment, an internal documentation string, a test or an example and not production behaviour — text shown to a user (a translation, a label, an error or notification message) IS production behaviour, so a defect in it is not dropped by this rule; (3) its concrete consequence is one you could not verify from the sources AND its severity is low or medium. A high or critical latent defect may be SUPPORTED on a well-reasoned consequence even when you could not fully verify it; for a low or medium one an unverified consequence is a refutation, not a supported finding. If no rule fires — a genuine bug, security, data or concurrency defect that is high or critical, or whose concrete consequence you verified from the sources — SUPPORT it and name the latency. A defect whose trigger exists today is unaffected by this paragraph and keeps the normal bar.`
+// Rule (2) of the drop-list exempts test defects in rule 10's sense: on
+// test-heavy repositories (sentry in run44) dropping every test-only finding
+// cost real ones such as "the monkeypatched time.sleep never waits".
+const rcReachableClauseLatent = `A defect is code that is WRONG AS WRITTEN, even when the input, caller, configuration or state that reaches the line does not exist in the tree yet. SUPPORT such a defect and name the latency in the finding ("dormant: only the SMS handler writes retryCount today, but the delete removes the e-mail and WhatsApp rows the moment any other handler increments it"): a query arm missing a condition its siblings apply, a deletion whose filter omits rows a sibling path produces, a function that mishandles an input its signature, schema or type allows. Do NOT refute such a defect merely because no current caller exercises it, and do NOT call it hypothetical. Still REFUTE a finding whose code is CORRECT as written and would only become wrong after someone rewrites it (a pure "footgun if these guards are ever reordered" where every input is handled correctly today). Two concurrent calls to a handler that requests, a scheduler or a queue can invoke ARE a reachable trigger: refute it only when a source shows something that serializes them (a lock, a transaction, an atomic update). Because a defect that is not reachable today is harder to confirm, hold a LATENT one to a higher bar than a defect with a live trigger. Before you SUPPORT a latent finding, run this drop-list and REFUTE it — naming which rule fired — when ANY rule holds: (1) it is cosmetic, formatting or a preference between two forms that are both correct; (2) it is only about a comment, an internal documentation string or an example and not production behaviour — text shown to a user (a translation, a label, an error or notification message) IS production behaviour, so a defect in it is not dropped by this rule; (3) its concrete consequence is one you could not verify from the sources AND its severity is low or medium. A high or critical latent defect may be SUPPORTED on a well-reasoned consequence even when you could not fully verify it; for a low or medium one an unverified consequence is a refutation, not a supported finding. If no rule fires — a genuine bug, security, data or concurrency defect that is high or critical, or whose concrete consequence you verified from the sources — SUPPORT it and name the latency. A test runs today, so a test defect is never latent and the drop-list never removes it: a test that asserts the wrong value, uses wrong test data, stubs out the behaviour it claims to check (a monkeypatched sleep that never waits) or cannot fail keeps rule 10's normal bar, while pure test naming or style stays refuted. A defect whose trigger exists today is unaffected by this paragraph and keeps the normal bar.`
+
+// The gate's confidence rubric scores "reachable today" and gives "a trigger
+// nobody wrote" 0-2, which would sink exactly the latent defects the flag
+// supports (and so the high/critical guardrail, which relies on a confident
+// score to rescue an unverified verdict). Swapped together with rule 1.
+const rcReachableScoreDefault = `how likely it is a real defect, reachable today, in code this change adds or touches.`
+
+const rcReachableScoreLatent = `how likely it is a real defect, reachable today or wrong as written with a trigger not yet in the tree, in code this change adds or touches.`
+
+const rcNobodyWroteScoreDefault = `0-2: shown false, a duplicate, untouched code, a trigger nobody wrote.`
+
+const rcNobodyWroteScoreLatent = `0-2: shown false, a duplicate, untouched code, correct code that breaks only after someone rewrites it.`
 
 // rcChallengeSystemHeadText returns the gate's system-prompt head. By default it
 // is rcChallengeSystemHead unchanged. With KAI_REVIEW_LATENT_DEFECTS set, it
-// swaps the reachability clause for the recall-leaning variant. Default path is
+// swaps the reachability rule for the recall-leaning variant. Default path is
 // byte-identical to the shipped prompt, so production is untouched.
 func rcChallengeSystemHeadText() string {
 	if rcLatentDefectsEnabled() {
 		return strings.Replace(rcChallengeSystemHead, rcReachableClauseDefault, rcReachableClauseLatent, 1)
 	}
 	return rcChallengeSystemHead
+}
+
+// rcChallengeSystemTailText is rcChallengeSystemTail with the confidence rubric
+// aligned to the latent rule when KAI_REVIEW_LATENT_DEFECTS is set.
+func rcChallengeSystemTailText() string {
+	if !rcLatentDefectsEnabled() {
+		return rcChallengeSystemTail
+	}
+	s := strings.Replace(rcChallengeSystemTail, rcReachableScoreDefault, rcReachableScoreLatent, 1)
+	return strings.Replace(s, rcNobodyWroteScoreDefault, rcNobodyWroteScoreLatent, 1)
 }
 
 // rcChallengeSystemPrompt is the challenger's system prompt. It mentions
@@ -127,7 +152,7 @@ func rcChallengeSystemPromptWith(shell, repo bool) string {
 	if repo {
 		para += "\n\n" + rcChallengeRepoAvailable
 	}
-	return rcChallengeSystemHeadText() + "\n\n" + para + "\n\n" + rcChallengeSystemTail
+	return rcChallengeSystemHeadText() + "\n\n" + para + "\n\n" + rcChallengeSystemTailText()
 }
 
 // rcChallengeMaxTokens bounds each challenge answer. 6000 was too small for a

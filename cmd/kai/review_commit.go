@@ -128,25 +128,20 @@ DECISIONS:
 EARLIER: (only when YOUR PREVIOUS REVIEW is present — one line per earlier ref)
 - <ref>: open | fixed at path:line — <what fixed it> | wrong — <why>`
 
-// rcReviewTriggerClause* and rcReviewScoreClause* let KAI_REVIEW_LATENT_DEFECTS
-// relax the "trigger must exist today" contract in the deep finder so it RAISES
-// wrong-as-written latent defects (which the offline benchmark scores as true
-// positives). Defaults are verbatim substrings of rcReviewSystem; the accessor
-// returns the shipped prompt untouched when the flag is off.
-const rcReviewTriggerClauseDefault = `"Dormant today, but breaks if another caller ever starts passing null" and "a latent footgun for a future strict comparison" are not defects: their trigger is a change nobody has made. Neither is "would break if the guards were reordered".`
+// rcReviewTriggerClause* let KAI_REVIEW_LATENT_DEFECTS relax the "trigger must
+// exist today" contract in the deep finder so it RAISES wrong-as-written latent
+// defects (which the offline benchmark scores as true positives). The default
+// is a verbatim substring of rcReviewSystem; the accessor returns the shipped
+// prompt untouched when the flag is off.
+const rcReviewTriggerClauseDefault = `A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY: a reachable trigger (an input, caller, configuration or state that reaches the line now) and the failure mechanism to the wrong result. A failure needing someone to change code first is not one.`
 
-const rcReviewTriggerClauseLatent = `Code that is wrong as written IS a defect even when the input, caller or state that reaches it would have to be added: report it and name the latency in the finding ("dormant: only the SMS handler writes retryCount today, but the delete removes the e-mail and WhatsApp rows the moment another handler increments it"). Only a concern whose code is CORRECT as written and breaks solely after someone rewrites it — "would break if the guards were reordered" — stays out. Raise a latent one only when it is a real bug, security, data or concurrency defect with a concrete consequence; a cosmetic, style, comment, documentation or test-only latent nicety is not worth an ISSUES slot.`
-
-const rcReviewScoreClauseDefault = `A concern you could not verify, or whose trigger is a future change, is not a defect — keep it out of ISSUES, say so in the prose, and score what you did establish.`
-
-const rcReviewScoreClauseLatent = `A concern you could not verify is not a defect — keep it out of ISSUES and say so in the prose; but a wrong-as-written defect whose triggering path would have to be added IS a defect. Score what you did establish.`
+const rcReviewTriggerClauseLatent = `A DEFECT IS CODE THAT IS WRONG AS WRITTEN: a trigger (an input, caller, configuration or state) and the failure mechanism to the wrong result. The trigger may reach the line now or may have to be added: report a latent one and name the latency in the finding ("dormant: only the SMS handler writes retryCount today, but the delete removes the e-mail and WhatsApp rows the moment another handler increments it"). Only a concern whose code is CORRECT as written and breaks solely after someone rewrites it — "would break if the guards were reordered" — stays out. Raise a latent one only when it is a real bug, security, data or concurrency defect with a concrete consequence; a cosmetic, style, comment or documentation latent nicety is not worth an ISSUES slot. A test runs today, so a test that asserts the wrong value, uses wrong test data or cannot fail is a defect now, not a latent one.`
 
 func rcReviewSystemText() string {
 	if !rcLatentDefectsEnabled() {
 		return rcReviewSystem
 	}
-	s := strings.Replace(rcReviewSystem, rcReviewTriggerClauseDefault, rcReviewTriggerClauseLatent, 1)
-	return strings.Replace(s, rcReviewScoreClauseDefault, rcReviewScoreClauseLatent, 1)
+	return strings.Replace(rcReviewSystem, rcReviewTriggerClauseDefault, rcReviewTriggerClauseLatent, 1)
 }
 
 const rcMaxAuthorContextBytes = 8 * 1024
