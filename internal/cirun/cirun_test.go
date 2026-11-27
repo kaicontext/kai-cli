@@ -590,7 +590,7 @@ func TestRunNeedsSelection(t *testing.T) {
 }
 
 func TestBuildEvent(t *testing.T) {
-	gi := &GitInfo{Branch: "feat/x", HeadSHA: "abc", BaseSHA: "def", DefaultBranch: "main", Repo: "kaicontext/kai-cli", UserName: "Dev"}
+	gi := &GitInfo{Branch: "feat/x", HeadSHA: "abc", BaseSHA: "def", DefaultBranch: "main", BaseBranch: "main", Repo: "kaicontext/kai-cli", UserName: "Dev"}
 	var push struct {
 		Ref, Before, After string
 		Repository         struct {
@@ -832,5 +832,50 @@ func TestActPathIsMadeAbsolute(t *testing.T) {
 	}
 	if _, err := ResolveAct(context.Background(), ".", t.TempDir(), nil); err == nil {
 		t.Error("a directory was accepted as --act-path")
+	}
+}
+
+func TestBaseFlagSetsThePullRequestTarget(t *testing.T) {
+	dir := testRepo(t)
+	ctx := context.Background()
+	if _, err := git(ctx, dir, "branch", "release", "main"); err != nil {
+		t.Fatal(err)
+	}
+	gi, err := ReadGit(ctx, dir, "")
+	if err != nil || gi.BaseBranch != "main" || gi.DefaultBranch != "main" {
+		t.Fatalf("default: %+v %v", gi, err)
+	}
+	// A branch name moves the pull request's target.
+	if gi, err = ReadGit(ctx, dir, "release"); err != nil || gi.BaseBranch != "release" || gi.BaseRef != "release" {
+		t.Fatalf("--base release: %+v %v", gi, err)
+	}
+	b, _ := BuildEvent("pull_request", gi)
+	if !strings.Contains(string(b), `"ref": "release"`) {
+		t.Errorf("pull_request payload should target release: %s", b)
+	}
+	// A commit expression moves only the diff base.
+	if gi, err = ReadGit(ctx, dir, "HEAD~1"); err != nil || gi.BaseBranch != "main" || gi.BaseSHA == "" {
+		t.Fatalf("--base HEAD~1: %+v %v", gi, err)
+	}
+
+	// With --base release, a workflow for pull requests into release runs.
+	wf := "name: Rel\non:\n  pull_request:\n    branches: [release]\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"
+	if err := os.WriteFile(filepath.Join(dir, ".github", "workflows", "rel.yml"), []byte(wf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAct{respond: func(job string) (actLines, int) {
+		var l actLines
+		l.job(job, true, "")
+		return l, 0
+	}}
+	rep, err := Run(ctx, fake.options(dir, Options{All: true, Event: "pull_request", Base: "release"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := rowOf(t, rep, "rel.yml:j"); r.Status != StatusPassed {
+		t.Errorf("rel.yml:j with --base release: %+v", r)
+	}
+	if r := rowOf(t, rep, "actions.yml:node"); r.Status != StatusSkipped {
+		t.Errorf("actions.yml targets main, so it should be skipped: %+v", r)
 	}
 }

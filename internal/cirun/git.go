@@ -38,7 +38,8 @@ type GitInfo struct {
 	HeadSHA       string
 	BaseRef       string // e.g. "origin/main"; "" when none was found
 	BaseSHA       string // merge-base of BaseRef and HEAD
-	DefaultBranch string
+	DefaultBranch string // the repo's default branch
+	BaseBranch    string // the branch a pull request would target
 	Repo          string // "owner/name", or the directory name when there is no remote
 	UserName      string
 	UserEmail     string
@@ -80,14 +81,29 @@ func ReadGit(ctx context.Context, dir, base string) (*GitInfo, error) {
 	if base != "" && gi.BaseRef == "" {
 		return nil, fmt.Errorf("--base %s: not a commit, or it shares no history with HEAD", base)
 	}
-	gi.DefaultBranch = strings.TrimPrefix(gi.BaseRef, "origin/")
-	if gi.DefaultBranch == "" || base != "" {
-		if ref, err := git(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
-			gi.DefaultBranch = strings.TrimPrefix(ref, "origin/")
-		}
+	// The repo's default branch is origin/HEAD when there is one; otherwise
+	// the base that was found by default is the best guess.
+	if ref, err := git(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		gi.DefaultBranch = strings.TrimPrefix(ref, "origin/")
+	}
+	if gi.DefaultBranch == "" && base == "" {
+		gi.DefaultBranch = strings.TrimPrefix(gi.BaseRef, "origin/")
 	}
 	if gi.DefaultBranch == "" {
 		gi.DefaultBranch = "main"
+	}
+	// A pull request targets the default branch unless --base names another
+	// branch. A --base that is a commit or an expression (HEAD~3) moves the
+	// diff base only.
+	gi.BaseBranch = gi.DefaultBranch
+	if base != "" {
+		name := strings.TrimPrefix(base, "origin/")
+		for _, ref := range []string{"refs/heads/" + name, "refs/remotes/origin/" + name} {
+			if _, err := git(ctx, root, "show-ref", "--verify", "--quiet", ref); err == nil {
+				gi.BaseBranch = name
+				break
+			}
+		}
 	}
 
 	gi.Repo = filepath.Base(root)
@@ -205,7 +221,7 @@ func BuildEvent(event string, gi *GitInfo) ([]byte, error) {
 			"pull_request": map[string]any{
 				"number": 0,
 				"user":   user,
-				"base":   map[string]any{"ref": gi.DefaultBranch, "sha": before, "repo": repo},
+				"base":   map[string]any{"ref": gi.BaseBranch, "sha": before, "repo": repo},
 				"head":   map[string]any{"ref": branch, "sha": gi.HeadSHA, "repo": repo},
 			},
 			"repository": repo,

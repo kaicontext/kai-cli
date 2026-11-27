@@ -155,7 +155,7 @@ func Run(ctx context.Context, o Options) (*Report, error) {
 			return nil, fmt.Errorf("no workflows found under %s", strings.Join(WorkflowDirs, " or "))
 		}
 		changed, known := ChangedFiles(ctx, gi, o.Tree == "working")
-		ev := EventContext{Event: o.Event, Branch: gi.Branch, BaseBranch: gi.DefaultBranch, Changed: changed, ChangedKnown: known}
+		ev := EventContext{Event: o.Event, Branch: gi.Branch, BaseBranch: gi.BaseBranch, Changed: changed, ChangedKnown: known}
 		for _, wf := range wfs {
 			if err := ValidateFilters(wf, o.Event); err != nil {
 				for _, j := range wf.Jobs {
