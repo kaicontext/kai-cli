@@ -11,7 +11,7 @@ package main
 // "is this change ready to push?" — and answers it with Kai's own review:
 //
 //   - kai_review runs `kai review-commit --local` on the working tree: the
-//     review pipeline, on the user's own Anthropic API key (review_local.go).
+//     review pipeline, on the user's own model API key (review_local.go).
 //     The agent gets the findings back and can fix them before the pull
 //     request exists.
 //   - The graph tools (kai_callers, kai_impact, kai_tests, …) are the engine's
@@ -50,8 +50,9 @@ var mcpServeCmd = &cobra.Command{
 		"  claude mcp add kai -- kai mcp serve\n\n" +
 		"Tools:\n" +
 		"  kai_review   Kai's review of your unpushed and uncommitted changes, run on your own\n" +
-		"               Anthropic API key (set ANTHROPIC_API_KEY). Fast by default; a deep review\n" +
-		"               returns its estimated cost first and runs only once that is confirmed.\n" +
+		"               model API key (ANTHROPIC_API_KEY, OPENROUTER_API_KEY or OPENAI_API_KEY).\n" +
+		"               Fast by default; a deep review returns its estimated cost first and runs\n" +
+		"               only once that is confirmed.\n" +
 		"  kai_callers, kai_callees, kai_dependents, kai_dependencies, kai_context, kai_impact,\n" +
 		"  kai_tests    Queries on the captured graph (run `kai capture` first).\n\n" +
 		"The review of record is still the one Kai runs on the pull request.",
@@ -74,7 +75,7 @@ var mcpGraphTools = map[string]bool{
 
 const mcpInstructions = "Kai reviews code changes. Before the user pushes or opens a pull request, call kai_review to run " +
 	"Kai's review on their unpushed and uncommitted changes and fix what it finds. The review runs on the user's own " +
-	"Anthropic API key and costs them money: the fast review is a few cents; a deep review can be a few dollars, so " +
+	"model API key (Anthropic, OpenRouter or OpenAI) and costs them money: the fast review is a few cents; a deep review can be a few dollars, so " +
 	"kai_review returns an estimate for it first and you must show the user that figure and get their yes before " +
 	"confirming. Kai's review on the pull request is still the check of record; this is the run before it. Use the " +
 	"graph tools (kai_callers, kai_impact, kai_tests and the rest) to check a finding against the code that calls or " +
@@ -175,7 +176,8 @@ func mcpReviewTool() mcp.Tool {
 	return mcp.NewTool("kai_review",
 		mcp.WithDescription("Run Kai's code review on the user's local changes before they push: this branch's unpushed commits "+
 			"plus uncommitted work, compared against the default branch. Returns the review and its findings (file:line, "+
-			"what is wrong). Runs on the user's own Anthropic API key (ANTHROPIC_API_KEY) and costs them money. "+
+			"what is wrong). Runs on the user's own model API key (ANTHROPIC_API_KEY, OPENROUTER_API_KEY or "+
+			"OPENAI_API_KEY, whichever is set) and costs them money. "+
 			"depth \"fast\" (default) is one pass over the diff for a few cents. depth \"deep\" is the grounded review "+
 			"that reads callers and dependents; it needs `kai capture` to have been run and can cost a few dollars, so the "+
 			"first deep call returns only an estimate: show it to the user, and call again with confirmed_cost_usd set "+
@@ -183,6 +185,7 @@ func mcpReviewTool() mcp.Tool {
 		mcp.WithString("depth", mcp.Description("\"fast\" (default) or \"deep\"."), mcp.Enum("fast", "deep")),
 		mcp.WithString("base", mcp.Description("Branch or commit to compare against. Default: the remote default branch (origin/main).")),
 		mcp.WithString("commit", mcp.Description("Review this commit instead of the working tree.")),
+		mcp.WithString("provider", mcp.Description("Whose key to run on when the user has more than one set: \"anthropic\", \"openrouter\" or \"openai\". Default: the first of those whose key is set."), mcp.Enum("anthropic", "openrouter", "openai")),
 		mcp.WithNumber("max_cost_usd", mcp.Description("Stop the review once it has spent this many US dollars. Default 0.50 fast, 5.00 deep.")),
 		mcp.WithNumber("confirmed_cost_usd", mcp.Description("For depth \"deep\" only: the estimate the user agreed to, from the previous kai_review call.")),
 	)
@@ -192,6 +195,7 @@ func mcpReviewTool() mcp.Tool {
 type mcpReviewArgs struct {
 	Deep         bool
 	Base, Commit string
+	Provider     string
 	MaxCostUSD   float64
 	ConfirmedUSD float64
 }
@@ -236,6 +240,9 @@ func mcpReviewFlags(a mcpReviewArgs) []string {
 	if a.Base != "" {
 		f = append(f, "--base", a.Base)
 	}
+	if a.Provider != "" {
+		f = append(f, "--local-provider", a.Provider)
+	}
 	if a.MaxCostUSD > 0 {
 		f = append(f, "--max-cost", fmt.Sprintf("%.2f", a.MaxCostUSD))
 	}
@@ -248,11 +255,15 @@ func mcpReviewHandler(run mcpReviewRunner) server.ToolHandlerFunc {
 			Deep:         strings.EqualFold(strings.TrimSpace(req.GetString("depth", "fast")), "deep"),
 			Base:         strings.TrimSpace(req.GetString("base", "")),
 			Commit:       strings.TrimSpace(req.GetString("commit", "")),
+			Provider:     strings.ToLower(strings.TrimSpace(req.GetString("provider", ""))),
 			MaxCostUSD:   req.GetFloat("max_cost_usd", 0),
 			ConfirmedUSD: req.GetFloat("confirmed_cost_usd", 0),
 		}
 		if d := strings.ToLower(strings.TrimSpace(req.GetString("depth", "fast"))); d != "fast" && d != "deep" {
 			return mcp.NewToolResultError(fmt.Sprintf("depth %q is not fast or deep", d)), nil
+		}
+		if a.Provider != "" && a.Provider != "anthropic" && a.Provider != "openrouter" && a.Provider != "openai" {
+			return mcp.NewToolResultError(fmt.Sprintf("provider %q is not anthropic, openrouter or openai", a.Provider)), nil
 		}
 		// A value that begins with "-" would be read as a flag by the child.
 		for _, v := range []string{a.Base, a.Commit} {
@@ -290,10 +301,10 @@ func mcpReview(ctx context.Context, run mcpReviewRunner, a mcpReviewArgs) (text 
 			return "Kai could not read its own estimate: " + err.Error(), true
 		}
 		if a.ConfirmedUSD <= 0 || a.ConfirmedUSD+0.005 < est.EstimateUSD {
-			return fmt.Sprintf("A deep Kai review of this change (%d file(s)) is estimated at about $%.2f on the user's Anthropic API key, "+
+			return fmt.Sprintf("A deep Kai review of this change (%d file(s)) is estimated at about $%.2f on the user's own %s API key, "+
 				"on %s, and would stop at $%.2f.\n\nNothing has been run. Show the user this figure. If they agree, call kai_review "+
 				"again with depth \"deep\" and confirmed_cost_usd %.2f. The fast review (depth \"fast\") costs a few cents and needs no confirmation.",
-				est.ChangedFiles, est.EstimateUSD, strings.Join(est.Models, ", "), est.CapUSD, est.EstimateUSD), false
+				est.ChangedFiles, est.EstimateUSD, mcpVendor(est.Provider), strings.Join(est.Models, ", "), est.CapUSD, est.EstimateUSD), false
 		}
 		flags = append(flags, "--yes")
 		var cancel context.CancelFunc
@@ -362,8 +373,8 @@ func mcpRenderReview(stdout, stderr string, failed bool) (string, bool) {
 		}
 	}
 	if b.Local != nil {
-		fmt.Fprintf(&w, "\nSpent about $%.3f of the user's Anthropic credit over %d call(s) on %s (list prices; cap $%.2f).\n",
-			b.Local.SpentUSD, b.Local.Calls, strings.Join(b.Local.Models, ", "), b.Local.CapUSD)
+		fmt.Fprintf(&w, "\nSpent about $%.3f of the user's %s credit over %d call(s) on %s (list prices; cap $%.2f).\n",
+			b.Local.SpentUSD, mcpVendor(b.Local.Provider), b.Local.Calls, strings.Join(b.Local.Models, ", "), b.Local.CapUSD)
 	}
 	w.WriteString("Kai's review on the pull request is still the check of record.\n")
 	return w.String(), failed && b.Incomplete && strings.TrimSpace(b.Review) == ""
@@ -388,4 +399,16 @@ func mcpLastLines(s string, n int) string {
 		keep = keep[len(keep)-n:]
 	}
 	return strings.Join(keep, "\n")
+}
+
+// mcpVendor is the vendor's name for a sentence, from a --local-provider
+// name ("openai") or a bundle's provider kind ("openai-local-review").
+func mcpVendor(provider string) string {
+	name := strings.TrimSuffix(provider, "-local-review")
+	for _, b := range rcLocalBackends {
+		if b.name == name {
+			return b.vendor
+		}
+	}
+	return "model"
 }

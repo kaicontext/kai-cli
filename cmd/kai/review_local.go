@@ -1,22 +1,26 @@
 package main
 
 // review_local.go — `kai review-commit --local`: the review pipeline on the
-// developer's own Anthropic API key, before they push.
+// developer's own model API key, before they push. The key is an Anthropic,
+// OpenRouter or OpenAI API key (rcLocalBackends).
 //
 // The review of record is still the one Kai runs on the pull request, through
 // kailab. This is the run before it: the same prompts, hints, repository rules
 // and fact-check, on the diff that has not left the machine, paid for by
 // whoever holds the key. The diff and the review are not sent to Kai's server,
-// and the key is read from the environment and handed to api.anthropic.com
-// only (kai-engine provider.AnthropicLocalReview).
+// and the key is read from the environment and handed to that vendor's API
+// only (kai-engine provider.AnthropicLocalReview and its two siblings).
 //
 // Three things are different from the review CI runs, and all three are
 // because the money is somebody else's:
 //
-//   - Every stage runs on a Claude model. An Anthropic key cannot run the GLM,
-//     GPT and Gemini stages of the server's review sets, so the local profile
-//     names a Claude model for the stages it keeps and turns the ensemble off.
-//     A local review is therefore not the same reviewers as the pull request's.
+//   - Every stage runs on one vendor's models. One key cannot run the GLM,
+//     GPT and Gemini stages of the server's review sets side by side, so the
+//     local profile names that key's models for the stages it keeps and turns
+//     the ensemble off. A local review is therefore not the same reviewers as
+//     the pull request's. On an Anthropic or OpenRouter key the models are
+//     Claude; on an OpenAI key they are GPT-5.4 mini and GPT-5.4, which the
+//     review's prompts have not been benchmarked on.
 //   - The models are fixed before the first call and cannot change during the
 //     run. A call for any other model is refused (rcLocalMeter), so no failover
 //     can move the review to a dearer one.
@@ -45,6 +49,9 @@ var (
 	reviewCommitYes     bool
 	// reviewCommitEstimate prints what a local review would cost and stops.
 	reviewCommitEstimate bool
+	// reviewCommitLocalProvider names whose key the local review runs on:
+	// anthropic, openrouter or openai. Empty picks the key that is set.
+	reviewCommitLocalProvider string
 )
 
 const (
@@ -61,16 +68,158 @@ const (
 	rcLocalKeyEnv = "ANTHROPIC_API_KEY"
 )
 
-// rcLocalProfile is the review profile a local review runs under: a Claude
-// model for every stage it keeps, and the ensemble stages off. It sets no
-// reasoning effort (a bare claude- id carries none, rcCheckProfileEfforts).
+// rcLocalBackend is one vendor a local review can run on: which variable
+// holds the key, which two models it runs, and the engine functions that
+// check the key, resolve a model id and price a call.
+type rcLocalBackend struct {
+	name   string // the --local-provider value
+	vendor string // as written in a sentence
+	keyEnv string
+	kind   provider.Kind
+	// fast drafts and fact-checks the fast pass; deep runs the grounded
+	// review.
+	fast, deep string
+	// deepEffort is the reasoning effort the grounded review's stages ask
+	// for; empty is none. GPT-5.4 does not reason unless asked, and a
+	// review that reads callers over many turns is the work reasoning is
+	// for, so the OpenAI backend asks for "low".
+	deepEffort string
+	// note is printed before the run when the models are not the ones the
+	// review's prompts are run on everywhere else.
+	note     string
+	validate func(key string) error
+	build    func(key string) (provider.Provider, error)
+	model    func(id string) (string, error)
+	cost     func(model string, in, out int) (float64, error)
+}
+
+// rcLocalBackends, in the order a key is looked for when --local-provider is
+// not given. Anthropic is first so a machine that already ran local reviews
+// keeps running them on the same key.
+var rcLocalBackends = []*rcLocalBackend{
+	{
+		name: "anthropic", vendor: "Anthropic", keyEnv: rcLocalKeyEnv,
+		kind: provider.KindAnthropicLocalReview,
+		fast: rcLocalFastModel, deep: rcLocalDeepModel,
+		validate: provider.ValidateAnthropicAPIKey,
+		build: func(key string) (provider.Provider, error) {
+			return provider.NewAnthropicLocalReview(key)
+		},
+		model: provider.AnthropicLocalReviewModel,
+		cost:  provider.AnthropicLocalReviewCostUSD,
+	},
+	{
+		// The same two Claude models, reached through OpenRouter.
+		name: "openrouter", vendor: "OpenRouter", keyEnv: "OPENROUTER_API_KEY",
+		kind: provider.KindOpenRouterLocalReview,
+		fast: "anthropic/claude-haiku-4.5", deep: "anthropic/claude-sonnet-5.5",
+		validate: provider.ValidateOpenRouterAPIKey,
+		build: func(key string) (provider.Provider, error) {
+			return provider.NewOpenRouterLocalReview(key)
+		},
+		model: provider.OpenRouterLocalReviewModel,
+		cost:  provider.OpenRouterLocalReviewCostUSD,
+	},
+	{
+		// GPT-5.4 mini and GPT-5.4: the current OpenAI models that call
+		// tools over Chat Completions, which is what the engine speaks
+		// (kai-engine provider/local_review_compat.go says why not GPT-6).
+		name: "openai", vendor: "OpenAI", keyEnv: "OPENAI_API_KEY",
+		kind: provider.KindOpenAILocalReview,
+		fast: "gpt-5.4-mini", deep: "gpt-5.4", deepEffort: "low",
+		note:     "Kai's review prompts are tuned on Claude; a review on GPT models has not been benchmarked and may find less",
+		validate: provider.ValidateOpenAIAPIKey,
+		build: func(key string) (provider.Provider, error) {
+			return provider.NewOpenAILocalReview(key)
+		},
+		model: provider.OpenAILocalReviewModel,
+		cost:  provider.OpenAILocalReviewCostUSD,
+	},
+}
+
+// rcLocalActive is the backend of the local review in progress.
+var rcLocalActive = rcLocalBackends[0]
+
+func rcLocalBackendNames() string {
+	names := make([]string, 0, len(rcLocalBackends))
+	for _, b := range rcLocalBackends {
+		names = append(names, b.name)
+	}
+	return strings.Join(names, ", ")
+}
+
+func rcLocalKeyVars() string {
+	vars := make([]string, 0, len(rcLocalBackends))
+	for _, b := range rcLocalBackends {
+		vars = append(vars, b.keyEnv)
+	}
+	return strings.Join(vars, ", ")
+}
+
+// rcLocalPick chooses the backend. A name (--local-provider) wins. With none,
+// it is the first backend whose key variable is set; others that are also set
+// are returned so the caller can say which key was passed over. With no key
+// set at all it is Anthropic, whose missing-key message the caller then
+// prints, except that the message names all three variables.
+func rcLocalPick(name string) (b *rcLocalBackend, alsoSet []string, err error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name != "" {
+		for _, c := range rcLocalBackends {
+			if c.name == name {
+				return c, nil, nil
+			}
+		}
+		return nil, nil, fmt.Errorf("--local-provider %q: want one of %s", name, rcLocalBackendNames())
+	}
+	for _, c := range rcLocalBackends {
+		if strings.TrimSpace(os.Getenv(c.keyEnv)) == "" {
+			continue
+		}
+		if b == nil {
+			b = c
+		} else {
+			alsoSet = append(alsoSet, c.keyEnv)
+		}
+	}
+	if b == nil {
+		return rcLocalBackends[0], nil, nil
+	}
+	return b, alsoSet, nil
+}
+
+// rcLocalCheckKey is the first thing a local review does: the chosen
+// backend's key is present and is a key that vendor's API will run a model
+// on.
+func rcLocalCheckKey(b *rcLocalBackend) error {
+	key := strings.TrimSpace(os.Getenv(b.keyEnv))
+	if key == "" {
+		return fmt.Errorf("a local review runs on your own model API key: set one of %s "+
+			"(pick between several with --local-provider).\n"+
+			"A Claude or ChatGPT subscription sign-in is not an API key and cannot be used here", rcLocalKeyVars())
+	}
+	if err := b.validate(key); err != nil {
+		return fmt.Errorf("local review: %w", err)
+	}
+	return nil
+}
+
+// rcLocalProfile is the review profile a local review runs under: the active
+// backend's model for every stage it keeps, and the ensemble stages off. Every
+// kept stage names its effort (off, or the backend's deepEffort), so a
+// KAI_REVIEW_REASONING_EFFORT left in the shell cannot change what the run
+// costs.
 func rcLocalProfile() *rcReviewProfile {
-	p := &rcReviewProfile{Source: "local review (your Anthropic API key)", Stages: map[string]rcStageSetting{}}
+	b := rcLocalActive
+	p := &rcReviewProfile{Source: "local review (your " + b.vendor + " API key)", Stages: map[string]rcStageSetting{}}
 	for _, s := range []string{rcStageQuickDraft, rcStageQuickFactcheck} {
-		p.Stages[s] = rcStageSetting{Model: rcLocalFastModel}
+		p.Stages[s] = rcStageSetting{Model: b.fast, Effort: rcEffortOff}
+	}
+	deepEffort := b.deepEffort
+	if deepEffort == "" {
+		deepEffort = rcEffortOff
 	}
 	for _, s := range []string{rcStageIntent, rcStageMain, rcStageSweep, rcStageFactcheck, rcStageConclusion} {
-		p.Stages[s] = rcStageSetting{Model: rcLocalDeepModel}
+		p.Stages[s] = rcStageSetting{Model: b.deep, Effort: deepEffort}
 	}
 	for _, s := range []string{rcStageFinder2, rcStageSweep2, rcStageRank, rcStageHumanize, rcStageSpecLogic, rcStageSpecSecurity, rcStageSpecContracts} {
 		p.Stages[s] = rcStageSetting{Model: rcEffortOff}
@@ -95,35 +244,35 @@ func rcLocalModels(p *rcReviewProfile) []string {
 	return out
 }
 
-// rcLocalNewProvider builds the direct provider from a key. A variable so a
-// test can stand a local server in for api.anthropic.com.
+// rcLocalNewProvider builds the active backend's direct provider from a key.
+// A variable so a test can stand a fake in for the vendor's API.
 var rcLocalNewProvider = func(key string) (provider.Provider, error) {
-	return provider.NewAnthropicLocalReview(key)
+	return rcLocalActive.build(key)
 }
 
-// rcLocalProvider is the provider a local review runs on: the direct one,
-// metered. The key comes from ANTHROPIC_API_KEY and nowhere else. In
-// particular the two variables that hold a Claude subscription sign-in
-// (ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN) are never read.
+// rcLocalProvider is the provider a local review runs on: the active
+// backend's direct one, metered. The key comes from that backend's one
+// variable and nowhere else. In particular the variables and files that hold
+// a plan sign-in (ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, a Codex
+// login) are never read.
 func rcLocalProvider(models []string, capUSD float64) (*rcLocalMeter, error) {
-	key := strings.TrimSpace(os.Getenv(rcLocalKeyEnv))
-	if key == "" {
-		return nil, fmt.Errorf("a local review runs on your own Anthropic API key: set %s to a key from the Claude Console.\n"+
-			"A Claude subscription sign-in is not an API key and cannot be used here", rcLocalKeyEnv)
+	b := rcLocalActive
+	if err := rcLocalCheckKey(b); err != nil {
+		return nil, err
 	}
-	inner, err := rcLocalNewProvider(key)
+	inner, err := rcLocalNewProvider(strings.TrimSpace(os.Getenv(b.keyEnv)))
 	if err != nil {
 		return nil, fmt.Errorf("local review: %w", err)
 	}
 	allowed := map[string]bool{}
 	for _, m := range models {
-		bare, err := provider.AnthropicLocalReviewModel(m)
+		id, err := b.model(m)
 		if err != nil {
 			return nil, fmt.Errorf("local review: %w", err)
 		}
-		allowed[bare] = true
+		allowed[id] = true
 	}
-	return &rcLocalMeter{inner: inner, allowed: allowed, capUSD: capUSD}, nil
+	return &rcLocalMeter{inner: inner, backend: b, allowed: allowed, capUSD: capUSD}, nil
 }
 
 // rcLocalMeter is the provider every call of a local review goes through. It
@@ -131,6 +280,7 @@ func rcLocalProvider(models []string, capUSD float64) (*rcLocalMeter, error) {
 // reached, and adds up what the answers cost.
 type rcLocalMeter struct {
 	inner   provider.Provider
+	backend *rcLocalBackend
 	allowed map[string]bool
 	capUSD  float64
 
@@ -148,7 +298,7 @@ type rcLocalMeter struct {
 // billed yet. Calls in flight count against the cap at their reserved price
 // until settle replaces it with what the answer cost.
 func (m *rcLocalMeter) admit(req provider.Request) (reserved float64, err error) {
-	bare, err := provider.AnthropicLocalReviewModel(req.Model)
+	bare, err := m.backend.model(req.Model)
 	if err != nil {
 		return 0, fmt.Errorf("local review: %w", err)
 	}
@@ -156,7 +306,7 @@ func (m *rcLocalMeter) admit(req provider.Request) (reserved float64, err error)
 		return 0, fmt.Errorf("local review: refusing a call to %s — this run was started on %s and does not switch models",
 			bare, strings.Join(m.models(), ", "))
 	}
-	reserved = rcLocalCallCeiling(bare, req)
+	reserved = rcLocalCallCeiling(m.backend, bare, req)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.capUSD > 0 && m.spentUSD+m.reservedUSD >= m.capUSD {
@@ -169,7 +319,7 @@ func (m *rcLocalMeter) admit(req provider.Request) (reserved float64, err error)
 
 // rcLocalCallCeiling is the most one call can cost at list prices: its whole
 // prompt read uncached, and every output token it is allowed.
-func rcLocalCallCeiling(model string, req provider.Request) float64 {
+func rcLocalCallCeiling(b *rcLocalBackend, model string, req provider.Request) float64 {
 	in := len(req.System)
 	if raw, err := json.Marshal(req.Messages); err == nil {
 		in += len(raw)
@@ -177,7 +327,7 @@ func rcLocalCallCeiling(model string, req provider.Request) float64 {
 	if raw, err := json.Marshal(req.Tools); err == nil {
 		in += len(raw)
 	}
-	c, _ := provider.AnthropicLocalReviewCostUSD(model, in/3+1, req.MaxTokens)
+	c, _ := b.cost(model, in/3+1, req.MaxTokens)
 	return c
 }
 
@@ -256,9 +406,21 @@ func (m *rcLocalMeter) SendStream(ctx context.Context, req provider.Request) (<-
 	return out, nil
 }
 
-func (m *rcLocalMeter) SupportsCache() bool { return true }
+// Cache support is the inner provider's answer: Claude takes cache
+// breakpoints on either route to it, the GPT models take none.
+func (m *rcLocalMeter) SupportsCache() bool {
+	if c, ok := m.inner.(provider.CacheSupporter); ok {
+		return c.SupportsCache()
+	}
+	return true
+}
 
-func (m *rcLocalMeter) SupportsCacheForModel(string) bool { return true }
+func (m *rcLocalMeter) SupportsCacheForModel(model string) bool {
+	if c, ok := m.inner.(provider.ModelCacheSupporter); ok {
+		return c.SupportsCacheForModel(model)
+	}
+	return m.SupportsCache()
+}
 
 // rcLocalEstimate is a rough cost for the review about to run, from the size
 // of the diff and list prices. It is deliberately on the high side of what a
@@ -273,7 +435,8 @@ func rcLocalEstimate(deep bool, diffBytes, changedFiles int) float64 {
 	diffTokens := diffBytes/3 + 1
 	const overhead = 6000
 	fastIn, fastOut := 2*(diffTokens+overhead), 6000
-	est, _ := provider.AnthropicLocalReviewCostUSD(rcLocalFastModel, fastIn, fastOut)
+	b := rcLocalActive
+	est, _ := b.cost(b.fast, fastIn, fastOut)
 	if !deep {
 		return est
 	}
@@ -281,7 +444,18 @@ func rcLocalEstimate(deep bool, diffBytes, changedFiles int) float64 {
 	perTurn := diffTokens + overhead + 4000
 	deepIn := perTurn*turns/3 + 3*(diffTokens+overhead)
 	deepOut := turns*800 + 8000
-	est, _ = provider.AnthropicLocalReviewCostUSD(rcLocalDeepModel, deepIn, deepOut)
+	if b.deepEffort != "" {
+		// Hidden reasoning bills as output.
+		deepOut *= 2
+	}
+	// Priced a turn at a time: the total is many calls, and pricing it as one
+	// would put it on a model's long-prompt rates, which no single call here
+	// reaches.
+	if turns < 1 {
+		turns = 1
+	}
+	perCall, _ := b.cost(b.deep, deepIn/turns, deepOut/turns)
+	est = perCall * float64(turns)
 	return est
 }
 
@@ -305,7 +479,10 @@ func rcLocalConfirm(deep bool, est, capUSD float64, models []string) error {
 	if deep {
 		tier = "deep"
 	}
-	fmt.Fprintf(os.Stderr, "  local review (%s) on your Anthropic API key · %s\n", tier, strings.Join(models, ", "))
+	fmt.Fprintf(os.Stderr, "  local review (%s) on your %s API key (%s) · %s\n", tier, rcLocalActive.vendor, rcLocalActive.keyEnv, strings.Join(models, ", "))
+	if rcLocalActive.note != "" {
+		fmt.Fprintf(os.Stderr, "  note: %s\n", rcLocalActive.note)
+	}
 	fmt.Fprintf(os.Stderr, "  estimated cost about $%.2f at list prices; this run stops at $%.2f\n", est, capUSD)
 	if est > capUSD {
 		return fmt.Errorf("the estimate ($%.2f) is over this run's cap ($%.2f); pass --max-cost to raise it, or review a smaller range", est, capUSD)
@@ -332,12 +509,13 @@ var rcStdinIsTerminal = func() bool {
 // rcLocalReport is the bundle's "local" object: present only on a local
 // review, so a reader of the JSON can tell it from a review Kai ran.
 type rcLocalReport struct {
-	// Provider is always "anthropic-local-review".
+	// Provider is "anthropic-local-review", "openrouter-local-review" or
+	// "openai-local-review".
 	Provider string `json:"provider"`
 	// Models are the models the run was allowed to call.
 	Models []string `json:"models"`
 	// SpentUSD is the answers' cost at list prices; CapUSD is where the run
-	// would have stopped. Anthropic's invoice is the record, not this.
+	// would have stopped. The vendor's invoice is the record, not this.
 	SpentUSD float64 `json:"spentUsd"`
 	CapUSD   float64 `json:"capUsd"`
 	Calls    int     `json:"calls"`
@@ -352,6 +530,7 @@ type rcLocalReport struct {
 var rcLocalRun *rcLocalState
 
 type rcLocalState struct {
+	backend     *rcLocalBackend
 	meter       *rcLocalMeter
 	models      []string
 	base        string
@@ -364,7 +543,7 @@ func (s *rcLocalState) report() *rcLocalReport {
 	}
 	spent, calls := s.meter.Spent()
 	return &rcLocalReport{
-		Provider: string(provider.KindAnthropicLocalReview), Models: s.models,
+		Provider: string(s.backend.kind), Models: s.models,
 		SpentUSD: spent, CapUSD: s.meter.capUSD, Calls: calls,
 		Base: s.base, WorkingTree: s.workingTree,
 	}
@@ -375,7 +554,7 @@ func (s *rcLocalState) printSpend() {
 		return
 	}
 	spent, calls := s.meter.Spent()
-	fmt.Fprintf(os.Stderr, "  local review spent about $%.3f over %d call(s), at list prices (your Anthropic invoice is the record)\n", spent, calls)
+	fmt.Fprintf(os.Stderr, "  local review spent about $%.3f over %d call(s), at list prices (your %s invoice is the record)\n", spent, calls, s.backend.vendor)
 }
 
 // rcLocalTarget resolves what a local review reviews. With a commit named it
@@ -497,6 +676,8 @@ func rcLocalWorktreeCommit(base string) (commit string, made bool, err error) {
 
 // rcLocalEstimateReport is what --estimate prints with --format json.
 type rcLocalEstimateReport struct {
+	// Provider is the --local-provider name the estimate is for.
+	Provider     string   `json:"provider,omitempty"`
 	Depth        string   `json:"depth"`
 	EstimateUSD  float64  `json:"estimateUsd"`
 	CapUSD       float64  `json:"capUsd"`
@@ -513,14 +694,14 @@ func rcLocalPrintEstimate(w io.Writer, deep bool, est, capUSD float64, models []
 		depth = "deep"
 	}
 	if reviewCommitFormat == "json" {
-		out, err := json.MarshalIndent(rcLocalEstimateReport{depth, est, capUSD, models, base, files}, "", "  ")
+		out, err := json.MarshalIndent(rcLocalEstimateReport{rcLocalActive.name, depth, est, capUSD, models, base, files}, "", "  ")
 		if err != nil {
 			return err
 		}
 		fmt.Fprintln(w, string(out))
 		return nil
 	}
-	fmt.Fprintf(w, "A %s local review of %d changed file(s) is estimated at about $%.2f at list prices, on %s.\n"+
-		"It would stop at $%.2f. Nothing was run.\n", depth, files, est, strings.Join(models, ", "), capUSD)
+	fmt.Fprintf(w, "A %s local review of %d changed file(s) is estimated at about $%.2f at list prices, on %s (%s API key).\n"+
+		"It would stop at $%.2f. Nothing was run.\n", depth, files, est, strings.Join(models, ", "), rcLocalActive.vendor, capUSD)
 	return nil
 }
