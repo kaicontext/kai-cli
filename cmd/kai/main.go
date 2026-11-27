@@ -5103,90 +5103,6 @@ func cDim(s string) string {
 	return "\033[2m" + s + "\033[0m"
 }
 
-// spinner runs an animated gradient pulse on stderr while work happens.
-// A soft glow bounces across a short bar — subtle, not flashy.
-//
-//	stop := spinner("Building semantic graph")
-//	err := doWork()
-//	stop(err)
-func spinner(label string) func(error) {
-	const barWidth = 16
-	const pulseHalf = 3
-
-	// Soft blue gradient — visible but not loud
-	pulseColors := []string{"240", "246", "74", "81", "74", "246"}
-	dimColor := "238"
-
-	iabs := func(x int) int {
-		if x < 0 {
-			return -x
-		}
-		return x
-	}
-
-	renderBar := func(pos int) string {
-		var b strings.Builder
-		for i := 0; i < barWidth; i++ {
-			dist := iabs(i - pos)
-			if dist > pulseHalf {
-				if stderrColor {
-					fmt.Fprintf(&b, "\033[38;5;%sm─\033[0m", dimColor)
-				} else {
-					b.WriteRune('─')
-				}
-			} else {
-				lvl := pulseHalf - dist
-				idx := lvl * (len(pulseColors) - 1) / pulseHalf
-				if stderrColor {
-					fmt.Fprintf(&b, "\033[38;5;%sm─\033[0m", pulseColors[idx])
-				} else {
-					b.WriteRune('━')
-				}
-			}
-		}
-		return b.String()
-	}
-
-	// Render first frame immediately so it's visible even for fast tasks
-	fmt.Fprintf(os.Stderr, "\r  %s %s\033[K", renderBar(0), label)
-
-	done := make(chan struct{})
-	go func() {
-		pos := 1
-		dir := 1
-		for {
-			select {
-			case <-done:
-				return
-			default:
-				time.Sleep(45 * time.Millisecond)
-				fmt.Fprintf(os.Stderr, "\r  %s %s\033[K", renderBar(pos), label)
-				pos += dir
-				if pos >= barWidth-1 {
-					dir = -1
-				} else if pos <= 0 {
-					dir = 1
-				}
-			}
-		}
-	}()
-
-	return func(err error) {
-		close(done)
-		time.Sleep(50 * time.Millisecond)
-
-		if err != nil {
-			errMsg := err.Error()
-			if len(errMsg) > 60 {
-				errMsg = errMsg[:57] + "..."
-			}
-			fmt.Fprintf(os.Stderr, "\r  %s %s %s\033[K\n", cRed("✗"), label, cDim(errMsg))
-		} else {
-			fmt.Fprintf(os.Stderr, "\r  %s %s\033[K\n", cGreen("✓"), label)
-		}
-	}
-}
-
 // personalSlug derives the personal-org slug from an email's local-part
 // (lowercased, dots → hyphens) — the same derivation the server uses when it
 // auto-creates a user's personal org.
@@ -5900,9 +5816,11 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 		if !initNoHistory {
 			if countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output(); err == nil {
 				if count, _ := strconv.Atoi(strings.TrimSpace(string(countOut))); count > 0 {
-					stop := spinner("Importing git history")
+					step := startStep("Importing git history", 20)
+					initProgress = step.progress
 					importErr := runGitImport(db)
-					stop(importErr)
+					initProgress = nil
+					step.finish(importErr)
 				}
 			}
 		}
@@ -5921,9 +5839,14 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 	}
 
 	// ── Step 4: Run first capture to build the semantic graph ──
-	stop := spinner("Building semantic graph")
+	// Parsing files is the part of the graph build that can be counted; the
+	// import and call-edge passes after it report nothing. Parsing fills the
+	// first 80% and finishing the step supplies the rest.
+	graphStep := startStep("Building semantic graph", 20)
+	initProgress = func(parsed float64) { graphStep.progress(0.8 * parsed) }
 	captureErr := runCapture(cmd, []string{"."})
-	stop(captureErr)
+	initProgress = nil
+	graphStep.finish(captureErr)
 
 	// --no-remote: stop after the local graph build. Skips signup/login,
 	// repo linking, and the automatic push — for users who want kai's
@@ -6151,9 +6074,9 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 				writeRepoRegistrationMarker(serverURL, selectedOrg.Slug, projectName)
 
 				// Push the semantic graph automatically
-				stop := spinner("Pushing to kaicontext.com")
+				pushStep := startStep("Pushing to kaicontext.com", 0)
 				pushErr := runPush(cmd, []string{"origin"})
-				stop(pushErr)
+				pushStep.finish(pushErr)
 			}
 		}
 	}
@@ -6530,6 +6453,8 @@ func runGitImport(db *graph.DB) error {
 		// Store commit message for push
 		os.MkdirAll(kaiDir, 0755)
 		os.WriteFile(filepath.Join(kaiDir, "message"), []byte(msg), 0644)
+
+		reportInitProgress(i+1, len(commits))
 	}
 
 	if graphRefsErr == nil && lastImported != "" {
@@ -7162,6 +7087,7 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 		phaseStart = time.Now()
 		progress := func(current, total int, filename string) {
 			if initMode {
+				reportInitProgress(current, total)
 				return
 			}
 			display := filename
