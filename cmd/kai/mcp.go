@@ -206,17 +206,26 @@ type mcpReviewRunner func(ctx context.Context, flags []string) (stdout, stderr s
 func mcpExecReview(self, dir string) mcpReviewRunner {
 	return func(ctx context.Context, flags []string) (string, string, error) {
 		args := append([]string{"review-commit", "--local", "--format", "json"}, flags...)
-		c := exec.CommandContext(ctx, self, args...)
-		c.Dir = dir
 		var out, errb bytes.Buffer
+		c := mcpChild(ctx, self, args, dir)
 		c.Stdout, c.Stderr = &out, &errb
-		c.Stdin = nil
-		// After a cancel, do not wait forever on a grandchild holding the
-		// pipes open.
-		c.WaitDelay = 5 * time.Second
 		err := c.Run()
 		return out.String(), errb.String(), err
 	}
+}
+
+// mcpChildWaitDelay is how long a cancelled child's pipes are waited on.
+var mcpChildWaitDelay = 5 * time.Second
+
+// mcpChild is the command a tool call runs. After a cancel the child is
+// killed, but Run still waits for its output pipes to close, and a grandchild
+// can hold them open; WaitDelay bounds that wait.
+func mcpChild(ctx context.Context, bin string, args []string, dir string) *exec.Cmd {
+	c := exec.CommandContext(ctx, bin, args...)
+	c.Dir = dir
+	c.Stdin = nil
+	c.WaitDelay = mcpChildWaitDelay
+	return c
 }
 
 func mcpReviewFlags(a mcpReviewArgs) []string {

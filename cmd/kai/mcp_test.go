@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kaicontext/kai-engine/tools"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -178,5 +181,36 @@ func TestMCPServesOnlyGraphTools(t *testing.T) {
 	}
 	if res, _ := h(context.Background(), mcpCall(map[string]any{"symbol": "boom"})); !res.IsError {
 		t.Error("a tool's error came back as a success")
+	}
+}
+
+// A cancelled tool call returns even when something the child started still
+// holds its output pipe: the wait on the pipes is bounded.
+func TestMCPChildWaitIsBoundedAfterCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell")
+	}
+	old := mcpChildWaitDelay
+	mcpChildWaitDelay = 300 * time.Millisecond
+	defer func() { mcpChildWaitDelay = old }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// The shell is killed on cancel; the sleep it started keeps stdout open.
+	c := mcpChild(ctx, "sh", []string{"-c", "sleep 30 & echo started; wait"}, t.TempDir())
+	if c.WaitDelay != mcpChildWaitDelay {
+		t.Fatalf("WaitDelay = %v, want %v", c.WaitDelay, mcpChildWaitDelay)
+	}
+	var out bytes.Buffer
+	c.Stdout = &out
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(200*time.Millisecond, cancel)
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the cancelled child was still being waited on after 10s")
 	}
 }

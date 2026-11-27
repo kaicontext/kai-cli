@@ -63,6 +63,72 @@ func (f *rcLocalFakeProvider) Send(_ context.Context, req provider.Request) (pro
 	}, nil
 }
 
+// Calls that overlap cannot each be admitted against money none of them has
+// been billed for yet: a call in flight holds its ceiling against the cap.
+func TestLocalMeterCapHoldsUnderConcurrency(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 8)
+	slow := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		started <- struct{}{}
+		<-release
+		return provider.Response{EstimatedCostUSD: 0.05}, nil
+	}}
+	// One call's ceiling: Haiku 4.5 output is $5 per million tokens, so
+	// 20,000 allowed tokens is $0.10.
+	req := provider.Request{Model: "claude-haiku-4-5", MaxTokens: 20_000}
+	m := &rcLocalMeter{inner: slow, allowed: map[string]bool{"claude-haiku-4-5": true}, capUSD: 0.25}
+	done := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		go func() { _, err := m.Send(context.Background(), req); done <- err }()
+		<-started
+	}
+	// Three in flight have committed about $0.30 of a $0.25 cap, and nothing
+	// has been billed. A fourth must not start.
+	fourth := make(chan error, 1)
+	go func() { _, err := m.Send(context.Background(), req); fourth <- err }()
+	select {
+	case err := <-fourth:
+		if err == nil || !strings.Contains(err.Error(), "the cap for this run") {
+			t.Fatalf("fourth overlapping call = %v, want a stop at the cap", err)
+		}
+	case <-started:
+		t.Fatal("a fourth overlapping call reached the provider past the cap")
+	}
+	close(release)
+	for i := 0; i < 3; i++ {
+		if err := <-done; err != nil {
+			t.Fatalf("an admitted call failed: %v", err)
+		}
+	}
+	// Settled at what the answers cost ($0.15), the reservations are gone
+	// and the run has room again.
+	if spent, calls := m.Spent(); calls != 3 || spent < 0.149 || spent > 0.151 {
+		t.Errorf("spent $%.3f over %d calls, want $0.150 over 3", spent, calls)
+	}
+	if m.reservedUSD != 0 {
+		t.Errorf("reservations left after every call settled: $%.3f", m.reservedUSD)
+	}
+	if _, err := m.Send(context.Background(), req); err != nil {
+		t.Errorf("a call after the others settled: %v", err)
+	}
+}
+
+// A call that fails gives its reservation back and is not counted.
+func TestLocalMeterFailedCallReleasesItsReservation(t *testing.T) {
+	failing := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
+		return provider.Response{}, context.DeadlineExceeded
+	}}
+	m := &rcLocalMeter{inner: failing, allowed: map[string]bool{"claude-haiku-4-5": true}, capUSD: 0.25}
+	for i := 0; i < 5; i++ {
+		if _, err := m.Send(context.Background(), provider.Request{Model: "claude-haiku-4-5", MaxTokens: 20_000}); err != context.DeadlineExceeded {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if spent, calls := m.Spent(); spent != 0 || calls != 0 || m.reservedUSD != 0 {
+		t.Errorf("after five failed calls: spent=%v calls=%d reserved=%v", spent, calls, m.reservedUSD)
+	}
+}
+
 func rcLocalReq(model string) provider.Request {
 	return provider.Request{Model: model, MaxTokens: 10}
 }

@@ -136,24 +136,49 @@ type rcLocalMeter struct {
 
 	mu       sync.Mutex
 	spentUSD float64
-	calls    int
+	// reservedUSD is the ceiling of every call in flight (admit, settle).
+	reservedUSD float64
+	calls       int
 }
 
-func (m *rcLocalMeter) admit(model string) error {
-	bare, err := provider.AnthropicLocalReviewModel(model)
+// admit lets a call through, or says why not, and reserves what the call may
+// cost. The reservation is what makes the cap hold when calls overlap: a deep
+// review's sweep sends chunks side by side with the agent, and a check against
+// money already spent would let every one of them through while none had been
+// billed yet. Calls in flight count against the cap at their reserved price
+// until settle replaces it with what the answer cost.
+func (m *rcLocalMeter) admit(req provider.Request) (reserved float64, err error) {
+	bare, err := provider.AnthropicLocalReviewModel(req.Model)
 	if err != nil {
-		return fmt.Errorf("local review: %w", err)
+		return 0, fmt.Errorf("local review: %w", err)
 	}
 	if !m.allowed[bare] {
-		return fmt.Errorf("local review: refusing a call to %s — this run was started on %s and does not switch models",
+		return 0, fmt.Errorf("local review: refusing a call to %s — this run was started on %s and does not switch models",
 			bare, strings.Join(m.models(), ", "))
 	}
+	reserved = rcLocalCallCeiling(bare, req)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.capUSD > 0 && m.spentUSD >= m.capUSD {
-		return fmt.Errorf("local review stopped: it has spent about $%.2f, the cap for this run (raise it with --max-cost)", m.spentUSD)
+	if m.capUSD > 0 && m.spentUSD+m.reservedUSD >= m.capUSD {
+		return 0, fmt.Errorf("local review stopped: it has spent or committed about $%.2f, the cap for this run (raise it with --max-cost)",
+			m.spentUSD+m.reservedUSD)
 	}
-	return nil
+	m.reservedUSD += reserved
+	return reserved, nil
+}
+
+// rcLocalCallCeiling is the most one call can cost at list prices: its whole
+// prompt read uncached, and every output token it is allowed.
+func rcLocalCallCeiling(model string, req provider.Request) float64 {
+	in := len(req.System)
+	if raw, err := json.Marshal(req.Messages); err == nil {
+		in += len(raw)
+	}
+	if raw, err := json.Marshal(req.Tools); err == nil {
+		in += len(raw)
+	}
+	c, _ := provider.AnthropicLocalReviewCostUSD(model, in/3+1, req.MaxTokens)
+	return c
 }
 
 func (m *rcLocalMeter) models() []string {
@@ -165,11 +190,19 @@ func (m *rcLocalMeter) models() []string {
 	return out
 }
 
-func (m *rcLocalMeter) record(r provider.Response) {
+// settle ends a call's reservation and, when it was answered, records what
+// the answer cost.
+func (m *rcLocalMeter) settle(reserved float64, r *provider.Response) {
 	m.mu.Lock()
-	m.spentUSD += r.EstimatedCostUSD
-	m.calls++
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	m.reservedUSD -= reserved
+	if m.reservedUSD < 0 {
+		m.reservedUSD = 0
+	}
+	if r != nil {
+		m.spentUSD += r.EstimatedCostUSD
+		m.calls++
+	}
 }
 
 // Spent is what the run's answers cost at list prices, and how many calls
@@ -181,37 +214,44 @@ func (m *rcLocalMeter) Spent() (usd float64, calls int) {
 }
 
 func (m *rcLocalMeter) Send(ctx context.Context, req provider.Request) (provider.Response, error) {
-	if err := m.admit(req.Model); err != nil {
+	reserved, err := m.admit(req)
+	if err != nil {
 		return provider.Response{}, err
 	}
 	resp, err := m.inner.Send(ctx, req)
-	if err == nil {
-		m.record(resp)
+	if err != nil {
+		m.settle(reserved, nil)
+		return resp, err
 	}
-	return resp, err
+	m.settle(reserved, &resp)
+	return resp, nil
 }
 
 func (m *rcLocalMeter) SendStream(ctx context.Context, req provider.Request) (<-chan provider.StreamEvent, error) {
-	if err := m.admit(req.Model); err != nil {
-		return nil, err
-	}
 	s, ok := m.inner.(provider.Streamer)
 	if !ok {
 		return nil, fmt.Errorf("local review: provider does not stream")
 	}
+	reserved, err := m.admit(req)
+	if err != nil {
+		return nil, err
+	}
 	in, err := s.SendStream(ctx, req)
 	if err != nil {
+		m.settle(reserved, nil)
 		return nil, err
 	}
 	out := make(chan provider.StreamEvent, 32)
 	go func() {
 		defer close(out)
+		var final *provider.Response
 		for ev := range in {
 			if ev.Kind == "done" && ev.Final != nil {
-				m.record(*ev.Final)
+				final = ev.Final
 			}
 			out <- ev
 		}
+		m.settle(reserved, final)
 	}()
 	return out, nil
 }
