@@ -145,6 +145,55 @@ func TestProgressBarAnimatedEndsWithResult(t *testing.T) {
 	}
 }
 
+// finish on a progress bar that was never started prints just the result
+// line, in both modes; an animated one has no animation to stop.
+func TestProgressBarFinishWithoutStart(t *testing.T) {
+	noColor(t)
+	for _, tc := range []struct {
+		animate bool
+		want    string
+	}{
+		{false, "  ✓ Pushing to kaicontext.com\n"},
+		{true, "\r  ✓ Pushing to kaicontext.com\033[K\n"},
+	} {
+		var buf bytes.Buffer
+		pushProgressBar := newTestProgressBar(&buf, "Pushing to kaicontext.com", 20, tc.animate)
+		pushProgressBar.progress(0.5)
+		pushProgressBar.finish(nil)
+		if got := buf.String(); got != tc.want {
+			t.Errorf("animate=%v: got %q, want %q", tc.animate, got, tc.want)
+		}
+	}
+}
+
+// start and finish act only the first time, and progress after finish is
+// ignored.
+func TestProgressBarRepeatedCalls(t *testing.T) {
+	noColor(t)
+	for _, animate := range []bool{false, true} {
+		var buf bytes.Buffer
+		importProgressBar := newTestProgressBar(&buf, "Importing git history", 20, animate)
+		importProgressBar.start()
+		importProgressBar.start()
+		importProgressBar.finish(nil)
+		importProgressBar.finish(nil)
+		importProgressBar.progress(0.5)
+		importProgressBar.start()
+
+		out := buf.String()
+		if n := strings.Count(out, "✓ Importing git history"); n != 1 {
+			t.Errorf("animate=%v: %d result lines, want 1: %q", animate, n, out)
+		}
+		if !animate {
+			assertLines(t, plainLines(t, out), []string{
+				"  Importing git history... 0%",
+				"  Importing git history... 100%",
+				"  ✓ Importing git history",
+			})
+		}
+	}
+}
+
 func TestStderrInteractiveDumbTerminal(t *testing.T) {
 	t.Setenv("TERM", "dumb")
 	if stderrInteractive() {

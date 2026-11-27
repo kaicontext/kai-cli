@@ -5818,7 +5818,8 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 				if count, _ := strconv.Atoi(strings.TrimSpace(string(countOut))); count > 0 {
 					importProgressBar := newProgressBar("Importing git history", 20)
 					importProgressBar.start()
-					importProgressBar.finish(runGitImport(db, importProgressBar))
+					importErr := runGitImport(db, importProgressBar)
+					importProgressBar.finish(importErr)
 				}
 			}
 		}
@@ -5839,7 +5840,8 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 	// ── Step 4: Run first capture to build the semantic graph ──
 	graphProgressBar := newProgressBar("Building semantic graph", 20)
 	graphProgressBar.start()
-	graphProgressBar.finish(runCaptureWithProgress(cmd, []string{"."}, graphProgressBar))
+	captureErr := runCaptureWithProgress(cmd, []string{"."}, graphProgressBar)
+	graphProgressBar.finish(captureErr)
 
 	// --no-remote: stop after the local graph build. Skips signup/login,
 	// repo linking, and the automatic push — for users who want kai's

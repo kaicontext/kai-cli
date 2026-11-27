@@ -30,17 +30,23 @@ func stderrInteractive() bool {
 // crosses a multiple of pctInterval, starting at 0%. A task that can't
 // measure its progress (pctInterval 0) prints "label..." once.
 //
+// The methods are safe in any order: start and finish act only the first
+// time, progress is ignored before start and after finish, and finish
+// without start prints just the result line.
+//
 //	importProgressBar := newProgressBar("Importing git history", 20)
 //	importProgressBar.start()
-//	err := runGitImport(db, importProgressBar) // calls progress as commits land
-//	importProgressBar.finish(err)
+//	importErr := runGitImport(db, importProgressBar) // calls progress as commits land
+//	importProgressBar.finish(importErr)
 type progressBar struct {
 	w           io.Writer
 	label       string
 	pctInterval int
 	animate     bool
 
-	printed int // last percentage printed; plain mode only
+	started  bool
+	finished bool
+	printed  int // last percentage printed; plain mode only
 
 	stop     chan struct{} // closed by finish to end the animation
 	animDone chan struct{} // closed by the animation once it has stopped drawing
@@ -60,6 +66,10 @@ func newProgressBar(label string, pctInterval int) *progressBar {
 // start shows the progress bar: the first animation frame, or the first
 // plain line.
 func (p *progressBar) start() {
+	if p.started || p.finished {
+		return
+	}
+	p.started = true
 	if p.animate {
 		p.stop = make(chan struct{})
 		p.animDone = make(chan struct{})
@@ -79,7 +89,7 @@ func (p *progressBar) start() {
 // animation doesn't show it; plain mode prints when it crosses the next
 // multiple of pctInterval.
 func (p *progressBar) progress(done float64) {
-	if p.animate || p.pctInterval <= 0 {
+	if !p.started || p.finished || p.animate || p.pctInterval <= 0 {
 		return
 	}
 	// The epsilon keeps a share like 0.8*0.5 from truncating to 39%.
@@ -99,11 +109,16 @@ func (p *progressBar) progress(done float64) {
 // a task that succeeds reports 100% first if its progress never got there,
 // as a task whose last stretch can't be counted won't.
 func (p *progressBar) finish(err error) {
-	if p.animate {
+	if p.finished {
+		return
+	}
+	if err == nil {
+		p.progress(1)
+	}
+	p.finished = true
+	if p.started && p.animate {
 		close(p.stop)
 		<-p.animDone
-	} else if err == nil {
-		p.progress(1)
 	}
 
 	cr, eol := "", ""
