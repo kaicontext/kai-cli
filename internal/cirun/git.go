@@ -112,11 +112,20 @@ func ReadGit(ctx context.Context, dir, base string) (*GitInfo, error) {
 					prefixes = append(prefixes, "refs/remotes/"+r+"/")
 				}
 			}
+			name := ""
 			for _, prefix := range prefixes {
-				if name, ok := strings.CutPrefix(full, prefix); ok && name != "" && name != "HEAD" {
-					gi.BaseBranch = name
+				if rest, ok := strings.CutPrefix(full, prefix); ok {
+					name = rest
 					break
 				}
+			}
+			if rest, ok := strings.CutPrefix(full, "refs/remotes/"); ok && name == "" {
+				// A remote-tracking ref whose remote isn't configured:
+				// the remote's name is the first path element.
+				_, name, _ = strings.Cut(rest, "/")
+			}
+			if name != "" && name != "HEAD" {
+				gi.BaseBranch = name
 			}
 		}
 	}
