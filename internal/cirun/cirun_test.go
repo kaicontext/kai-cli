@@ -845,9 +845,21 @@ func TestBaseFlagSetsThePullRequestTarget(t *testing.T) {
 	if err != nil || gi.BaseBranch != "main" || gi.DefaultBranch != "main" {
 		t.Fatalf("default: %+v %v", gi, err)
 	}
-	// A branch name moves the pull request's target.
+	// A branch name moves the pull request's target, however it is spelled.
 	if gi, err = ReadGit(ctx, dir, "release"); err != nil || gi.BaseBranch != "release" || gi.BaseRef != "release" {
 		t.Fatalf("--base release: %+v %v", gi, err)
+	}
+	if _, err := git(ctx, dir, "update-ref", "refs/remotes/origin/hotfix", "main"); err != nil {
+		t.Fatal(err)
+	}
+	for spelling, want := range map[string]string{
+		"refs/heads/release": "release", "heads/release": "release",
+		"origin/hotfix": "hotfix", "refs/remotes/origin/hotfix": "hotfix",
+	} {
+		g, err := ReadGit(ctx, dir, spelling)
+		if err != nil || g.BaseBranch != want || g.BaseSHA == "" {
+			t.Errorf("--base %s: target %q, want %q (%v)", spelling, g.BaseBranch, want, err)
+		}
 	}
 	b, _ := BuildEvent("pull_request", gi)
 	if !strings.Contains(string(b), `"ref": "release"`) {

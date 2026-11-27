@@ -97,11 +97,14 @@ func ReadGit(ctx context.Context, dir, base string) (*GitInfo, error) {
 	// diff base only.
 	gi.BaseBranch = gi.DefaultBranch
 	if base != "" {
-		name := strings.TrimPrefix(base, "origin/")
-		for _, ref := range []string{"refs/heads/" + name, "refs/remotes/origin/" + name} {
-			if _, err := git(ctx, root, "show-ref", "--verify", "--quiet", ref); err == nil {
-				gi.BaseBranch = name
-				break
+		// git knows every spelling of a branch: release, origin/release,
+		// refs/heads/release, heads/release. It prints nothing for a commit.
+		if full, err := git(ctx, root, "rev-parse", "--symbolic-full-name", base); err == nil {
+			for _, prefix := range []string{"refs/heads/", "refs/remotes/origin/"} {
+				if name, ok := strings.CutPrefix(full, prefix); ok && name != "" && name != "HEAD" {
+					gi.BaseBranch = name
+					break
+				}
 			}
 		}
 	}
