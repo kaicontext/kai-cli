@@ -21,8 +21,8 @@ func stderrInteractive() bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
-// progressBar shows the progress of one kai init task on stderr until
-// finish is called.
+// progressBar shows the progress of one kai init task on stderr, from start
+// until finish.
 //
 // On an interactive terminal it animates a pulse bar. Anywhere else (a CI
 // log, a pipe, a file) every animation frame would be kept as a line of its
@@ -30,9 +30,10 @@ func stderrInteractive() bool {
 // crosses a multiple of pctInterval, starting at 0%. A task that can't
 // measure its progress (pctInterval 0) prints "label..." once.
 //
-//	bar := startProgressBar("Importing git history", 20)
-//	err := runGitImport(db, bar) // calls bar.progress as commits land
-//	bar.finish(err)
+//	importProgressBar := newProgressBar("Importing git history", 20)
+//	importProgressBar.start()
+//	err := runGitImport(db, importProgressBar) // calls progress as commits land
+//	importProgressBar.finish(err)
 type progressBar struct {
 	w           io.Writer
 	label       string
@@ -45,26 +46,33 @@ type progressBar struct {
 	animDone chan struct{} // closed by the animation once it has stopped drawing
 }
 
-func startProgressBar(label string, pctInterval int) *progressBar {
-	return newProgressBar(os.Stderr, label, pctInterval, stderrInteractive())
+// newProgressBar builds a progress bar on stderr, animated when stderr is an
+// interactive terminal. It shows nothing until start.
+func newProgressBar(label string, pctInterval int) *progressBar {
+	return &progressBar{
+		w:           os.Stderr,
+		label:       label,
+		pctInterval: pctInterval,
+		animate:     stderrInteractive(),
+	}
 }
 
-func newProgressBar(w io.Writer, label string, pctInterval int, animate bool) *progressBar {
-	p := &progressBar{w: w, label: label, pctInterval: pctInterval, animate: animate}
-	if animate {
+// start shows the progress bar: the first animation frame, or the first
+// plain line.
+func (p *progressBar) start() {
+	if p.animate {
 		p.stop = make(chan struct{})
 		p.animDone = make(chan struct{})
 		// First frame right away so even a fast task is visible.
-		fmt.Fprintf(w, "\r  %s %s\033[K", renderPulseBar(0), label)
+		fmt.Fprintf(p.w, "\r  %s %s\033[K", renderPulseBar(0), p.label)
 		go p.runAnimation()
-		return p
+		return
 	}
-	if pctInterval > 0 {
-		fmt.Fprintf(w, "  %s... 0%%\n", label)
+	if p.pctInterval > 0 {
+		fmt.Fprintf(p.w, "  %s... 0%%\n", p.label)
 	} else {
-		fmt.Fprintf(w, "  %s...\n", label)
+		fmt.Fprintf(p.w, "  %s...\n", p.label)
 	}
-	return p
 }
 
 // progress records that done (0 to 1) of the task is finished. The
@@ -87,9 +95,9 @@ func (p *progressBar) progress(done float64) {
 	fmt.Fprintf(p.w, "  %s... %d%%\n", p.label, pct)
 }
 
-// finish ends the bar with ✓, or ✗ and the error. In plain mode a task
-// that succeeds reports 100% first if its progress never got there, as a
-// task whose last stretch can't be counted won't.
+// finish ends the progress bar with ✓, or ✗ and the error. In plain mode
+// a task that succeeds reports 100% first if its progress never got there,
+// as a task whose last stretch can't be counted won't.
 func (p *progressBar) finish(err error) {
 	if p.animate {
 		close(p.stop)
