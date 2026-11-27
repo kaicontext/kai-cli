@@ -29,16 +29,16 @@ func noColor(t *testing.T) {
 	t.Cleanup(func() { stderrColor = prev })
 }
 
-// The graph build's parse count fills 0–80% in 20% steps and finishing
+// The graph build's parse count fills 0–80% in 20% intervals and finishing
 // supplies 100%, as runCaptureWithProgress reports it.
-func TestInitStepPlainGraphBuild(t *testing.T) {
+func TestProgressBarPlainGraphBuild(t *testing.T) {
 	noColor(t)
 	var buf bytes.Buffer
-	s := newStep(&buf, "Building semantic graph", 20, false)
+	bar := newProgressBar(&buf, "Building semantic graph", 20, false)
 	for file := 1; file <= 10; file++ {
-		s.progress(0.8 * float64(file) / 10)
+		bar.progress(0.8 * float64(file) / 10)
 	}
-	s.finish(nil)
+	bar.finish(nil)
 
 	assertLines(t, plainLines(t, buf.String()), []string{
 		"  Building semantic graph... 0%",
@@ -51,16 +51,16 @@ func TestInitStepPlainGraphBuild(t *testing.T) {
 	})
 }
 
-// A count that isn't a multiple of the step prints the step it has
+// A count that isn't a multiple of the interval prints the last multiple it
 // reached, and reaching 100% on its own isn't printed twice.
-func TestInitStepPlainUnevenCount(t *testing.T) {
+func TestProgressBarPlainUnevenCount(t *testing.T) {
 	noColor(t)
 	var buf bytes.Buffer
-	s := newStep(&buf, "Importing git history", 20, false)
+	bar := newProgressBar(&buf, "Importing git history", 20, false)
 	for commit := 1; commit <= 3; commit++ {
-		s.progress(float64(commit) / 3)
+		bar.progress(float64(commit) / 3)
 	}
-	s.finish(nil)
+	bar.finish(nil)
 
 	assertLines(t, plainLines(t, buf.String()), []string{
 		"  Importing git history... 0%",
@@ -71,12 +71,12 @@ func TestInitStepPlainUnevenCount(t *testing.T) {
 	})
 }
 
-func TestInitStepPlainFailureStopsWhereItGot(t *testing.T) {
+func TestProgressBarPlainFailureStopsWhereItGot(t *testing.T) {
 	noColor(t)
 	var buf bytes.Buffer
-	s := newStep(&buf, "Importing git history", 20, false)
-	s.progress(0.45)
-	s.finish(errors.New("reading commit abc: bad object"))
+	bar := newProgressBar(&buf, "Importing git history", 20, false)
+	bar.progress(0.45)
+	bar.finish(errors.New("reading commit abc: bad object"))
 
 	assertLines(t, plainLines(t, buf.String()), []string{
 		"  Importing git history... 0%",
@@ -85,12 +85,12 @@ func TestInitStepPlainFailureStopsWhereItGot(t *testing.T) {
 	})
 }
 
-func TestInitStepPlainUnmeasured(t *testing.T) {
+func TestProgressBarPlainUnmeasured(t *testing.T) {
 	noColor(t)
 	var buf bytes.Buffer
-	s := newStep(&buf, "Pushing to kaicontext.com", 0, false)
-	s.progress(0.5)
-	s.finish(nil)
+	bar := newProgressBar(&buf, "Pushing to kaicontext.com", 0, false)
+	bar.progress(0.5)
+	bar.finish(nil)
 
 	assertLines(t, plainLines(t, buf.String()), []string{
 		"  Pushing to kaicontext.com...",
@@ -100,16 +100,16 @@ func TestInitStepPlainUnmeasured(t *testing.T) {
 
 // finish stops the animation before it writes the result, so no frame
 // lands after the ✓ line.
-func TestInitStepAnimatedEndsWithResult(t *testing.T) {
+func TestProgressBarAnimatedEndsWithResult(t *testing.T) {
 	noColor(t)
 	var buf bytes.Buffer
-	s := newStep(&buf, "Building semantic graph", 20, true)
-	s.progress(0.5)
-	s.finish(nil)
+	bar := newProgressBar(&buf, "Building semantic graph", 20, true)
+	bar.progress(0.5)
+	bar.finish(nil)
 
 	out := buf.String()
 	if strings.Contains(out, "%") {
-		t.Fatalf("animated step printed a percentage: %q", out)
+		t.Fatalf("animated bar printed a percentage: %q", out)
 	}
 	if want := "\r  ✓ Building semantic graph\033[K\n"; !strings.HasSuffix(out, want) {
 		t.Fatalf("animated output ends %q, want suffix %q", out[max(0, len(out)-80):], want)

@@ -5816,8 +5816,8 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 		if !initNoHistory {
 			if countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output(); err == nil {
 				if count, _ := strconv.Atoi(strings.TrimSpace(string(countOut))); count > 0 {
-					step := startStep("Importing git history", 20)
-					step.finish(runGitImport(db, step))
+					importBar := startProgressBar("Importing git history", 20)
+					importBar.finish(runGitImport(db, importBar))
 				}
 			}
 		}
@@ -5836,8 +5836,8 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 	}
 
 	// ── Step 4: Run first capture to build the semantic graph ──
-	graphStep := startStep("Building semantic graph", 20)
-	graphStep.finish(runCaptureWithProgress(cmd, []string{"."}, graphStep))
+	graphBar := startProgressBar("Building semantic graph", 20)
+	graphBar.finish(runCaptureWithProgress(cmd, []string{"."}, graphBar))
 
 	// --no-remote: stop after the local graph build. Skips signup/login,
 	// repo linking, and the automatic push — for users who want kai's
@@ -6065,9 +6065,9 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 				writeRepoRegistrationMarker(serverURL, selectedOrg.Slug, projectName)
 
 				// Push the semantic graph automatically
-				pushStep := startStep("Pushing to kaicontext.com", 0)
+				pushBar := startProgressBar("Pushing to kaicontext.com", 0)
 				pushErr := runPush(cmd, []string{"origin"})
-				pushStep.finish(pushErr)
+				pushBar.finish(pushErr)
 			}
 		}
 	}
@@ -6337,9 +6337,9 @@ func writeAIContextFiles() {
 	}
 }
 
-// runGitImport replays git history as semantic snapshots. A non-nil step
+// runGitImport replays git history as semantic snapshots. A non-nil bar
 // is told after each commit how much of the import is done.
-func runGitImport(db *graph.DB, step *initStep) error {
+func runGitImport(db *graph.DB, bar *progressBar) error {
 	// Get commit count
 	countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output()
 	if err != nil {
@@ -6446,8 +6446,8 @@ func runGitImport(db *graph.DB, step *initStep) error {
 		os.MkdirAll(kaiDir, 0755)
 		os.WriteFile(filepath.Join(kaiDir, "message"), []byte(msg), 0644)
 
-		if step != nil {
-			step.progress(float64(i+1) / float64(len(commits)))
+		if bar != nil {
+			bar.progress(float64(i+1) / float64(len(commits)))
 		}
 	}
 
@@ -6870,9 +6870,9 @@ func runCapture(cmd *cobra.Command, args []string) error {
 	return runCaptureWithProgress(cmd, args, nil)
 }
 
-// runCaptureWithProgress is runCapture for kai init: a non-nil step is told
+// runCaptureWithProgress is runCapture for kai init: a non-nil bar is told
 // how much of the semantic graph build is done as files are parsed.
-func runCaptureWithProgress(cmd *cobra.Command, args []string, step *initStep) (err error) {
+func runCaptureWithProgress(cmd *cobra.Command, args []string, bar *progressBar) (err error) {
 	te := telemetry.NewEvent("capture")
 	defer func() { finishCommand(te, err) }()
 
@@ -7086,11 +7086,11 @@ func runCaptureWithProgress(cmd *cobra.Command, args []string, step *initStep) (
 		debugf("Step 2/2: Analyzing...")
 		phaseStart = time.Now()
 		progress := func(current, total int, filename string) {
-			if step != nil {
+			if bar != nil {
 				// Parsing is the only part of the graph build that can be
 				// counted. It fills the first 80%; the import and call-edge
-				// passes after it take the rest, which step.finish reports.
-				step.progress(0.8 * float64(current) / float64(total))
+				// passes after it take the rest, which bar.finish reports.
+				bar.progress(0.8 * float64(current) / float64(total))
 				return
 			}
 			if initMode {

@@ -21,22 +21,23 @@ func stderrInteractive() bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
-// initStep shows one kai init step on stderr until finish is called.
+// progressBar shows the progress of one kai init task on stderr until
+// finish is called.
 //
 // On an interactive terminal it animates a pulse bar. Anywhere else (a CI
 // log, a pipe, a file) every animation frame would be kept as a line of its
 // own, so it prints plain lines instead: "label... N%" each time progress
-// crosses a multiple of pctStep, starting at 0%. A step that can't measure
-// its progress (pctStep 0) prints "label..." once.
+// crosses a multiple of pctInterval, starting at 0%. A task that can't
+// measure its progress (pctInterval 0) prints "label..." once.
 //
-//	step := startStep("Importing git history", 20)
-//	err := runGitImport(db, step) // calls step.progress as commits land
-//	step.finish(err)
-type initStep struct {
-	w       io.Writer
-	label   string
-	pctStep int
-	animate bool
+//	bar := startProgressBar("Importing git history", 20)
+//	err := runGitImport(db, bar) // calls bar.progress as commits land
+//	bar.finish(err)
+type progressBar struct {
+	w           io.Writer
+	label       string
+	pctInterval int
+	animate     bool
 
 	printed int // last percentage printed; plain mode only
 
@@ -44,33 +45,33 @@ type initStep struct {
 	animDone chan struct{} // closed by the animation once it has stopped drawing
 }
 
-func startStep(label string, pctStep int) *initStep {
-	return newStep(os.Stderr, label, pctStep, stderrInteractive())
+func startProgressBar(label string, pctInterval int) *progressBar {
+	return newProgressBar(os.Stderr, label, pctInterval, stderrInteractive())
 }
 
-func newStep(w io.Writer, label string, pctStep int, animate bool) *initStep {
-	s := &initStep{w: w, label: label, pctStep: pctStep, animate: animate}
+func newProgressBar(w io.Writer, label string, pctInterval int, animate bool) *progressBar {
+	p := &progressBar{w: w, label: label, pctInterval: pctInterval, animate: animate}
 	if animate {
-		s.stop = make(chan struct{})
-		s.animDone = make(chan struct{})
-		// First frame right away so even a fast step is visible.
+		p.stop = make(chan struct{})
+		p.animDone = make(chan struct{})
+		// First frame right away so even a fast task is visible.
 		fmt.Fprintf(w, "\r  %s %s\033[K", renderPulseBar(0), label)
-		go s.runAnimation()
-		return s
+		go p.runAnimation()
+		return p
 	}
-	if pctStep > 0 {
+	if pctInterval > 0 {
 		fmt.Fprintf(w, "  %s... 0%%\n", label)
 	} else {
 		fmt.Fprintf(w, "  %s...\n", label)
 	}
-	return s
+	return p
 }
 
-// progress records that done (0 to 1) of the step's work is finished. The
+// progress records that done (0 to 1) of the task is finished. The
 // animation doesn't show it; plain mode prints when it crosses the next
-// multiple of pctStep.
-func (s *initStep) progress(done float64) {
-	if s.animate || s.pctStep <= 0 {
+// multiple of pctInterval.
+func (p *progressBar) progress(done float64) {
+	if p.animate || p.pctInterval <= 0 {
 		return
 	}
 	// The epsilon keeps a share like 0.8*0.5 from truncating to 39%.
@@ -78,27 +79,27 @@ func (s *initStep) progress(done float64) {
 	if pct > 100 {
 		pct = 100
 	}
-	pct -= pct % s.pctStep
-	if pct <= s.printed {
+	pct -= pct % p.pctInterval
+	if pct <= p.printed {
 		return
 	}
-	s.printed = pct
-	fmt.Fprintf(s.w, "  %s... %d%%\n", s.label, pct)
+	p.printed = pct
+	fmt.Fprintf(p.w, "  %s... %d%%\n", p.label, pct)
 }
 
-// finish ends the step with ✓, or ✗ and the error. A plain-mode step that
-// succeeds reports 100% first if its progress never got there, as a step
-// whose last stretch can't be counted won't.
-func (s *initStep) finish(err error) {
-	if s.animate {
-		close(s.stop)
-		<-s.animDone
+// finish ends the bar with ✓, or ✗ and the error. In plain mode a task
+// that succeeds reports 100% first if its progress never got there, as a
+// task whose last stretch can't be counted won't.
+func (p *progressBar) finish(err error) {
+	if p.animate {
+		close(p.stop)
+		<-p.animDone
 	} else if err == nil {
-		s.progress(1)
+		p.progress(1)
 	}
 
 	cr, eol := "", ""
-	if s.animate {
+	if p.animate {
 		cr, eol = "\r", "\033[K"
 	}
 	if err != nil {
@@ -106,24 +107,24 @@ func (s *initStep) finish(err error) {
 		if len(msg) > 60 {
 			msg = msg[:57] + "..."
 		}
-		fmt.Fprintf(s.w, "%s  %s %s %s%s\n", cr, cRed("✗"), s.label, cDim(msg), eol)
+		fmt.Fprintf(p.w, "%s  %s %s %s%s\n", cr, cRed("✗"), p.label, cDim(msg), eol)
 		return
 	}
-	fmt.Fprintf(s.w, "%s  %s %s%s\n", cr, cGreen("✓"), s.label, eol)
+	fmt.Fprintf(p.w, "%s  %s %s%s\n", cr, cGreen("✓"), p.label, eol)
 }
 
 // runAnimation bounces the pulse across the bar until finish stops it.
-func (s *initStep) runAnimation() {
-	defer close(s.animDone)
+func (p *progressBar) runAnimation() {
+	defer close(p.animDone)
 	t := time.NewTicker(45 * time.Millisecond)
 	defer t.Stop()
 	pos, dir := 1, 1
 	for {
 		select {
-		case <-s.stop:
+		case <-p.stop:
 			return
 		case <-t.C:
-			fmt.Fprintf(s.w, "\r  %s %s\033[K", renderPulseBar(pos), s.label)
+			fmt.Fprintf(p.w, "\r  %s %s\033[K", renderPulseBar(pos), p.label)
 			pos += dir
 			if pos >= pulseBarWidth-1 {
 				dir = -1
