@@ -258,8 +258,13 @@ var reviewCommitCmd = &cobra.Command{
 		"--deep is the grounded review: the agent harness with the graph, kai_callers / kai_dependents /\n" +
 		"kai_context and web search, on a 9-minute soft budget. It is what confirms a concern is real and\n" +
 		"reachable, and it requires a captured graph (`kai capture`). In CI both run — the fast pass posts\n" +
-		"first and --deep supersedes it in place.",
-	Args: cobra.ExactArgs(1),
+		"first and --deep supersedes it in place.\n\n" +
+		"--local runs the review on your own Anthropic API key (ANTHROPIC_API_KEY) instead of your Kai\n" +
+		"account, for checking a change before you push it. With no commit named it reviews this branch's\n" +
+		"unpushed commits plus your uncommitted work. Every stage runs on a Claude model, the estimated\n" +
+		"cost is printed first, and the run stops at a spending cap (--max-cost). Your diff, the review and\n" +
+		"your key are not sent to Kai.",
+	Args: rcReviewCommitArgs,
 	RunE: runReviewCommit,
 }
 
@@ -273,7 +278,20 @@ func init() {
 	// still passes it fails fast and tolerated instead of on an unknown flag.
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitFast, "fast", false, "shallow first pass over the diff (the default without flags; an explicit --fast refuses unless KAI_REVIEW_QUICK_PASS=1)")
 	reviewCommitCmd.Flags().BoolVar(&reviewCommitDeep, "deep", false, "the grounded review: agent harness + graph, minutes not seconds — requires `kai capture`")
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitLocal, "local", false, "run on your own Anthropic API key (ANTHROPIC_API_KEY), not your Kai account; with no commit, reviews unpushed and uncommitted work")
+	reviewCommitCmd.Flags().Float64Var(&reviewCommitMaxCost, "max-cost", 0, "with --local: stop the review once it has spent this many US dollars (default 0.50 fast, 5.00 deep)")
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitYes, "yes", false, "with --local --deep: start without asking")
+	reviewCommitCmd.Flags().BoolVar(&reviewCommitEstimate, "estimate", false, "with --local: print the estimated cost and stop, without calling a model")
 	rootCmd.AddCommand(reviewCommitCmd)
+}
+
+// rcReviewCommitArgs is one commit, except that a local review may name none
+// and review the working tree.
+func rcReviewCommitArgs(cmd *cobra.Command, args []string) error {
+	if reviewCommitLocal && len(args) == 0 {
+		return nil
+	}
+	return cobra.ExactArgs(1)(cmd, args)
 }
 
 func runReviewCommit(cmd *cobra.Command, args []string) error {
@@ -281,8 +299,28 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ref := args[0]
 	cwd, _ := os.Getwd()
+	if !reviewCommitLocal && (reviewCommitMaxCost != 0 || reviewCommitYes || reviewCommitEstimate) {
+		return fmt.Errorf("--max-cost, --yes and --estimate belong to a local review; add --local")
+	}
+	var ref string
+	localWorkingTree := false
+	if reviewCommitLocal {
+		// The key first: every later step is wasted without one. An estimate
+		// calls nothing, so it needs none.
+		if !reviewCommitEstimate {
+			if err := provider.ValidateAnthropicAPIKey(os.Getenv(rcLocalKeyEnv)); err != nil {
+				return fmt.Errorf("local review: %w", err)
+			}
+		}
+		r, base, made, err := rcLocalTarget(args, reviewCommitBase)
+		if err != nil {
+			return err
+		}
+		ref, reviewCommitBase, localWorkingTree = r, base, made
+	} else {
+		ref = args[0]
+	}
 
 	// The fast pass is the default review. --deep opts into the grounded one;
 	// --fast is the explicit spelling of the default. Asking for both is a
@@ -354,6 +392,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			len(rangeSubjects), reviewCommitBase, rcShort(hash))
 	}
 	diff, rawDiff := rcCommitDiff(reviewCommitBase, ref, maxReviewCommitDiffBytes)
+	if strings.TrimSpace(diff) == "" && reviewCommitLocal && len(args) == 0 {
+		return fmt.Errorf("nothing to review: no unpushed or uncommitted changes against %s", reviewCommitBase)
+	}
 	if strings.TrimSpace(diff) == "" {
 		return fmt.Errorf("commit %s has an empty diff (merge commit? try a child, or pass --base)", rcShort(hash))
 	}
@@ -401,7 +442,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "  pre-review risk %s → %s\n", risk, profile)
 	}
-	if err := rcLoadProfileForRisk(reviewCommitBase, risk); err != nil {
+	if reviewCommitLocal {
+		// A local review's models are its own (review_local.go): no job's or
+		// benchmark's profile applies to a run on somebody's own key.
+		rcActiveProfile = rcLocalProfile()
+	} else if err := rcLoadProfileForRisk(reviewCommitBase, risk); err != nil {
 		return err
 	}
 	// The repository's own review rules, from the same base branch
@@ -413,12 +458,43 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, line)
 	}
 
-	prov, model, provKind, perr := rcReviewProvider()
-	if perr != nil {
-		return perr
-	}
-	if prov == nil {
-		return fmt.Errorf("no LLM provider available (run `kai login`)")
+	var prov provider.Provider
+	var model string
+	var provKind provider.Kind
+	if reviewCommitLocal {
+		// The fast pass calls one model. The deep review calls its own and,
+		// to summarise a long conversation, the fast one.
+		models := []string{rcLocalFastModel}
+		if !fast {
+			models = []string{rcLocalDeepModel, rcLocalFastModel}
+			if rcSummaryModel() == "" {
+				os.Setenv("KAI_REVIEW_SUMMARY_MODEL", rcLocalFastModel)
+			}
+		}
+		capUSD := rcLocalCap(!fast)
+		est := rcLocalEstimate(!fast, len(diff), len(files))
+		if reviewCommitEstimate {
+			return rcLocalPrintEstimate(cmd.OutOrStdout(), !fast, est, capUSD, models, reviewCommitBase, len(files))
+		}
+		meter, err := rcLocalProvider(models, capUSD)
+		if err != nil {
+			return err
+		}
+		if err := rcLocalConfirm(!fast, est, capUSD, models); err != nil {
+			return err
+		}
+		prov, model, provKind = meter, rcLocalDeepModel, provider.KindAnthropicLocalReview
+		rcLocalRun = &rcLocalState{meter: meter, models: models, base: reviewCommitBase, workingTree: localWorkingTree}
+		defer rcLocalRun.printSpend()
+	} else {
+		var perr error
+		prov, model, provKind, perr = rcReviewProvider()
+		if perr != nil {
+			return perr
+		}
+		if prov == nil {
+			return fmt.Errorf("no LLM provider available (run `kai login`)")
+		}
 	}
 	model = rcStageModel(rcStageMain, model)
 	stageModels := map[string]string{
@@ -457,7 +533,9 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 	// The pull request description a person would write, asked for beside the
 	// review (review_commit_description.go); only a bundle carries it.
 	var collectDescription func(time.Duration) string
-	if reviewCommitFormat == "json" {
+	// Not on a local review: it is a call the person paying did not ask for,
+	// and there is no pull request yet to describe.
+	if reviewCommitFormat == "json" && !reviewCommitLocal {
 		collectDescription = rcStartDescription(ctx, prov, rcStageModel(rcStageIntent, model), authorContext, diff)
 	}
 
@@ -735,7 +813,11 @@ func runReviewCommit(cmd *cobra.Command, args []string) error {
 			// which means there is no review at all.
 			Partial        *bool     `json:"partial,omitempty"`
 			PartialReasons *[]string `json:"partialReasons,omitempty"`
-		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail(), run, partial, partialReasons}, "", "  ")
+			// Local is present only on a review run with --local: the models
+			// it was allowed, what it spent and what it compared against
+			// (review_local.go).
+			Local *rcLocalReport `json:"local,omitempty"`
+		}{f, prose, depth, incomplete, rcCoverageOf(inc), challenge, reason, rcEarlierOf(inc, incomplete), description, rcActiveDetail(), run, partial, partialReasons, rcLocalRun.report()}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling finding: %w", err)
 		}

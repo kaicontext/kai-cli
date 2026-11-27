@@ -13,6 +13,7 @@ require (
 	github.com/charmbracelet/x/exp/teatest v0.0.0-20260511125431-fe5d686e0c99
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/kaicontext/kai-core v0.1.2
+	github.com/mark3labs/mcp-go v0.45.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/sergi/go-diff v1.4.0
 	github.com/spf13/cobra v1.10.1
@@ -23,10 +24,17 @@ require (
 )
 
 require (
+	github.com/bahlo/generic-list-go v0.2.0 // indirect
+	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/go-git/go-git/v5 v5.19.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/klauspost/compress v1.18.7 // indirect
+	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/posthog/posthog-go v1.12.0 // indirect
+	github.com/spf13/cast v1.7.1 // indirect
+	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 )
 
@@ -61,7 +69,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
-	github.com/kaicontext/kai-engine v0.6.90
+	github.com/kaicontext/kai-engine v0.6.91-0.20261127071716-599b0892e742
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
