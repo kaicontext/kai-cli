@@ -1,0 +1,24 @@
+name: Actions
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  composite:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/local-composite
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+  docker:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: docker://alpine:3.20
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache
+          key: k

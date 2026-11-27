@@ -573,7 +573,9 @@ var ciCmd = &cobra.Command{
 Kai CI computes what targets (tests, builds, etc.) are affected by changes,
 outputting a neutral JSON plan that any CI system can consume.
 
-The CLI never runs tests or builds - it just determines what to run.`,
+'kai ci plan' never runs tests or builds - it just determines what to run.
+'kai ci run' is the one subcommand that runs things: it runs the repo's
+GitHub Actions jobs on this machine.`,
 }
 
 var ciPlanCmd = &cobra.Command{
@@ -3206,6 +3208,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Printf("%s remote 'origin' not configured\n", warn)
 	}
+
+	// Container runtime and act, for 'kai ci run'.
+	checkCIRunner(ok, warn)
 
 	// Claude/Codex session-ingest logging (.kai/loops).
 	checkAgentIngest(ok, warn, bad, doctorFix)
@@ -24277,12 +24282,8 @@ var ciRunsCmd = &cobra.Command{
 	RunE:  runCIRuns,
 }
 
-var ciRunCmd = &cobra.Command{
-	Use:   "run <run-id-or-number>",
-	Short: "Show CI run details with job status",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runCIRun,
-}
+// ciRunCmd lives in ci_run_local.go: `kai ci run` runs jobs locally, and
+// still shows a remote run (runCIRun) when given a run number or ID.
 
 var ciStatusCmd = &cobra.Command{
 	Use:   "status [snapshot-ref]",

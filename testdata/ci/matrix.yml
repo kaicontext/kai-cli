@@ -1,0 +1,46 @@
+name: Matrix
+on: push
+jobs:
+  linux-only:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04]
+        go: ['1.24', '1.25']
+    steps:
+      - run: go version
+  mixed:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: windows-latest
+            extra: true
+    steps:
+      - run: echo ${{ matrix.os }}
+  dynamic:
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    steps:
+      - run: echo hi
+  excluded:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: ['1.25']
+        exclude:
+          - os: macos-latest
+    steps:
+      - run: go version
+  excluded-partly:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: ['1.24', '1.25']
+        exclude:
+          - os: macos-latest
+            go: '1.24'
+    steps:
+      - run: go version
