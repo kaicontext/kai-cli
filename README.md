@@ -75,11 +75,19 @@ claude mcp add kai -- kai mcp serve
 | `kai_review` | Kai's review of this branch's unpushed commits plus your uncommitted work. Returns the findings with `file:line`. |
 | `kai_callers`, `kai_callees`, `kai_dependents`, `kai_dependencies`, `kai_context`, `kai_impact`, `kai_tests` | Queries on the semantic graph, for checking a finding. Served when the repository has a captured graph (`kai capture`). |
 
-`kai_review` runs on **your own Anthropic API key**: set `ANTHROPIC_API_KEY` to a key from
-the Claude Console. A Claude subscription sign-in is not an API key and is refused. Your
-diff, the review and the key are not sent to Kai. The fast review (the default) costs a
-few cents; a deep review returns its estimated cost first and runs only after you agree.
-Every review has a spending cap.
+`kai_review` runs on **your own model API key**. Set one of:
+
+| Key | Models the review runs |
+|-----|------------------------|
+| `ANTHROPIC_API_KEY` (from the Claude Console) | Claude Haiku 4.5 (fast), Claude Sonnet 5.5 (deep) |
+| `OPENROUTER_API_KEY` | the same two Claude models, through OpenRouter |
+| `OPENAI_API_KEY` | GPT-5.4 mini (fast), GPT-5.4 (deep) |
+
+With more than one set, the first in that order is used; choose with `--local-provider`
+(or the tool's `provider` argument). A Claude or ChatGPT subscription sign-in is not an
+API key and is refused. Your diff, the review and the key are not sent to Kai. The fast
+review (the default) costs a few cents; a deep review returns its estimated cost first and
+runs only after you agree. Every review has a spending cap.
 
 The same review is available from the terminal:
 
@@ -87,10 +95,12 @@ The same review is available from the terminal:
 kai review-commit --local             # fast review of unpushed + uncommitted work
 kai review-commit --local --estimate  # what it would cost, without running it
 kai review-commit --local --deep      # grounded review (needs `kai capture`); asks first
+kai review-commit --local --local-provider openai   # run on OPENAI_API_KEY
 ```
 
-A local review runs every stage on Claude models, so it is not the same set of reviewers
-as Kai's review on the pull request, which remains the check of record.
+A local review runs every stage on one vendor's models, so it is not the same set of
+reviewers as Kai's review on the pull request, which remains the check of record. The
+review's prompts are tuned on Claude; a review on the GPT models has not been benchmarked.
 
 ---
 

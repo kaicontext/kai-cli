@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestLocalProfileIsClaudeOnly(t *testing.T) {
 		if _, err := provider.AnthropicLocalReviewModel(s.Model); err != nil {
 			t.Errorf("stage %s: %v", stage, err)
 		}
-		if s.Effort != "" {
+		if s.Effort != rcEffortOff {
 			t.Errorf("stage %s sets effort %q; a bare claude- id carries none", stage, s.Effort)
 		}
 	}
@@ -76,7 +77,7 @@ func TestLocalMeterCapHoldsUnderConcurrency(t *testing.T) {
 	// One call's ceiling: Haiku 4.5 output is $5 per million tokens, so
 	// 20,000 allowed tokens is $0.10.
 	req := provider.Request{Model: "claude-haiku-4-5", MaxTokens: 20_000}
-	m := &rcLocalMeter{inner: slow, allowed: map[string]bool{"claude-haiku-4-5": true}, capUSD: 0.25}
+	m := &rcLocalMeter{backend: rcLocalBackends[0], inner: slow, allowed: map[string]bool{"claude-haiku-4-5": true}, capUSD: 0.25}
 	done := make(chan error, 3)
 	for i := 0; i < 3; i++ {
 		go func() { _, err := m.Send(context.Background(), req); done <- err }()
@@ -118,7 +119,7 @@ func TestLocalMeterFailedCallReleasesItsReservation(t *testing.T) {
 	failing := rcChallengeProvider{send: func(context.Context, provider.Request) (provider.Response, error) {
 		return provider.Response{}, context.DeadlineExceeded
 	}}
-	m := &rcLocalMeter{inner: failing, allowed: map[string]bool{"claude-haiku-4-5": true}, capUSD: 0.25}
+	m := &rcLocalMeter{backend: rcLocalBackends[0], inner: failing, allowed: map[string]bool{"claude-haiku-4-5": true}, capUSD: 0.25}
 	for i := 0; i < 5; i++ {
 		if _, err := m.Send(context.Background(), provider.Request{Model: "claude-haiku-4-5", MaxTokens: 20_000}); err != context.DeadlineExceeded {
 			t.Fatalf("call %d: %v", i, err)
@@ -138,7 +139,7 @@ func rcLocalReq(model string) provider.Request {
 // up what answers cost, and stops at the cap.
 func TestLocalMeter(t *testing.T) {
 	fake := &rcLocalFakeProvider{costUSD: 0.30}
-	m := &rcLocalMeter{inner: fake, allowed: map[string]bool{"claude-haiku-4-5": true}, capUSD: 0.50}
+	m := &rcLocalMeter{backend: rcLocalBackends[0], inner: fake, allowed: map[string]bool{"claude-haiku-4-5": true}, capUSD: 0.50}
 	ctx := context.Background()
 
 	for _, other := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "z-ai/glm-5.2", "claude-mystery-9000"} {
@@ -426,5 +427,204 @@ func TestLocalFlagsNeedLocal(t *testing.T) {
 	var none *rcLocalState
 	if none.report() != nil {
 		t.Error("a review that is not local reported a local object")
+	}
+}
+
+// rcLocalUse makes b the active backend for one test.
+func rcLocalUse(t *testing.T, b *rcLocalBackend) {
+	t.Helper()
+	old := rcLocalActive
+	rcLocalActive = b
+	t.Cleanup(func() { rcLocalActive = old })
+}
+
+func rcLocalBackendNamed(t *testing.T, name string) *rcLocalBackend {
+	t.Helper()
+	b, _, err := rcLocalPick(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// With no --local-provider the key that is set decides, Anthropic first, and
+// the keys passed over are reported. A name wins over what is set.
+func TestLocalPick(t *testing.T) {
+	for _, b := range rcLocalBackends {
+		t.Setenv(b.keyEnv, "")
+	}
+	if b, also, err := rcLocalPick(""); err != nil || b.name != "anthropic" || len(also) != 0 {
+		t.Errorf("no key set: %v %v %v", b, also, err)
+	}
+	t.Setenv("OPENAI_API_KEY", "sk-proj-x")
+	if b, also, _ := rcLocalPick(""); b.name != "openai" || len(also) != 0 {
+		t.Errorf("only an OpenAI key: picked %s, also %v", b.name, also)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-x")
+	if b, also, _ := rcLocalPick(""); b.name != "openrouter" || len(also) != 1 || also[0] != "OPENAI_API_KEY" {
+		t.Errorf("OpenRouter and OpenAI keys: picked %s, also %v", b.name, also)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-x")
+	if b, also, _ := rcLocalPick(""); b.name != "anthropic" || len(also) != 2 {
+		t.Errorf("all three keys: picked %s, also %v", b.name, also)
+	}
+	if b, also, _ := rcLocalPick(" OpenAI "); b.name != "openai" || len(also) != 0 {
+		t.Errorf("--local-provider openai: picked %s, also %v", b.name, also)
+	}
+	if _, _, err := rcLocalPick("gemini"); err == nil || !strings.Contains(err.Error(), "anthropic, openrouter, openai") {
+		t.Errorf("an unknown provider: %v", err)
+	}
+}
+
+// Every backend's two models resolve and are priced by that backend, its
+// profile names nothing else, and its estimate fits the default caps.
+func TestLocalBackendsAreSelfConsistent(t *testing.T) {
+	for _, b := range rcLocalBackends {
+		rcLocalUse(t, b)
+		for _, m := range []string{b.fast, b.deep} {
+			id, err := b.model(m)
+			if err != nil {
+				t.Errorf("%s: model %s: %v", b.name, m, err)
+				continue
+			}
+			if c, err := b.cost(id, 1000, 1000); err != nil || c <= 0 {
+				t.Errorf("%s: %s has no price: %v %v", b.name, id, c, err)
+			}
+		}
+		got := rcLocalModels(rcLocalProfile())
+		want := []string{b.deep, b.fast}
+		sort.Strings(want)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: profile models %v, want %v", b.name, got, want)
+		}
+		fast, deep := rcLocalEstimate(false, 30_000, 5), rcLocalEstimate(true, 30_000, 5)
+		if fast <= 0 || fast > rcLocalFastCapUSD || deep <= fast || deep > rcLocalDeepCapUSD {
+			t.Errorf("%s: estimates fast=$%.3f deep=$%.3f against caps $%.2f / $%.2f", b.name, fast, deep, rcLocalFastCapUSD, rcLocalDeepCapUSD)
+		}
+	}
+}
+
+// Each backend reads its own variable, refuses a sign-in token and a key
+// from another vendor, and its meter refuses the other backends' models.
+func TestLocalBackendKeys(t *testing.T) {
+	for _, b := range rcLocalBackends {
+		t.Setenv(b.keyEnv, "")
+	}
+	// A ChatGPT sign-in is a JWT.
+	openai := rcLocalBackendNamed(t, "openai")
+	rcLocalUse(t, openai)
+	if _, err := rcLocalProvider([]string{openai.fast}, 1); err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Errorf("no key: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "eyJhbGciOiJSUzI1NiJ9.x.y")
+	if _, err := rcLocalProvider([]string{openai.fast}, 1); err == nil || !strings.Contains(err.Error(), "sign-in token") {
+		t.Errorf("a sign-in token as the OpenAI key: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "sk-ant-api03-x")
+	if _, err := rcLocalProvider([]string{openai.fast}, 1); err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Errorf("an Anthropic key as the OpenAI key: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "sk-proj-ok")
+	m, err := rcLocalProvider([]string{openai.fast}, 1)
+	if err != nil {
+		t.Fatalf("an OpenAI key: %v", err)
+	}
+	if m.SupportsCache() || m.SupportsCacheForModel(openai.fast) {
+		t.Error("the GPT models were reported as taking cache breakpoints")
+	}
+	for _, other := range []string{"claude-haiku-4-5", "gpt-5.4", "gpt-6.2-sol"} {
+		if _, err := m.admit(rcLocalReq(other)); err == nil {
+			t.Errorf("a run started on %s admitted %s", openai.fast, other)
+		}
+	}
+	if _, err := rcLocalProvider([]string{"claude-haiku-4-5"}, 1); err == nil {
+		t.Error("a Claude model was accepted on an OpenAI key")
+	}
+
+	or := rcLocalBackendNamed(t, "openrouter")
+	rcLocalUse(t, or)
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-ok")
+	m, err = rcLocalProvider([]string{or.fast}, 1)
+	if err != nil {
+		t.Fatalf("an OpenRouter key: %v", err)
+	}
+	if !m.SupportsCacheForModel(or.fast) {
+		t.Error("Claude through OpenRouter was reported as cacheless")
+	}
+	// The bare id and the OpenRouter id are the same model.
+	if _, err := m.admit(rcLocalReq("claude-haiku-4-5")); err != nil {
+		t.Errorf("the bare spelling of the run's model was refused: %v", err)
+	}
+	if _, err := m.admit(rcLocalReq("openai/gpt-5.4")); err == nil {
+		t.Error("a GPT model was admitted on the OpenRouter backend")
+	}
+}
+
+// A fast review on an OpenAI key, end to end on a stand-in: it calls GPT-5.4
+// mini only and the bundle names the OpenAI provider.
+func TestLocalReviewEndToEndOpenAI(t *testing.T) {
+	dir := rcLocalRepo(t)
+	t.Chdir(dir)
+
+	fake := &rcLocalFakeProvider{costUSD: 0.02}
+	oldNew := rcLocalNewProvider
+	rcLocalNewProvider = func(string) (provider.Provider, error) { return fake, nil }
+	// An Anthropic key is set too: the flag decides.
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-test")
+	t.Setenv("OPENAI_API_KEY", "sk-proj-test")
+	t.Setenv("OPENROUTER_API_KEY", "")
+
+	oldKaiDir, oldFormat, oldBase, oldProfile, oldActive := kaiDir, reviewCommitFormat, reviewCommitBase, rcActiveProfile, rcLocalActive
+	kaiDir, reviewCommitFormat, reviewCommitLocal, reviewCommitLocalProvider = t.TempDir(), "json", true, "openai"
+	var stdout bytes.Buffer
+	reviewCommitCmd.SetOut(&stdout)
+	t.Cleanup(func() {
+		rcLocalNewProvider = oldNew
+		kaiDir, reviewCommitFormat, reviewCommitBase, rcActiveProfile, rcLocalActive = oldKaiDir, oldFormat, oldBase, oldProfile, oldActive
+		reviewCommitLocal, reviewCommitLocalProvider, rcLocalRun = false, "", nil
+		reviewCommitCmd.SetOut(nil)
+	})
+
+	if err := runReviewCommit(reviewCommitCmd, nil); err != nil {
+		t.Fatalf("local review: %v", err)
+	}
+	if len(fake.asked) == 0 {
+		t.Fatal("the review made no model call")
+	}
+	for _, m := range fake.asked {
+		if m != "gpt-5.4-mini" {
+			t.Errorf("the review called %s", m)
+		}
+	}
+	var bundle struct {
+		Local *rcLocalReport `json:"local"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &bundle); err != nil {
+		t.Fatalf("bundle: %v\n%s", err, stdout.String())
+	}
+	if l := bundle.Local; l == nil || l.Provider != string(provider.KindOpenAILocalReview) || len(l.Models) != 1 || l.Models[0] != "gpt-5.4-mini" {
+		t.Errorf("local = %+v", bundle.Local)
+	}
+}
+
+// An effort left in the shell does not reach a local review: every kept stage
+// names its own. Only the OpenAI backend's grounded stages ask for one.
+func TestLocalProfilePinsEffort(t *testing.T) {
+	t.Setenv("KAI_REVIEW_REASONING_EFFORT", "high")
+	oldProfile := rcActiveProfile
+	t.Cleanup(func() { rcActiveProfile = oldProfile })
+	for _, b := range rcLocalBackends {
+		rcLocalUse(t, b)
+		rcActiveProfile = rcLocalProfile()
+		for _, stage := range []string{rcStageQuickDraft, rcStageQuickFactcheck} {
+			if e := rcStageEffort(stage); e != "" {
+				t.Errorf("%s: fast stage %s runs at effort %q", b.name, stage, e)
+			}
+		}
+		for _, stage := range []string{rcStageIntent, rcStageMain, rcStageSweep, rcStageFactcheck, rcStageConclusion} {
+			if e := rcStageEffort(stage); e != b.deepEffort {
+				t.Errorf("%s: stage %s runs at effort %q, want %q", b.name, stage, e, b.deepEffort)
+			}
+		}
 	}
 }

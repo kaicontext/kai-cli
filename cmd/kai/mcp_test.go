@@ -214,3 +214,53 @@ func TestMCPChildWaitIsBoundedAfterCancel(t *testing.T) {
 		t.Fatal("the cancelled child was still being waited on after 10s")
 	}
 }
+
+// The provider argument reaches the child as --local-provider, the estimate
+// names the vendor whose key it is for, and a value outside the three is
+// refused before anything runs.
+func TestMCPReviewProvider(t *testing.T) {
+	f := &mcpFakeRun{bundle: mcpTestBundle}
+	if _, isErr := mcpReview(context.Background(), f.run, mcpReviewArgs{Provider: "openai"}); isErr {
+		t.Fatal("fast review on openai failed")
+	}
+	if len(f.calls) != 1 || !has(f.calls[0], "--local-provider") || !has(f.calls[0], "openai") {
+		t.Errorf("child flags: %v", f.calls)
+	}
+	if got := mcpVendor("openai-local-review"); got != "OpenAI" {
+		t.Errorf("vendor of a bundle provider = %q", got)
+	}
+	if got := mcpVendor("openrouter"); got != "OpenRouter" {
+		t.Errorf("vendor of a provider name = %q", got)
+	}
+	ran := false
+	h := mcpReviewHandler(func(context.Context, []string) (string, string, error) { ran = true; return "", "", nil })
+	res, err := h(context.Background(), mcpCall(map[string]any{"provider": "gemini"}))
+	if err != nil || res == nil || !res.IsError || ran {
+		t.Errorf("provider gemini: res=%+v err=%v ran=%v", res, err, ran)
+	}
+}
+
+// A backend's caveat reaches the agent on both results it can get: the deep
+// estimate and the finished review. The child prints it to stderr only, which
+// a successful call never reads.
+func TestMCPReviewCarriesTheBackendNote(t *testing.T) {
+	const note = "not benchmarked on GPT"
+	est, _ := json.Marshal(rcLocalEstimateReport{Provider: "openai", Depth: "deep", EstimateUSD: 1.2, CapUSD: 5, Models: []string{"gpt-5.4"}, ChangedFiles: 3, Note: note})
+	run := func(_ context.Context, flags []string) (string, string, error) {
+		if has(flags, "--estimate") {
+			return string(est), "", nil
+		}
+		return strings.Replace(mcpTestBundle, `"local":{`, `"local":{"note":"`+note+`",`, 1), "", nil
+	}
+	text, isErr := mcpReview(context.Background(), run, mcpReviewArgs{Deep: true, Provider: "openai"})
+	if isErr || !strings.Contains(text, note) || !strings.Contains(text, "OpenAI API key") {
+		t.Errorf("deep estimate: isErr=%v\n%s", isErr, text)
+	}
+	text, isErr = mcpReview(context.Background(), run, mcpReviewArgs{Provider: "openai"})
+	if isErr || !strings.Contains(text, note) {
+		t.Errorf("finished review: isErr=%v\n%s", isErr, text)
+	}
+	if mcpNoteLine("  ") != "" {
+		t.Error("an empty note printed a line")
+	}
+}
