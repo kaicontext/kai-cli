@@ -523,6 +523,10 @@ type rcLocalReport struct {
 	// reviewed commit was made from uncommitted work.
 	Base        string `json:"base,omitempty"`
 	WorkingTree bool   `json:"workingTree,omitempty"`
+	// Note is the backend's caveat about its models, when it has one. It is
+	// in the bundle because a caller that reads only the JSON (the MCP
+	// server) never sees what the run printed to stderr.
+	Note string `json:"note,omitempty"`
 }
 
 // rcLocalRun is the state of the local review in progress, nil for any other
@@ -545,7 +549,7 @@ func (s *rcLocalState) report() *rcLocalReport {
 	return &rcLocalReport{
 		Provider: string(s.backend.kind), Models: s.models,
 		SpentUSD: spent, CapUSD: s.meter.capUSD, Calls: calls,
-		Base: s.base, WorkingTree: s.workingTree,
+		Base: s.base, WorkingTree: s.workingTree, Note: s.backend.note,
 	}
 }
 
@@ -684,6 +688,8 @@ type rcLocalEstimateReport struct {
 	Models       []string `json:"models"`
 	Base         string   `json:"base,omitempty"`
 	ChangedFiles int      `json:"changedFiles"`
+	// Note is the backend's caveat about its models, when it has one.
+	Note string `json:"note,omitempty"`
 }
 
 // rcLocalPrintEstimate is `review-commit --local --estimate`: the figure a
@@ -694,7 +700,7 @@ func rcLocalPrintEstimate(w io.Writer, deep bool, est, capUSD float64, models []
 		depth = "deep"
 	}
 	if reviewCommitFormat == "json" {
-		out, err := json.MarshalIndent(rcLocalEstimateReport{rcLocalActive.name, depth, est, capUSD, models, base, files}, "", "  ")
+		out, err := json.MarshalIndent(rcLocalEstimateReport{rcLocalActive.name, depth, est, capUSD, models, base, files, rcLocalActive.note}, "", "  ")
 		if err != nil {
 			return err
 		}

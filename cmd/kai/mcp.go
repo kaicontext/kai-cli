@@ -301,7 +301,7 @@ func mcpReview(ctx context.Context, run mcpReviewRunner, a mcpReviewArgs) (text 
 			return "Kai could not read its own estimate: " + err.Error(), true
 		}
 		if a.ConfirmedUSD <= 0 || a.ConfirmedUSD+0.005 < est.EstimateUSD {
-			return fmt.Sprintf("A deep Kai review of this change (%d file(s)) is estimated at about $%.2f on the user's own %s API key, "+
+			return mcpNoteLine(est.Note) + fmt.Sprintf("A deep Kai review of this change (%d file(s)) is estimated at about $%.2f on the user's own %s API key, "+
 				"on %s, and would stop at $%.2f.\n\nNothing has been run. Show the user this figure. If they agree, call kai_review "+
 				"again with depth \"deep\" and confirmed_cost_usd %.2f. The fast review (depth \"fast\") costs a few cents and needs no confirmation.",
 				est.ChangedFiles, est.EstimateUSD, mcpVendor(est.Provider), strings.Join(est.Models, ", "), est.CapUSD, est.EstimateUSD), false
@@ -376,6 +376,9 @@ func mcpRenderReview(stdout, stderr string, failed bool) (string, bool) {
 		fmt.Fprintf(&w, "\nSpent about $%.3f of the user's %s credit over %d call(s) on %s (list prices; cap $%.2f).\n",
 			b.Local.SpentUSD, mcpVendor(b.Local.Provider), b.Local.Calls, strings.Join(b.Local.Models, ", "), b.Local.CapUSD)
 	}
+	if b.Local != nil {
+		w.WriteString(mcpNoteLine(b.Local.Note))
+	}
 	w.WriteString("Kai's review on the pull request is still the check of record.\n")
 	return w.String(), failed && b.Incomplete && strings.TrimSpace(b.Review) == ""
 }
@@ -411,4 +414,13 @@ func mcpVendor(provider string) string {
 		}
 	}
 	return "model"
+}
+
+// mcpNoteLine is a local backend's caveat as a line for the agent to pass on,
+// or nothing.
+func mcpNoteLine(note string) string {
+	if strings.TrimSpace(note) == "" {
+		return ""
+	}
+	return "Note for the user: " + strings.TrimSpace(note) + ".\n"
 }
