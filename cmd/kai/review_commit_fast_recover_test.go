@@ -59,16 +59,44 @@ func TestFastRecoverIssues(t *testing.T) {
 	}
 }
 
-// A renamed file is in the changed paths under numstat's "old => new"
-// spelling; a concern written against its new path is still recovered.
+// A renamed file's entry in the changed paths is a fragment of numstat's
+// "{old => new}" form; a concern written against its new path is still
+// recovered, from the diff's file headers.
 func TestFastRecoverIssuesOnARenamedFile(t *testing.T) {
 	diff := "diff --git a/cmd/kai/old.go b/cmd/kai/new.go\nsimilarity index 90%\nrename from cmd/kai/old.go\nrename to cmd/kai/new.go\n--- a/cmd/kai/old.go\n+++ b/cmd/kai/new.go\n@@ -1 +1 @@\n-a\n+b\n"
-	numstat := []string{"cmd/kai/{old.go => new.go}"}
+	numstat := []string{"cmd/kai/{old.go"}
 	draft := "Renamed and changed.\n\ncmd/kai/new.go:1 — The value is now wrong. (severity: high)\n\nMERGE_READY: 2"
 	if _, n := rcFastRecoverIssues(draft, numstat); n != 0 {
 		t.Fatalf("the numstat spelling alone matched (n=%d): the test no longer shows the gap", n)
 	}
 	if _, n := rcFastRecoverIssues(draft, rcFastDiffPaths(diff, numstat)); n != 1 {
 		t.Errorf("a concern about a renamed file was not recovered (n=%d)", n)
+	}
+}
+
+func TestFastDiffPaths(t *testing.T) {
+	has := func(paths []string, want string) bool {
+		for _, p := range paths {
+			if p == want {
+				return true
+			}
+		}
+		return false
+	}
+	// A pure rename and a mode change have no "+++ b/" line.
+	diff := "diff --git a/a/old.go b/a/new.go\nsimilarity index 100%\nrename from a/old.go\nrename to a/new.go\n" +
+		"diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n" +
+		// An added line of content that reads like a header names no file.
+		"diff --git a/doc.md b/doc.md\n--- a/doc.md\n+++ b/doc.md\n@@ -1 +1,2 @@\n text\n+++ b/not/in/the/change.go\n+diff --git a/x b/also/not.go\n"
+	got := rcFastDiffPaths(diff, nil)
+	for _, want := range []string{"a/new.go", "run.sh", "doc.md"} {
+		if !has(got, want) {
+			t.Errorf("%s missing from %v", want, got)
+		}
+	}
+	for _, not := range []string{"not/in/the/change.go", "also/not.go"} {
+		if has(got, not) {
+			t.Errorf("%s was read out of file content: %v", not, got)
+		}
 	}
 }

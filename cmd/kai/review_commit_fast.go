@@ -412,16 +412,27 @@ func rcFastRecoverIssues(draft string, changedPaths []string) (string, int) {
 
 // rcFastDiffPaths is every path a concern about this diff may be written
 // against: the changed paths as given, plus each file's new-side path from
-// the diff's own "+++ b/" headers. The two differ for a renamed file, where
-// the changed paths carry git numstat's "old => new" spelling and the diff,
-// which is what the model read, carries the new path.
+// the diff's own file headers. The two differ for a renamed file, whose entry
+// in the changed paths is a fragment of git numstat's "{old => new}" form
+// while the diff, which is what the model read, names the new path.
+//
+// The paths are read from "diff --git a/… b/…" and "rename to …" lines. Those
+// exist for every file, including a pure rename, a mode change and a binary
+// file, which have no "+++ b/" line; and no line of file content can be
+// mistaken for one, since content lines begin with "+", "-" or a space.
 func rcFastDiffPaths(diff string, changedPaths []string) []string {
 	out := append([]string{}, changedPaths...)
 	for _, ln := range strings.Split(diff, "\n") {
-		if p, ok := strings.CutPrefix(ln, "+++ b/"); ok {
-			if p = strings.TrimSpace(p); p != "" {
-				out = append(out, p)
+		p := ""
+		if rest, ok := strings.CutPrefix(ln, "diff --git a/"); ok {
+			if i := strings.LastIndex(rest, " b/"); i >= 0 {
+				p = rest[i+len(" b/"):]
 			}
+		} else if rest, ok := strings.CutPrefix(ln, "rename to "); ok {
+			p = rest
+		}
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
 		}
 	}
 	return out
