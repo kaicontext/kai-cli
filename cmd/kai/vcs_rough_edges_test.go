@@ -181,7 +181,7 @@ func TestGitImportSkipsPurgedFiles(t *testing.T) {
 	defer db.Close()
 	initMode = true
 	defer func() { initMode = false }()
-	if err := runGitImport(db); err != nil {
+	if err := runGitImport(db, nil); err != nil {
 		t.Fatal(err)
 	}
 	r, _ := ref.NewRefManager(db).Get("git.HEAD")
@@ -222,7 +222,7 @@ func TestGitImportAppliesIgnoreRules(t *testing.T) {
 	defer db.Close()
 	initMode = true
 	defer func() { initMode = false }()
-	if err := runGitImport(db); err != nil {
+	if err := runGitImport(db, nil); err != nil {
 		t.Fatal(err)
 	}
 	r, _ := ref.NewRefManager(db).Get("git.HEAD")

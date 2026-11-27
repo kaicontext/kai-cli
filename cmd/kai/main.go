@@ -439,7 +439,7 @@ Examples:
 		if importAll {
 			importMaxCommits = 999999
 		}
-		return runGitImport(db)
+		return runGitImport(db, nil)
 	},
 }
 
@@ -5103,90 +5103,6 @@ func cDim(s string) string {
 	return "\033[2m" + s + "\033[0m"
 }
 
-// spinner runs an animated gradient pulse on stderr while work happens.
-// A soft glow bounces across a short bar — subtle, not flashy.
-//
-//	stop := spinner("Building semantic graph")
-//	err := doWork()
-//	stop(err)
-func spinner(label string) func(error) {
-	const barWidth = 16
-	const pulseHalf = 3
-
-	// Soft blue gradient — visible but not loud
-	pulseColors := []string{"240", "246", "74", "81", "74", "246"}
-	dimColor := "238"
-
-	iabs := func(x int) int {
-		if x < 0 {
-			return -x
-		}
-		return x
-	}
-
-	renderBar := func(pos int) string {
-		var b strings.Builder
-		for i := 0; i < barWidth; i++ {
-			dist := iabs(i - pos)
-			if dist > pulseHalf {
-				if stderrColor {
-					fmt.Fprintf(&b, "\033[38;5;%sm─\033[0m", dimColor)
-				} else {
-					b.WriteRune('─')
-				}
-			} else {
-				lvl := pulseHalf - dist
-				idx := lvl * (len(pulseColors) - 1) / pulseHalf
-				if stderrColor {
-					fmt.Fprintf(&b, "\033[38;5;%sm─\033[0m", pulseColors[idx])
-				} else {
-					b.WriteRune('━')
-				}
-			}
-		}
-		return b.String()
-	}
-
-	// Render first frame immediately so it's visible even for fast tasks
-	fmt.Fprintf(os.Stderr, "\r  %s %s\033[K", renderBar(0), label)
-
-	done := make(chan struct{})
-	go func() {
-		pos := 1
-		dir := 1
-		for {
-			select {
-			case <-done:
-				return
-			default:
-				time.Sleep(45 * time.Millisecond)
-				fmt.Fprintf(os.Stderr, "\r  %s %s\033[K", renderBar(pos), label)
-				pos += dir
-				if pos >= barWidth-1 {
-					dir = -1
-				} else if pos <= 0 {
-					dir = 1
-				}
-			}
-		}
-	}()
-
-	return func(err error) {
-		close(done)
-		time.Sleep(50 * time.Millisecond)
-
-		if err != nil {
-			errMsg := err.Error()
-			if len(errMsg) > 60 {
-				errMsg = errMsg[:57] + "..."
-			}
-			fmt.Fprintf(os.Stderr, "\r  %s %s %s\033[K\n", cRed("✗"), label, cDim(errMsg))
-		} else {
-			fmt.Fprintf(os.Stderr, "\r  %s %s\033[K\n", cGreen("✓"), label)
-		}
-	}
-}
-
 // personalSlug derives the personal-org slug from an email's local-part
 // (lowercased, dots → hyphens) — the same derivation the server uses when it
 // auto-creates a user's personal org.
@@ -5900,9 +5816,10 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 		if !initNoHistory {
 			if countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output(); err == nil {
 				if count, _ := strconv.Atoi(strings.TrimSpace(string(countOut))); count > 0 {
-					stop := spinner("Importing git history")
-					importErr := runGitImport(db)
-					stop(importErr)
+					importProgressBar := newProgressBar("Importing git history", 20)
+					importProgressBar.start()
+					importErr := runGitImport(db, importProgressBar)
+					importProgressBar.finish(importErr)
 				}
 			}
 		}
@@ -5921,9 +5838,10 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 	}
 
 	// ── Step 4: Run first capture to build the semantic graph ──
-	stop := spinner("Building semantic graph")
-	captureErr := runCapture(cmd, []string{"."})
-	stop(captureErr)
+	graphProgressBar := newProgressBar("Building semantic graph", 20)
+	graphProgressBar.start()
+	captureErr := runCaptureWithProgress(cmd, []string{"."}, graphProgressBar)
+	graphProgressBar.finish(captureErr)
 
 	// --no-remote: stop after the local graph build. Skips signup/login,
 	// repo linking, and the automatic push — for users who want kai's
@@ -6151,9 +6069,10 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 				writeRepoRegistrationMarker(serverURL, selectedOrg.Slug, projectName)
 
 				// Push the semantic graph automatically
-				stop := spinner("Pushing to kaicontext.com")
+				pushProgressBar := newProgressBar("Pushing to kaicontext.com", 0)
+				pushProgressBar.start()
 				pushErr := runPush(cmd, []string{"origin"})
-				stop(pushErr)
+				pushProgressBar.finish(pushErr)
 			}
 		}
 	}
@@ -6423,8 +6342,9 @@ func writeAIContextFiles() {
 	}
 }
 
-// runGitImport replays git history as semantic snapshots.
-func runGitImport(db *graph.DB) error {
+// runGitImport replays git history as semantic snapshots. A non-nil
+// importProgressBar is told after each commit how much of the import is done.
+func runGitImport(db *graph.DB, importProgressBar *progressBar) error {
 	// Get commit count
 	countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output()
 	if err != nil {
@@ -6530,6 +6450,10 @@ func runGitImport(db *graph.DB) error {
 		// Store commit message for push
 		os.MkdirAll(kaiDir, 0755)
 		os.WriteFile(filepath.Join(kaiDir, "message"), []byte(msg), 0644)
+
+		if importProgressBar != nil {
+			importProgressBar.progress(float64(i+1) / float64(len(commits)))
+		}
 	}
 
 	if graphRefsErr == nil && lastImported != "" {
@@ -6947,7 +6871,14 @@ func acquireCaptureLock(kaiDir string) (func(), error) {
 // (no such process, permission denied — which on macOS also means
 // the process is gone for non-root callers since the PID has been
 // reused or freed).
-func runCapture(cmd *cobra.Command, args []string) (err error) {
+func runCapture(cmd *cobra.Command, args []string) error {
+	return runCaptureWithProgress(cmd, args, nil)
+}
+
+// runCaptureWithProgress is runCapture for kai init: a non-nil
+// graphProgressBar is told how much of the semantic graph build is done as
+// files are parsed.
+func runCaptureWithProgress(cmd *cobra.Command, args []string, graphProgressBar *progressBar) (err error) {
 	te := telemetry.NewEvent("capture")
 	defer func() { finishCommand(te, err) }()
 
@@ -7161,6 +7092,13 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 		debugf("Step 2/2: Analyzing...")
 		phaseStart = time.Now()
 		progress := func(current, total int, filename string) {
+			if graphProgressBar != nil {
+				// Parsing is the only part of the graph build that can be
+				// counted. It fills the first 80%; the import and call-edge
+				// passes after it take the rest, which finish reports.
+				graphProgressBar.progress(0.8 * float64(current) / float64(total))
+				return
+			}
 			if initMode {
 				return
 			}
