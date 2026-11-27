@@ -1,0 +1,9 @@
+name: Reusable
+on:
+  push:
+    tags: ['v*']
+jobs:
+  local:
+    uses: ./.github/workflows/run-only.yml
+  remote:
+    uses: octo-org/shared/.github/workflows/build.yml@v2

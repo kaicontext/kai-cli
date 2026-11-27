@@ -1,0 +1,44 @@
+name: Limits
+on:
+  pull_request:
+    paths-ignore: ['docs/**', '**.md']
+env:
+  REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+jobs:
+  services:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+    steps:
+      - run: psql --version
+  mac:
+    runs-on: macos-latest
+    steps:
+      - run: sw_vers
+  windows:
+    runs-on: windows-latest
+    steps:
+      - run: ver
+  self-hosted:
+    runs-on: [self-hosted, linux]
+    steps:
+      - run: uname
+  oidc:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - run: echo deploy
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: echo deploy
+  secret:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

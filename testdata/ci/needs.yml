@@ -1,0 +1,28 @@
+name: Needs
+on:
+  push:
+    paths: ['src/**', '!src/docs/**']
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - run: echo test
+  package:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - run: echo package
+  mac:
+    runs-on: macos-14
+    steps:
+      - run: echo mac
+  notarize:
+    runs-on: ubuntu-latest
+    needs: [mac]
+    steps:
+      - run: echo notarize
