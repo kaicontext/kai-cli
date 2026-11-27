@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -208,6 +209,12 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 		}
 	}
 	draft := strings.TrimSpace(out.String())
+	if reviewCommitLocal {
+		if d, n := rcFastRecoverIssues(draft, changedPaths); n > 0 {
+			fmt.Fprintf(os.Stderr, "  draft had no ISSUES list; %d issue(s) recovered from its prose for the fact-check\n", n)
+			draft = d
+		}
+	}
 	fmt.Fprintf(os.Stderr, "  challenge model: requested %s (draft was requested from %s)\n", challengeModel, model)
 	res, err := rcChallengeReview(cctx, prov, challengeModel, draft, []rcSource{rcPromptSource(user.String())}, rcConfiguredSandbox())
 	if err != nil {
@@ -352,4 +359,53 @@ func rcHedgePhrase(item string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// rcFastIssueLine is a concern written the way an ISSUES bullet is: a
+// location, a dash, the sentence, and the severity label that the prompt
+// reserves for the coda.
+var rcFastIssueLine = regexp.MustCompile("^(?:[-*]\\s+)?(nit:\\s+)?`?([^\\s`:]+):(\\d+)`?\\s+[—–-]\\s+(.+\\(severity:\\s*(?:high|medium|low)\\))\\s*$")
+
+// rcFastRecoverIssues gives a draft that has concerns and no ISSUES list the
+// list it left out. It returns the draft unchanged, and 0, when the draft
+// already lists an issue or a decision, or has no line shaped like one.
+//
+// GPT-5.4 mini does this on most fast passes (8 of 9 on 2026-11-27, on an
+// OpenAI key): each concern is a paragraph of its own, written exactly as a
+// bullet would be, "path:line — what is wrong (severity: high)", and the coda
+// stops after MERGE_READY. With no list the fact-check has nothing to check,
+// so those concerns were printed unchecked and counted as zero findings.
+//
+// Only a line that starts with a path from this diff and ends with a severity
+// label is taken. The prompt tells the model to keep severity labels out of
+// the prose, so a paragraph that carries one was meant as a bullet.
+func rcFastRecoverIssues(draft string, changedPaths []string) (string, int) {
+	if _, issues, decisions, _, _, _ := rcParseReviewOutput(draft); len(issues) > 0 || len(decisions) > 0 {
+		return draft, 0
+	}
+	changed := map[string]bool{}
+	for _, p := range changedPaths {
+		changed[p] = true
+	}
+	var bullets []string
+	seen := map[string]bool{}
+	for _, ln := range strings.Split(draft, "\n") {
+		ln = strings.TrimSpace(ln)
+		m := rcFastIssueLine.FindStringSubmatch(ln)
+		if m == nil || !changed[m[2]] {
+			continue
+		}
+		// Rebuilt in the coda's own spelling, whatever the prose used for
+		// the list marker, the backticks and the dash.
+		bullet := m[1] + m[2] + ":" + m[3] + " — " + m[4]
+		if seen[bullet] {
+			continue
+		}
+		seen[bullet] = true
+		bullets = append(bullets, "- "+bullet)
+	}
+	if len(bullets) == 0 {
+		return draft, 0
+	}
+	return draft + "\nISSUES:\n" + strings.Join(bullets, "\n"), len(bullets)
 }
