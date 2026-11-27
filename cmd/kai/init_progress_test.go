@@ -30,16 +30,13 @@ func noColor(t *testing.T) {
 }
 
 // The graph build's parse count fills 0–80% in 20% steps and finishing
-// supplies 100%, the way kai init wires it.
+// supplies 100%, as runCaptureWithProgress reports it.
 func TestInitStepPlainGraphBuild(t *testing.T) {
 	noColor(t)
 	var buf bytes.Buffer
 	s := newStep(&buf, "Building semantic graph", 20, false)
-	initProgress = func(parsed float64) { s.progress(0.8 * parsed) }
-	t.Cleanup(func() { initProgress = nil })
-
 	for file := 1; file <= 10; file++ {
-		reportInitProgress(file, 10)
+		s.progress(0.8 * float64(file) / 10)
 	}
 	s.finish(nil)
 
@@ -124,9 +121,4 @@ func TestStderrInteractiveDumbTerminal(t *testing.T) {
 	if stderrInteractive() {
 		t.Fatal("TERM=dumb counted as interactive")
 	}
-}
-
-func TestReportInitProgressWithoutListener(t *testing.T) {
-	initProgress = nil
-	reportInitProgress(1, 2) // must not panic
 }

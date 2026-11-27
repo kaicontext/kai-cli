@@ -439,7 +439,7 @@ Examples:
 		if importAll {
 			importMaxCommits = 999999
 		}
-		return runGitImport(db)
+		return runGitImport(db, nil)
 	},
 }
 
@@ -5817,10 +5817,7 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 			if countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output(); err == nil {
 				if count, _ := strconv.Atoi(strings.TrimSpace(string(countOut))); count > 0 {
 					step := startStep("Importing git history", 20)
-					initProgress = step.progress
-					importErr := runGitImport(db)
-					initProgress = nil
-					step.finish(importErr)
+					step.finish(runGitImport(db, step))
 				}
 			}
 		}
@@ -5839,14 +5836,8 @@ CREATE INDEX IF NOT EXISTS authorship_file ON authorship_ranges(snapshot_id, fil
 	}
 
 	// ── Step 4: Run first capture to build the semantic graph ──
-	// Parsing files is the part of the graph build that can be counted; the
-	// import and call-edge passes after it report nothing. Parsing fills the
-	// first 80% and finishing the step supplies the rest.
 	graphStep := startStep("Building semantic graph", 20)
-	initProgress = func(parsed float64) { graphStep.progress(0.8 * parsed) }
-	captureErr := runCapture(cmd, []string{"."})
-	initProgress = nil
-	graphStep.finish(captureErr)
+	graphStep.finish(runCaptureWithProgress(cmd, []string{"."}, graphStep))
 
 	// --no-remote: stop after the local graph build. Skips signup/login,
 	// repo linking, and the automatic push — for users who want kai's
@@ -6346,8 +6337,9 @@ func writeAIContextFiles() {
 	}
 }
 
-// runGitImport replays git history as semantic snapshots.
-func runGitImport(db *graph.DB) error {
+// runGitImport replays git history as semantic snapshots. A non-nil step
+// is told after each commit how much of the import is done.
+func runGitImport(db *graph.DB, step *initStep) error {
 	// Get commit count
 	countOut, err := exec.Command("git", "rev-list", "--count", "HEAD").Output()
 	if err != nil {
@@ -6454,7 +6446,9 @@ func runGitImport(db *graph.DB) error {
 		os.MkdirAll(kaiDir, 0755)
 		os.WriteFile(filepath.Join(kaiDir, "message"), []byte(msg), 0644)
 
-		reportInitProgress(i+1, len(commits))
+		if step != nil {
+			step.progress(float64(i+1) / float64(len(commits)))
+		}
 	}
 
 	if graphRefsErr == nil && lastImported != "" {
@@ -6872,7 +6866,13 @@ func acquireCaptureLock(kaiDir string) (func(), error) {
 // (no such process, permission denied — which on macOS also means
 // the process is gone for non-root callers since the PID has been
 // reused or freed).
-func runCapture(cmd *cobra.Command, args []string) (err error) {
+func runCapture(cmd *cobra.Command, args []string) error {
+	return runCaptureWithProgress(cmd, args, nil)
+}
+
+// runCaptureWithProgress is runCapture for kai init: a non-nil step is told
+// how much of the semantic graph build is done as files are parsed.
+func runCaptureWithProgress(cmd *cobra.Command, args []string, step *initStep) (err error) {
 	te := telemetry.NewEvent("capture")
 	defer func() { finishCommand(te, err) }()
 
@@ -7086,8 +7086,14 @@ func runCapture(cmd *cobra.Command, args []string) (err error) {
 		debugf("Step 2/2: Analyzing...")
 		phaseStart = time.Now()
 		progress := func(current, total int, filename string) {
+			if step != nil {
+				// Parsing is the only part of the graph build that can be
+				// counted. It fills the first 80%; the import and call-edge
+				// passes after it take the rest, which step.finish reports.
+				step.progress(0.8 * float64(current) / float64(total))
+				return
+			}
 			if initMode {
-				reportInitProgress(current, total)
 				return
 			}
 			display := filename

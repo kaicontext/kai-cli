@@ -10,21 +10,6 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-// initProgress receives the share of the running kai init step's counted
-// work that is done, from 0 to 1. kai init sets it around the git history
-// import (per commit) and the first capture (per file parsed); it is nil
-// the rest of the time, so `kai import` and `kai capture` run on their own
-// report nothing through it.
-var initProgress func(done float64)
-
-// reportInitProgress passes done/total to initProgress when kai init is
-// listening.
-func reportInitProgress(done, total int) {
-	if initProgress != nil && total > 0 {
-		initProgress(float64(done) / float64(total))
-	}
-}
-
 // stderrInteractive reports whether stderr is a terminal that can redraw a
 // line in place. TERM=dumb terminals (Emacs shell, some CI runners) are
 // terminals but don't honour the erase-line escape.
@@ -44,9 +29,9 @@ func stderrInteractive() bool {
 // crosses a multiple of pctStep, starting at 0%. A step that can't measure
 // its progress (pctStep 0) prints "label..." once.
 //
-//	s := startStep("Importing git history", 20)
-//	err := doWork(s.progress)
-//	s.finish(err)
+//	step := startStep("Importing git history", 20)
+//	err := runGitImport(db, step) // calls step.progress as commits land
+//	step.finish(err)
 type initStep struct {
 	w       io.Writer
 	label   string

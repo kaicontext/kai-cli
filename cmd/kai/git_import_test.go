@@ -67,7 +67,7 @@ func TestGitImportMapsEveryCommitFromGitObjects(t *testing.T) {
 	defer db.Close()
 	initMode = true
 	defer func() { initMode = false }()
-	if err := runGitImport(db); err != nil {
+	if err := runGitImport(db, nil); err != nil {
 		t.Fatalf("runGitImport: %v", err)
 	}
 
