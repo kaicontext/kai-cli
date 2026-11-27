@@ -59,38 +59,40 @@ func ReadGit(ctx context.Context, dir, base string) (*GitInfo, error) {
 	}
 	gi.Branch, _ = git(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
 
-	candidates := []string{base}
-	if base == "" {
-		candidates = nil
-		if ref, err := git(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil && ref != "" {
-			candidates = append(candidates, ref)
-		}
-		candidates = append(candidates, "origin/main", "main", "origin/master", "master")
+	// The repo's default branch: origin/HEAD when there is one, else the
+	// first of the usual names that exists. It does not depend on --base.
+	exists := func(ref string) bool {
+		_, err := git(ctx, root, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+		return err == nil
 	}
-	for _, ref := range candidates {
-		if _, err := git(ctx, root, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
-			continue
+	defaultRef := ""
+	if ref, err := git(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil && ref != "" && exists(ref) {
+		defaultRef = ref
+	} else {
+		for _, ref := range []string{"origin/main", "main", "origin/master", "master"} {
+			if exists(ref) {
+				defaultRef = ref
+				break
+			}
 		}
-		mb, err := git(ctx, root, "merge-base", ref, "HEAD")
-		if err != nil {
-			continue
+	}
+	gi.DefaultBranch = strings.TrimPrefix(defaultRef, "origin/")
+	if gi.DefaultBranch == "" {
+		gi.DefaultBranch = "main"
+	}
+
+	// The diff base: --base, or the default branch.
+	baseRef := base
+	if baseRef == "" {
+		baseRef = defaultRef
+	}
+	if baseRef != "" && exists(baseRef) {
+		if mb, err := git(ctx, root, "merge-base", baseRef, "HEAD"); err == nil {
+			gi.BaseRef, gi.BaseSHA = baseRef, mb
 		}
-		gi.BaseRef, gi.BaseSHA = ref, mb
-		break
 	}
 	if base != "" && gi.BaseRef == "" {
 		return nil, fmt.Errorf("--base %s: not a commit, or it shares no history with HEAD", base)
-	}
-	// The repo's default branch is origin/HEAD when there is one; otherwise
-	// the base that was found by default is the best guess.
-	if ref, err := git(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		gi.DefaultBranch = strings.TrimPrefix(ref, "origin/")
-	}
-	if gi.DefaultBranch == "" && base == "" {
-		gi.DefaultBranch = strings.TrimPrefix(gi.BaseRef, "origin/")
-	}
-	if gi.DefaultBranch == "" {
-		gi.DefaultBranch = "main"
 	}
 	// A pull request targets the default branch unless --base names another
 	// branch. A --base that is a commit or an expression (HEAD~3) moves the

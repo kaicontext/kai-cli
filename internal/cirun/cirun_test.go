@@ -891,3 +891,21 @@ func TestBaseFlagSetsThePullRequestTarget(t *testing.T) {
 		t.Errorf("actions.yml targets main, so it should be skipped: %+v", r)
 	}
 }
+
+func TestDefaultBranchDoesNotDependOnBase(t *testing.T) {
+	dir := testRepo(t)
+	ctx := context.Background()
+	// A repo whose default branch is master, with no origin/HEAD to say so.
+	if _, err := git(ctx, dir, "branch", "-m", "main", "master"); err != nil {
+		t.Fatal(err)
+	}
+	for _, base := range []string{"", "HEAD~1"} {
+		gi, err := ReadGit(ctx, dir, base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gi.DefaultBranch != "master" || gi.BaseBranch != "master" || gi.BaseSHA == "" {
+			t.Errorf("--base %q: default %q, target %q, base sha %q", base, gi.DefaultBranch, gi.BaseBranch, gi.BaseSHA)
+		}
+	}
+}
