@@ -40,7 +40,7 @@ We follow coordinated disclosure — we ask reporters to keep details private un
 
 ## Scope
 
-This policy covers the Kai open-source repository, including:
+This policy covers the Kai repository, including:
 
 - `kai-cli` (CLI binary)
 - `kai-core` (core engine)
