@@ -128,6 +128,22 @@ DECISIONS:
 EARLIER: (only when YOUR PREVIOUS REVIEW is present — one line per earlier ref)
 - <ref>: open | fixed at path:line — <what fixed it> | wrong — <why>`
 
+// rcReviewTriggerClause* let KAI_REVIEW_LATENT_DEFECTS relax the "trigger must
+// exist today" contract in the deep finder so it RAISES wrong-as-written latent
+// defects (which the offline benchmark scores as true positives). The default
+// is a verbatim substring of rcReviewSystem; the accessor returns the shipped
+// prompt untouched when the flag is off.
+const rcReviewTriggerClauseDefault = `A DEFECT NEEDS A TRIGGER THAT EXISTS TODAY: a reachable trigger (an input, caller, configuration or state that reaches the line now) and the failure mechanism to the wrong result. A failure needing someone to change code first is not one.`
+
+const rcReviewTriggerClauseLatent = `A DEFECT IS CODE THAT IS WRONG AS WRITTEN: a trigger (an input, caller, configuration or state) and the failure mechanism to the wrong result. The trigger may reach the line now or may have to be added: report a latent one and name the latency in the finding ("dormant: only the SMS handler writes retryCount today, but the delete removes the e-mail and WhatsApp rows the moment another handler increments it"). Only a concern whose code is CORRECT as written and breaks solely after someone rewrites it — "would break if the guards were reordered" — stays out. Raise a latent one only when it is a real bug, security, data or concurrency defect with a concrete consequence; a cosmetic, style, comment or documentation latent nicety is not worth an ISSUES slot. A test runs today, so a test that asserts the wrong value, uses wrong test data or cannot fail is a defect now, not a latent one.`
+
+func rcReviewSystemText() string {
+	if !rcLatentDefectsEnabled() {
+		return rcReviewSystem
+	}
+	return strings.Replace(rcReviewSystem, rcReviewTriggerClauseDefault, rcReviewTriggerClauseLatent, 1)
+}
+
 const rcMaxAuthorContextBytes = 8 * 1024
 
 // Review time contract. The reviewer rides the shared agent runner, which has
@@ -1166,7 +1182,7 @@ func rcRunReviewAgent(ctx context.Context, set *projects.Set, prov provider.Prov
 		// read-only tool set (+ kai_impact / kai_diff). ReadOnly is belt and
 		// braces on top of the mode's whitelist.
 		Mode:       agent.ModeReview,
-		System:     rcReviewSystem,
+		System:     rcReviewSystemText(),
 		ReadOnly:   true,
 		EnableBash: false,
 		MaxTurns:   maxTurns,
@@ -2171,7 +2187,7 @@ func rcConcludeWithModel(ctx context.Context, prov provider.Provider, stage, mod
 		defer cancel()
 		return rcSend(rcCostStage(cctx, stage), prov, provider.Request{
 			Model:           model,
-			System:          rcReviewSystem,
+			System:          rcReviewSystemText(),
 			MaxTokens:       rcTokensFor(2500, rcStageEffort(rcStageConclusion)),
 			Messages:        m,
 			ReasoningEffort: rcStageEffort(rcStageConclusion),
