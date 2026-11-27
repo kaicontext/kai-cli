@@ -58,3 +58,17 @@ func TestFastRecoverIssues(t *testing.T) {
 		t.Errorf("a bulleted, backticked, repeated line gave %d issues:\n%s", n, d)
 	}
 }
+
+// A renamed file is in the changed paths under numstat's "old => new"
+// spelling; a concern written against its new path is still recovered.
+func TestFastRecoverIssuesOnARenamedFile(t *testing.T) {
+	diff := "diff --git a/cmd/kai/old.go b/cmd/kai/new.go\nsimilarity index 90%\nrename from cmd/kai/old.go\nrename to cmd/kai/new.go\n--- a/cmd/kai/old.go\n+++ b/cmd/kai/new.go\n@@ -1 +1 @@\n-a\n+b\n"
+	numstat := []string{"cmd/kai/{old.go => new.go}"}
+	draft := "Renamed and changed.\n\ncmd/kai/new.go:1 — The value is now wrong. (severity: high)\n\nMERGE_READY: 2"
+	if _, n := rcFastRecoverIssues(draft, numstat); n != 0 {
+		t.Fatalf("the numstat spelling alone matched (n=%d): the test no longer shows the gap", n)
+	}
+	if _, n := rcFastRecoverIssues(draft, rcFastDiffPaths(diff, numstat)); n != 1 {
+		t.Errorf("a concern about a renamed file was not recovered (n=%d)", n)
+	}
+}

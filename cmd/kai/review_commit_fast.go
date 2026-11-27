@@ -210,7 +210,7 @@ func rcRunFastReview(ctx context.Context, prov provider.Provider, model, challen
 	}
 	draft := strings.TrimSpace(out.String())
 	if reviewCommitLocal {
-		if d, n := rcFastRecoverIssues(draft, changedPaths); n > 0 {
+		if d, n := rcFastRecoverIssues(draft, rcFastDiffPaths(diff, changedPaths)); n > 0 {
 			fmt.Fprintf(os.Stderr, "  draft had no ISSUES list; %d issue(s) recovered from its prose for the fact-check\n", n)
 			draft = d
 		}
@@ -408,4 +408,21 @@ func rcFastRecoverIssues(draft string, changedPaths []string) (string, int) {
 		return draft, 0
 	}
 	return draft + "\nISSUES:\n" + strings.Join(bullets, "\n"), len(bullets)
+}
+
+// rcFastDiffPaths is every path a concern about this diff may be written
+// against: the changed paths as given, plus each file's new-side path from
+// the diff's own "+++ b/" headers. The two differ for a renamed file, where
+// the changed paths carry git numstat's "old => new" spelling and the diff,
+// which is what the model read, carries the new path.
+func rcFastDiffPaths(diff string, changedPaths []string) []string {
+	out := append([]string{}, changedPaths...)
+	for _, ln := range strings.Split(diff, "\n") {
+		if p, ok := strings.CutPrefix(ln, "+++ b/"); ok {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
