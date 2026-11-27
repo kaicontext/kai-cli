@@ -211,6 +211,9 @@ func mcpExecReview(self, dir string) mcpReviewRunner {
 		var out, errb bytes.Buffer
 		c.Stdout, c.Stderr = &out, &errb
 		c.Stdin = nil
+		// After a cancel, do not wait forever on a grandchild holding the
+		// pipes open.
+		c.WaitDelay = 5 * time.Second
 		err := c.Run()
 		return out.String(), errb.String(), err
 	}
