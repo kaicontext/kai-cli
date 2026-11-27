@@ -909,3 +909,35 @@ func TestDefaultBranchDoesNotDependOnBase(t *testing.T) {
 		}
 	}
 }
+
+func TestBaseFlagRemoteBranches(t *testing.T) {
+	dir := testRepo(t)
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"remote", "add", "origin", "https://github.com/example-org/probe.git"},
+		{"remote", "add", "upstream", "https://github.com/example-up/probe.git"},
+		// Branches that exist only on a remote, never checked out here.
+		{"update-ref", "refs/remotes/origin/release", "main"},
+		{"update-ref", "refs/remotes/upstream/stable", "main"},
+	} {
+		if _, err := git(ctx, dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for base, want := range map[string]struct{ ref, branch string }{
+		"release":         {"origin/release", "release"},
+		"upstream/stable": {"upstream/stable", "stable"},
+	} {
+		gi, err := ReadGit(ctx, dir, base)
+		if err != nil {
+			t.Errorf("--base %s: %v", base, err)
+			continue
+		}
+		if gi.BaseRef != want.ref || gi.BaseBranch != want.branch || gi.BaseSHA == "" {
+			t.Errorf("--base %s: ref %q target %q", base, gi.BaseRef, gi.BaseBranch)
+		}
+	}
+	if _, err := ReadGit(ctx, dir, "no-such-branch"); err == nil {
+		t.Error("an unknown --base was accepted")
+	}
+}

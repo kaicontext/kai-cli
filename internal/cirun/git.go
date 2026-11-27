@@ -85,6 +85,10 @@ func ReadGit(ctx context.Context, dir, base string) (*GitInfo, error) {
 	baseRef := base
 	if baseRef == "" {
 		baseRef = defaultRef
+	} else if !exists(baseRef) && exists("origin/"+baseRef) {
+		// A branch that was never checked out here exists only as
+		// origin/<name>, and git doesn't expand the bare name to that.
+		baseRef = "origin/" + baseRef
 	}
 	if baseRef != "" && exists(baseRef) {
 		if mb, err := git(ctx, root, "merge-base", baseRef, "HEAD"); err == nil {
@@ -101,8 +105,14 @@ func ReadGit(ctx context.Context, dir, base string) (*GitInfo, error) {
 	if base != "" {
 		// git knows every spelling of a branch: release, origin/release,
 		// refs/heads/release, heads/release. It prints nothing for a commit.
-		if full, err := git(ctx, root, "rev-parse", "--symbolic-full-name", base); err == nil {
-			for _, prefix := range []string{"refs/heads/", "refs/remotes/origin/"} {
+		if full, err := git(ctx, root, "rev-parse", "--symbolic-full-name", gi.BaseRef); err == nil {
+			prefixes := []string{"refs/heads/"}
+			if remotes, err := git(ctx, root, "remote"); err == nil {
+				for _, r := range strings.Fields(remotes) {
+					prefixes = append(prefixes, "refs/remotes/"+r+"/")
+				}
+			}
+			for _, prefix := range prefixes {
 				if name, ok := strings.CutPrefix(full, prefix); ok && name != "" && name != "HEAD" {
 					gi.BaseBranch = name
 					break
