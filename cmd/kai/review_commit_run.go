@@ -133,6 +133,10 @@ type rcRunReport struct {
 	ProfileHash string                 `json:"profile_hash"`
 	Stages      map[string]*rcRunStage `json:"stages"`
 	Failovers   []rcRunFailover        `json:"failovers"`
+	// FileCut is set when a large change was reviewed on its riskiest files
+	// (review_commit_bigpr.go): the files kept and how many were reviewable.
+	// Absent when the whole change was reviewed.
+	FileCut *rcFileCut `json:"file_cut,omitempty"`
 	// SummaryModel is the model that summarised a conversation that grew too
 	// long, "" when none was summarised.
 	SummaryModel string `json:"summary_model"`
@@ -235,6 +239,13 @@ func rcRunStart(risk rcRisk, profile string, stageModels map[string]string) {
 	rcRun.report = r
 	rcRun.mu.Unlock()
 	rcPartialReset()
+}
+
+// rcRunNoteFileCut records the cut a large change was reviewed on.
+func rcRunNoteFileCut(cut *rcFileCut) {
+	rcRun.mu.Lock()
+	rcRun.report.FileCut = cut
+	rcRun.mu.Unlock()
 }
 
 // rcRunStageModels is every stage a review may call, with its configured
